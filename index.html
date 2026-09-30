@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Motif Lab · 电吉他动机旋律生成器</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/tone@14.8.49/build/Tone.js"></script>
+</head>
+<body>
+<div class="app">
+
+  <!-- ===================== 顶部：走带控制 ===================== -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">🎸</div>
+      <div>
+        <h1>Motif Lab</h1>
+        <p>电吉他动机旋律 · 和弦驱动编曲工作台</p>
+      </div>
+    </div>
+    <div class="transport">
+      <button id="btn-play" class="btn btn-play">▶ 播放</button>
+      <div class="ctl">
+        <label>速度 <b id="bpm-val">92</b> BPM</label>
+        <input type="range" id="ctl-bpm" min="60" max="180" value="92">
+      </div>
+      <div class="ctl">
+        <label>Swing <b id="swing-val">18</b>%</label>
+        <input type="range" id="ctl-swing" min="0" max="70" value="18">
+      </div>
+      <div class="ctl">
+        <label>调性</label>
+        <select id="ctl-key"></select>
+      </div>
+      <div class="ctl">
+        <label>调式</label>
+        <select id="ctl-mode">
+          <option value="major">自然大调</option>
+          <option value="minor">自然小调</option>
+          <option value="dorian">多利亚 (Dorian)</option>
+          <option value="mixolydian">混合利底亚 (Mixolydian)</option>
+          <option value="lydian">利底亚 (Lydian)</option>
+        </select>
+      </div>
+      <div class="ctl">
+        <label>总音量</label>
+        <input type="range" id="ctl-master" min="0" max="100" value="80">
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- ===================== 第一行：风格 / 动机 / 编配 ===================== -->
+    <div class="grid-3">
+
+      <section class="card">
+        <h2><span class="step">1</span> 选择风格 <em>可多选 → 自动融合</em></h2>
+        <div class="style-chips" id="style-chips">
+          <button class="chip active" data-style="rnb">RnB</button>
+          <button class="chip" data-style="jazz">Jazz</button>
+          <button class="chip" data-style="rock">Rock</button>
+          <button class="chip" data-style="bossa">Bossa Nova</button>
+          <button class="chip" data-style="afro">Afro</button>
+        </div>
+        <p class="hint" id="fusion-hint">已选：RnB · 融合时节奏型 / 音阶 / 律动按小节交替混合</p>
+        <div class="keymap" id="scale-display"></div>
+      </section>
+
+      <section class="card">
+        <h2><span class="step">2</span> 描述你的动机</h2>
+        <textarea id="motive-text" rows="3" placeholder="例如：上行级进、明亮开阔，中段有个大跳到高音再波浪式回落……"></textarea>
+        <div class="motive-btns">
+          <button id="btn-gen" class="btn btn-primary">⚡ 生成旋律</button>
+          <button id="btn-reroll" class="btn" title="换一个随机版本">🎲 换一版</button>
+        </div>
+        <div class="examples" id="examples">
+          <span>试试：</span>
+          <button class="ex">上行级进，明亮开阔，像清晨兜风</button>
+          <button class="ex">先抑后扬，波浪起伏，带忧郁蓝调味</button>
+          <button class="ex">跳跃大跳，短促有力，摇滚现场 riff</button>
+          <button class="ex">慵懒松弛，附点律动，适合 RnB</button>
+          <button class="ex">重复执拗的动机，逐渐加密，Afro 律动</button>
+        </div>
+        <div class="param-readout" id="param-readout"></div>
+      </section>
+
+      <section class="card">
+        <h2><span class="step">3</span> 编曲 · 声部开关</h2>
+        <div class="layers" id="layers">
+          <div class="layer" data-layer="guitar">
+            <label class="switch"><input type="checkbox" checked><span></span></label>
+            <span class="lname">🎸 旋律吉他</span>
+            <select class="patch">
+              <option value="crunch">过载 Crunch</option>
+              <option value="dist">失真 Dist</option>
+              <option value="delay">延迟氛围 Ambient</option>
+            </select>
+            <input type="range" class="vol" min="0" max="100" value="80">
+          </div>
+          <div class="layer" data-layer="keys">
+            <label class="switch"><input type="checkbox" checked><span></span></label>
+            <span class="lname">🎹 电钢琴</span>
+            <select class="patch">
+              <option value="comp">Comping 点缀</option>
+              <option value="pad">和声长音 Pad</option>
+              <option value="bossa">Bossa 节奏型</option>
+            </select>
+            <input type="range" class="vol" min="0" max="100" value="55">
+          </div>
+          <div class="layer" data-layer="bass">
+            <label class="switch"><input type="checkbox" checked><span></span></label>
+            <span class="lname">🎻 贝斯</span>
+            <select class="patch">
+              <option value="auto">自动跟随风格</option>
+              <option value="walk">Walking 行走</option>
+              <option value="eighth">八分音符驱动</option>
+              <option value="groove">律动 Root-5</option>
+              <option value="bossa">Bossa 交替</option>
+            </select>
+            <input type="range" class="vol" min="0" max="100" value="70">
+          </div>
+          <div class="layer" data-layer="drums">
+            <label class="switch"><input type="checkbox" checked><span></span></label>
+            <span class="lname">🥁 鼓组</span>
+            <select class="patch">
+              <option value="auto">自动跟随风格</option>
+              <option value="full">标准</option>
+              <option value="lite">简洁</option>
+              <option value="drive">加密驱动</option>
+            </select>
+            <input type="range" class="vol" min="0" max="100" value="70">
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ===================== 和弦进行 ===================== -->
+    <section class="card">
+      <h2><span class="step">4</span> 和弦进行 <em>点和弦名试听 · 改级数/性质 → 旋律自动跟随</em></h2>
+      <div class="prog-toolbar">
+        <select id="preset-select"></select>
+        <span class="prog-desc" id="preset-desc"></span>
+        <button id="btn-add-slot" class="btn small">＋ 添加小节</button>
+      </div>
+      <div class="slots" id="slots"></div>
+      <div class="prog-explain" id="prog-explain"></div>
+    </section>
+
+    <!-- ===================== 旋律 ===================== -->
+    <section class="card">
+      <h2><span class="step">5</span> 生成结果 <em>钢琴卷帘 · 改和弦后自动重配</em></h2>
+      <canvas id="roll" height="230"></canvas>
+      <div class="melody-foot">
+        <div class="stats" id="melody-stats"></div>
+        <div class="exports">
+          <button id="btn-midi" class="btn">⬇ 导出 MIDI（全编配）</button>
+          <button id="btn-copy-prog" class="btn">📋 复制和弦走向</button>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <p>半专业编曲向工具 · 理论内核：和弦音优先 + 调式音阶经过音 + 可播种随机 · 支持 ii-V-I / 12 小节布鲁斯 / 小调 iiø-V-i 等经典走向 · 所有声音由 Tone.js 实时合成</p>
+    </footer>
+  </main>
+</div>
+<script src="theory.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
