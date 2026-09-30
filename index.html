@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Motif Lab · 电吉他动机旋律生成器</title>
 <link rel="stylesheet" href="style.css">
-<script src="https://cdn.jsdelivr.net/npm/tone@14.8.49/build/Tone.js"></script>
+<script src="lib/Tone.js"></script>
 </head>
 <body>
 <div class="app">
@@ -149,7 +149,12 @@
 
     <!-- ===================== 旋律 ===================== -->
     <section class="card">
-      <h2><span class="step">5</span> 生成结果 <em>钢琴卷帘 · 改和弦后自动重配</em></h2>
+      <h2><span class="step">5</span> 生成结果 <em>钢琴卷帘 · 可直接编辑旋律 · 改和弦后自动重配</em></h2>
+      <div class="roll-tools">
+        <span class="roll-hint">编辑卷帘：点空白添加音符 · 拖动移动 · 拖右缘改时值 · 双击删除 · 手动改动不会被覆盖</span>
+        <button id="btn-del-note" class="btn small">✕ 删除选中</button>
+        <button id="btn-reset-melody" class="btn small">↺ 重新生成旋律</button>
+      </div>
       <canvas id="roll" height="230"></canvas>
       <div class="melody-foot">
         <div class="stats" id="melody-stats"></div>

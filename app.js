@@ -39,6 +39,7 @@ const state = {
   },
   playing: false,
   audioReady: false,
+  melodyEdited: false,
 };
 
 /* 派生数据 */
@@ -381,29 +382,55 @@ function genDrums() {
  * ============================================================ */
 const AE = { ready: false, nodes: {} };
 
+/* --- 效果器曲线与箱体脉冲响应 --- */
+function driveCurve(amount) {
+  const n = 2048, curve = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    curve[i] = ((3 + amount) * x * 20 * (Math.PI / 180)) / (Math.PI + amount * Math.abs(x));
+  }
+  return curve;
+}
+function makeCabIR(dur = 0.22, decay = 5) {
+  const ctx = Tone.getContext();
+  const rate = ctx.sampleRate, len = Math.floor(rate * dur);
+  const buf = ctx.createBuffer(2, len, rate);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = buf.getChannelData(ch);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+  }
+  return buf;
+}
+
 function buildAudio() {
   if (AE.ready) return;
   AE.master = new Tone.Volume(-2).connect(new Tone.Limiter(-1).toDestination());
 
-  /* --- 旋律吉他：锯齿波 + 失真 + 反馈延迟 --- */
+  /* --- 旋律吉他（效果器链路）：
+     双锯齿声源 → 电子管波形塑形前级 → 三段 EQ → 箱体 IR 卷积 → 压缩 → 反馈延迟 --- */
   AE.guitarVol = new Tone.Volume(-3).connect(AE.master);
-  AE.guitarBus = new Tone.Distortion(0.25).connect(AE.guitarVol);
-  AE.guitarDelay = new Tone.FeedbackDelay('8n.', 0.28).connect(AE.guitarBus);
+  AE.guitarDelay = new Tone.FeedbackDelay('8n.', 0.28).connect(AE.guitarVol);
+  AE.guitarCab = new Tone.Convolver().connect(AE.guitarDelay);
+  AE.guitarCab.buffer = makeCabIR();
+  AE.guitarComp = new Tone.Compressor(-16, 3).connect(AE.guitarCab);
+  AE.guitarEq = new Tone.EQ3({ low: -1, mid: 0.5, high: 2.5, lowFrequency: 220, highFrequency: 2400 }).connect(AE.guitarComp);
+  AE.guitarPre = new Tone.WaveShaper(driveCurve(6), 2048).connect(AE.guitarEq);
   AE.guitar = new Tone.Synth({
-    oscillator: { type: 'sawtooth' },
-    envelope: { attack: 0.012, decay: 0.18, sustain: 0.45, release: 0.3 },
+    oscillator: { type: 'fatsawtooth', count: 2, spread: 22 },
+    envelope: { attack: 0.012, decay: 0.22, sustain: 0.4, release: 0.35 },
     portamento: 0.045,
-  }).connect(AE.guitarBus);
-  AE.guitar.connect(AE.guitarDelay);
+  }).connect(AE.guitarPre);
 
-  /* --- 电钢琴：三角波 Poly + 合唱 + 混响 --- */
+  /* --- 电钢琴：三角波 Poly + 颤音 + 合唱 + 混响 --- */
   AE.keysVol = new Tone.Volume(-6).connect(AE.master);
   const keysFx = new Tone.Reverb({ decay: 2.2, wet: 0.3 }).connect(AE.keysVol);
   const keysChorus = new Tone.Chorus(4, 2.5, 0.4).connect(keysFx);
+  AE.keysTremolo = new Tone.Tremolo(5, 0.22).connect(keysChorus);
+  AE.keysTremolo.start();
   AE.keys = new Tone.PolySynth(Tone.Synth, {
     oscillator: { type: 'triangle' },
     envelope: { attack: 0.01, decay: 0.35, sustain: 0.25, release: 1.1 },
-  }).connect(keysChorus);
+  }).connect(AE.keysTremolo);
   AE.keys.volume.value = -4;
 
   /* --- 贝斯：Mono 方波 + 低通 --- */
@@ -456,19 +483,28 @@ function buildAudio() {
 function applyGuitarPatch() {
   if (!AE.ready) return;
   const p = state.layers.guitar.patch;
-  if (p === 'dist') {
-    AE.guitar.oscillator.type = 'sawtooth';
-    AE.guitarDistortion && AE.guitarDistortion.dispose();
-    AE.guitarBus.distortion = 0.5; AE.guitarBus.oversample = '2x';
-    AE.guitarDelay.wet.value = 0.12;
-  } else if (p === 'delay') {
-    AE.guitar.oscillator.type = 'triangle';
-    AE.guitarBus.distortion = 0.12;
-    AE.guitarDelay.wet.value = 0.5; AE.guitarDelay.feedback.value = 0.45;
-  } else { /* crunch */
-    AE.guitar.oscillator.type = 'sawtooth';
-    AE.guitarBus.distortion = 0.25; AE.guitarBus.oversample = '2x';
+  const g = AE.guitar;
+  if (p === 'dist') {         /* 高增益失真：金属/硬摇滚 */
+    g.oscillator.type = 'fatsawtooth'; g.oscillator.count = 3; g.oscillator.spread = 35;
+    AE.guitarPre.curve = driveCurve(14);
+    AE.guitarEq.low.value = 0; AE.guitarEq.mid.value = 2; AE.guitarEq.high.value = 4;
+    AE.guitarComp.threshold.value = -20;
+    AE.guitarDelay.wet.value = 0.1; AE.guitarDelay.feedback.value = 0.22;
+    g.envelope.attack = 0.006; g.envelope.release = 0.28;
+  } else if (p === 'delay') { /* 延迟氛围：清音延迟 */
+    g.oscillator.type = 'triangle';
+    AE.guitarPre.curve = driveCurve(2.5);
+    AE.guitarEq.low.value = -2; AE.guitarEq.mid.value = 0; AE.guitarEq.high.value = 3;
+    AE.guitarComp.threshold.value = -18;
+    AE.guitarDelay.wet.value = 0.55; AE.guitarDelay.feedback.value = 0.5;
+    g.envelope.attack = 0.02; g.envelope.release = 1.2;
+  } else {                    /* 过载 Crunch：经典摇滚 */
+    g.oscillator.type = 'fatsawtooth'; g.oscillator.count = 2; g.oscillator.spread = 22;
+    AE.guitarPre.curve = driveCurve(6);
+    AE.guitarEq.low.value = -1; AE.guitarEq.mid.value = 0.5; AE.guitarEq.high.value = 2.5;
+    AE.guitarComp.threshold.value = -16;
     AE.guitarDelay.wet.value = 0.2; AE.guitarDelay.feedback.value = 0.28;
+    g.envelope.attack = 0.012; g.envelope.release = 0.35;
   }
 }
 
@@ -547,9 +583,22 @@ function scheduleAll() {
   Tone.Transport.loop = true;
 }
 
-async function togglePlay() {
+async function ensureAudio() {
+  if (typeof Tone === 'undefined') return false;
   if (!state.audioReady) { buildAudio(); state.audioReady = true; }
-  await Tone.start();
+  try {
+    await Tone.start();
+    if (Tone.context.state !== 'running') await Tone.context.resume();
+  } catch (e) { /* 部分浏览器首次手势不完整，下一次点击会重试 */ }
+  return true;
+}
+
+async function togglePlay() {
+  if (typeof Tone === 'undefined') {
+    alert('音频引擎加载失败，请检查网络后刷新页面');
+    return;
+  }
+  if (!(await ensureAudio())) return;
   applyMix();
   if (state.playing) {
     Tone.Transport.stop();
@@ -761,7 +810,11 @@ function renderExplain() {
     属功能和弦（${chordTimeline.filter(c => c.func.startsWith('属')).map(c => c.roman).join('、') || '无'}）制造张力，主/下属解决之。</div>`;
 }
 
-/* ---------- 钢琴卷帘 ---------- */
+/* ---------- 钢琴卷帘（可编辑） ---------- */
+let selNote = null;    // 选中的旋律事件
+let drag = null;       // { mode, ev, grabDelta }
+const rollCache = { rects: [], lo: 0, hi: 127, cellW: 1, labelW: 54, topPad: 22, plotH: 1, total16: 16 };
+
 function renderRoll() {
   const cv = $('#roll');
   const dpr = window.devicePixelRatio || 1;
@@ -778,6 +831,7 @@ function renderRoll() {
 
   let lo = 127, hi = 0;
   for (const e of melodyEvents) { lo = Math.min(lo, e.midi); hi = Math.max(hi, e.midi); }
+  if (lo > hi) { lo = 60; hi = 80; }
   lo -= 2; hi += 2;
   const yOf = m => topPad + (hi - m) / (hi - lo) * plotH;
 
@@ -804,6 +858,7 @@ function renderRoll() {
   /* 旋律音符（朱红笔触） */
   const rr = ctx.roundRect ? (x, y, w, h, r) => ctx.roundRect(x, y, w, h, r)
     : (x, y, w, h) => ctx.rect(x, y, w, h);
+  rollCache.rects = [];
   for (const e of melodyEvents) {
     const x = labelW + e.beat * 4 * cellW;
     const w = Math.max(2.5, e.dur * 4 * cellW - 1);
@@ -815,13 +870,126 @@ function renderRoll() {
     ctx.beginPath();
     rr(x, y, w, 9, 3);
     ctx.fill();
+    if (e === selNote) {
+      ctx.strokeStyle = 'rgba(36,39,42,.85)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      rr(x - 1.5, y - 1.5, w + 3, 12, 4);
+      ctx.stroke();
+    }
+    rollCache.rects.push({ ev: e, x, y, w });
   }
+  Object.assign(rollCache, { lo, hi, cellW, labelW, topPad, plotH, total16, H });
   /* 尾标注 */
   if (melodyEvents.length) {
     ctx.fillStyle = 'rgba(36,39,42,.45)';
     ctx.font = '10px -apple-system, "PingFang SC", sans-serif';
     ctx.fillText(`${midiName(Math.min(...melodyEvents.map(e => e.midi)))} ~ ${midiName(Math.max(...melodyEvents.map(e => e.midi)))}`, 6, H - 6);
+  } else {
+    ctx.fillStyle = 'rgba(36,39,42,.35)';
+    ctx.font = '11px -apple-system, "PingFang SC", sans-serif';
+    ctx.fillText('在上方描述动机并点击「生成旋律」，或直接点击网格空白处手写音符', labelW + 14, H / 2);
   }
+}
+
+/* ---------- 卷帘编辑交互 ---------- */
+function rollXY(e) {
+  const rect = $('#roll').getBoundingClientRect();
+  return { px: e.clientX - rect.left, py: e.clientY - rect.top };
+}
+function hitNote(px, py) {
+  for (let i = rollCache.rects.length - 1; i >= 0; i--) {
+    const r = rollCache.rects[i];
+    if (px >= r.x - 2 && px <= r.x + r.w + 2 && py >= r.y - 3 && py <= r.y + 12) return r;
+  }
+  return null;
+}
+function pxToPitch(py) {
+  const { hi, topPad, plotH } = rollCache;
+  return clamp(Math.round(hi - (py - topPad) / plotH * (hi - rollCache.lo)), 24, 108);
+}
+function pxToBeat(px) {
+  return clamp(Math.round((px - rollCache.labelW) / rollCache.cellW / 4 * 4) / 4, 0, state.slots.length * 4 - 0.25);
+}
+
+function bindRollEditor() {
+  const cv = $('#roll');
+  cv.style.touchAction = 'none';
+
+  cv.addEventListener('pointerdown', e => {
+    if (!chordTimeline.length) return;
+    const { px, py } = rollXY(e);
+    cv.setPointerCapture(e.pointerId);
+    const hit = hitNote(px, py);
+    if (hit) {
+      selNote = hit.ev;
+      const onEdge = px > hit.x + hit.w - 6;
+      drag = { mode: onEdge ? 'resize' : 'move', ev: hit.ev };
+    } else {
+      /* 空白处：添加音符 */
+      const beat = pxToBeat(px), midi = pxToPitch(py);
+      const ev = { beat, midi, dur: 1, vel: 0.8 };
+      melodyEvents.push(ev);
+      melodyEvents.sort((a, b) => a.beat - b.beat);
+      selNote = ev;
+      drag = { mode: 'move', ev };
+      state.melodyEdited = true;
+      afterMelodyEdit(false);
+    }
+    renderRoll();
+    e.preventDefault();
+  });
+
+  cv.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const { px, py } = rollXY(e);
+    const totalBeats = state.slots.length * 4;
+    if (drag.mode === 'move') {
+      drag.ev.beat = clamp(pxToBeat(px), 0, totalBeats - 0.25);
+      drag.ev.midi = pxToPitch(py);
+    } else {
+      const end = clamp(pxToBeat(px) + 0.25, drag.ev.beat + 0.25, totalBeats);
+      drag.ev.dur = Math.min(end - drag.ev.beat, 8);
+    }
+    melodyEvents.sort((a, b) => a.beat - b.beat);
+    renderRoll();
+    e.preventDefault();
+  });
+
+  const finish = () => {
+    if (!drag) return;
+    drag = null;
+    state.melodyEdited = true;
+    afterMelodyEdit(true);
+  };
+  cv.addEventListener('pointerup', finish);
+  cv.addEventListener('pointercancel', finish);
+
+  cv.addEventListener('dblclick', e => {
+    const { px, py } = rollXY(e);
+    const hit = hitNote(px, py);
+    if (hit) {
+      melodyEvents.splice(melodyEvents.indexOf(hit.ev), 1);
+      if (selNote === hit.ev) selNote = null;
+      state.melodyEdited = true;
+      afterMelodyEdit(true);
+      renderRoll();
+    }
+  });
+}
+
+function afterMelodyEdit(reschedule) {
+  renderStats();
+  if (reschedule) reScheduleIfPlaying();
+}
+
+function deleteSelNote() {
+  if (!selNote) return;
+  melodyEvents.splice(melodyEvents.indexOf(selNote), 1);
+  selNote = null;
+  state.melodyEdited = true;
+  afterMelodyEdit(true);
+  renderRoll();
 }
 
 /* ---------- 旋律统计 / 参数回显 ---------- */
@@ -851,7 +1019,10 @@ function renderStats() {
  * ============================================================ */
 function regenerate(reason) {
   buildChordTimeline();
-  genMelody();
+  /* 用户手动编辑过的旋律：仅在动机/换版/预设/调性调式变化时重新生成，改和弦等操作予以保留 */
+  const regenMelody = ['motive', 'reroll', 'example', 'preset', 'key', 'mode'].includes(reason) || !melodyEvents.length;
+  if (regenMelody) { genMelody(); state.melodyEdited = false; }
+  selNote = null; drag = null;
   genBass();
   genKeys();
   genDrums();
@@ -939,10 +1110,23 @@ function bindEvents() {
     });
   };
 
+  /* 卷帘编辑 */
+  bindRollEditor();
+  $('#btn-del-note').onclick = deleteSelNote;
+  $('#btn-reset-melody').onclick = () => { state.melodyEdited = false; regenerate('motive'); };
+
   window.addEventListener('resize', renderRoll);
+  /* 移动端音频解锁：首次触摸即简历 AudioContext */
+  const unlock = () => ensureAudio();
+  window.addEventListener('pointerdown', unlock, { once: true });
+  window.addEventListener('touchend', unlock, { once: true });
   window.addEventListener('keydown', e => {
-    if (e.code === 'Space' && !/textarea|input|select/i.test(document.activeElement.tagName)) {
+    const tag = document.activeElement ? document.activeElement.tagName : '';
+    if (e.code === 'Space' && !/textarea|input|select/i.test(tag)) {
       e.preventDefault(); togglePlay();
+    }
+    if ((e.code === 'Delete' || e.code === 'Backspace') && selNote && !/textarea|input|select/i.test(tag)) {
+      e.preventDefault(); deleteSelNote();
     }
   });
 }

@@ -202,9 +202,11 @@ textarea {
 }
 
 /* ---------- 卷帘 & 结果 ---------- */
+.roll-tools { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.roll-hint { font-size: 10.5px; color: var(--ink-3); letter-spacing: .04em; flex: 1; min-width: 240px; }
 #roll {
   width: 100%; background: var(--card); border: 1px solid var(--line);
-  border-radius: 10px; display: block;
+  border-radius: 10px; display: block; touch-action: none; cursor: crosshair;
 }
 .melody-foot { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin-top: 16px; flex-wrap: wrap; }
 .stats { font-size: 11.5px; color: var(--ink-2); line-height: 1.8; font-variant-numeric: tabular-nums; }
