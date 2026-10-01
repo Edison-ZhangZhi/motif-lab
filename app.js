@@ -36,6 +36,7 @@ const state = {
     keys:   { on: true, vol: 0.55, patch: 'comp' },
     bass:   { on: true, vol: 0.7, patch: 'auto' },
     drums:  { on: true, vol: 0.7, patch: 'auto' },
+    synth:  { on: true, vol: 0.45, patch: 'halo' },
   },
   playing: false,
   audioReady: false,
@@ -47,6 +48,7 @@ let chordTimeline = [];   // 每小节: { rootPC, rootMidi, qKey, name, roman, e
 let melodyEvents = [];    // { beat, midi, dur, vel }
 let bassEvents = [];
 let keysEvents = [];      // { beat, notes:[midi], dur, vel }
+let synthEvents = [];     // 合成器 Pad { beat, notes:[midi], dur, vel }
 let drumEvents = [];      // { step16, inst, vel }
 let curSeed = 1;
 
@@ -341,6 +343,23 @@ function genKeys() {
   keysEvents = ev;
 }
 
+/* ================= 合成器 Pad 生成 ================= */
+function genSynthPad() {
+  const rng = mulberry32(curSeed ^ 0x5EED);
+  const bars = state.slots.length;
+  const ev = [];
+  let prevVoicing = null;
+  for (let bar = 0; bar < bars; bar++) {
+    const chord = chordTimeline[bar];
+    const voicing = chooseVoicing(chord.pcs, prevVoicing);
+    prevVoicing = voicing;
+    ev.push({ beat: bar * 4, notes: voicing, dur: 3.9, vel: 0.3 + rng() * 0.08 });
+    /* 迷幻/卧室流行的点缀：偶尔第 3 拍轻点高八度 */
+    if (rng() < 0.35) ev.push({ beat: bar * 4 + 2, notes: voicing.map(n => Math.min(n + 12, 96)), dur: 0.5, vel: 0.15 });
+  }
+  synthEvents = ev;
+}
+
 /* ================= 鼓生成 ================= */
 function genDrums() {
   const rng = mulberry32((curSeed ^ 0xD00D) >>> 0);
@@ -350,7 +369,7 @@ function genDrums() {
   for (let bar = 0; bar < bars; bar++) {
     const styleKey = styleKeys.length > 1 ? styleKeys[bar % styleKeys.length] : styleKeys[0];
     let patName = state.layers.drums.patch;
-    if (patName === 'auto') patName = STYLES[styleKey].drums;
+    if (patName === 'auto' || patName === '808') patName = STYLES[styleKey].drums;
     const P = DRUM_PATTERNS[patName] || DRUM_PATTERNS.rnb;
     const density = state.layers.drums.patch;
     for (let s = 0; s < 16; s++) {
@@ -476,47 +495,132 @@ function buildAudio() {
   }).connect(AE.drumsVol);
   AE.crash.volume.value = -16;
 
+  /* --- 合成器 Pad 兜底链（采样未就绪时用）：锯齿波 → 移相器 → 大混响 --- */
+  AE.synthVol = new Tone.Volume(-9).connect(AE.master);
+  AE.padFx = new Tone.Reverb({ decay: 5, wet: 0.55 }).connect(AE.synthVol);
+  AE.padPhaser = new Tone.Phaser(0.4, 4, 400).connect(AE.padFx);
+  AE.synthPad = new Tone.PolySynth(Tone.Synth, {
+    oscillator: { type: 'sawtooth' },
+    envelope: { attack: 0.6, decay: 1.5, sustain: 0.5, release: 2.5 },
+  }).connect(AE.padPhaser);
+
+  /* --- 808 鼓组（经典 TR-808 合成复刻，808 本身就是合成鼓机） --- */
+  AE.kick808 = new Tone.Synth({
+    oscillator: { type: 'sine' },
+    envelope: { attack: 0.001, decay: 1.5, sustain: 0, release: 0.2 },
+  }).connect(AE.drumsVol);
+  AE.snare808 = new Tone.MembraneSynth({
+    pitchDecay: 0.02, octaves: 1.5,
+    envelope: { attack: 0.001, decay: 0.28, sustain: 0, release: 0.1 },
+  }).connect(AE.drumsVol);
+  AE.clap808 = new Tone.NoiseSynth({
+    noise: { type: 'pink' },
+    envelope: { attack: 0.002, decay: 0.16, sustain: 0 },
+  }).connect(AE.drumsVol);
+  AE.hat808 = new Tone.MetalSynth({
+    envelope: { attack: 0.001, decay: 0.045, release: 0.02 },
+    harmonicity: 5.1, modulationIndex: 26, resonance: 7000, octaves: 1.2,
+  }).connect(AE.drumsVol);
+  AE.hat808.volume.value = -13;
+  AE.ohat808 = new Tone.MetalSynth({
+    envelope: { attack: 0.001, decay: 0.35, release: 0.05 },
+    harmonicity: 5.1, modulationIndex: 20, resonance: 5200, octaves: 1,
+  }).connect(AE.drumsVol);
+  AE.ohat808.volume.value = -15;
+  AE.rim808 = new Tone.MetalSynth({
+    envelope: { attack: 0.001, decay: 0.03, release: 0.02 },
+    harmonicity: 5.1, modulationIndex: 30, resonance: 9000, octaves: 1,
+  }).connect(AE.drumsVol);
+  AE.rim808.volume.value = -12;
+  AE.cowbell808 = new Tone.MetalSynth({
+    envelope: { attack: 0.001, decay: 0.5, release: 0.1 },
+    harmonicity: 5.1, modulationIndex: 40, resonance: 780, octaves: 1,
+  }).connect(AE.drumsVol);
+  AE.cowbell808.volume.value = -14;
+  AE.tom808 = new Tone.MembraneSynth({
+    pitchDecay: 0.08, octaves: 2,
+    envelope: { attack: 0.001, decay: 0.5, sustain: 0, release: 0.2 },
+  }).connect(AE.drumsVol);
+  AE.crash808 = new Tone.MetalSynth({
+    envelope: { attack: 0.001, decay: 1.4, release: 0.2 },
+    harmonicity: 5.1, modulationIndex: 32, resonance: 3800, octaves: 1.5,
+  }).connect(AE.drumsVol);
+  AE.crash808.volume.value = -15;
+
   AE.ready = true;
   applyMix();
 }
 
+/* 808 底鼓：正弦波 150Hz→40Hz 快速下滑（经典 808 低音炮） */
+function trig808kick(t, vel) {
+  const o = AE.kick808.oscillator;
+  o.frequency.cancelScheduledValues(t);
+  o.frequency.setValueAtTime(150, t);
+  o.frequency.exponentialRampToValueAtTime(40, t + 0.1);
+  AE.kick808.triggerAttackRelease('A1', 1.1, t, vel);
+}
+
 /* ============================================================
- * 采样音源（真实乐器录音，SoundFont / FluidR3_GM）
+ * 采样音源（真实乐器录音，SoundFont / FluidR3_GM，CC 协议免费库）
+ * 按需加载：核心音色立即加载，其余后台预载
  * ============================================================ */
-const SAMP = { loaded: {}, loading: false, bus: null };
-const SAMP_GUITAR = { clean: 'electric_guitar_clean', crunch: 'overdriven_guitar', dist: 'distortion_guitar' };
+const SAMP = { cache: {}, pending: {}, bus: null, padBus: null };
+const SAMP_GUITAR = {
+  clean: 'electric_guitar_clean', crunch: 'overdriven_guitar', dist: 'distortion_guitar',
+  jazz: 'electric_guitar_jazz', muted: 'electric_guitar_muted', harmonics: 'guitar_harmonics',
+  steel: 'acoustic_guitar_steel', nylon: 'acoustic_guitar_nylon',
+};
 const SAMP_KEYS = 'electric_piano_1';
 const SAMP_BASS = 'electric_bass_finger';
+const SAMP_PAD = {
+  halo: 'pad_7_halo', sweep: 'pad_8_sweep', warm: 'pad_2_warm',
+  choir: 'pad_4_choir', strings: 'synth_strings_1', polysynth: 'pad_3_polysynth',
+};
 
 function sampStatus(txt) {
   const el = document.getElementById('samp-status');
   if (el) el.textContent = txt || '';
 }
+function nativeInputOf(toneNode) {
+  if (!toneNode || !toneNode.input) return toneNode;
+  return toneNode.input.input ? toneNode.input.input : toneNode.input;
+}
+function ensureBuses() {
+  if (SAMP.bus) return;
+  const raw = Tone.getContext().rawContext;
+  SAMP.bus = raw.createGain();           /* 干声总线：吉他/电钢/贝斯 */
+  SAMP.bus.gain.value = 1;
+  SAMP.bus.connect(nativeInputOf(AE.master));
+  SAMP.padBus = raw.createGain();        /* Pad 总线：过移相器+大混响 */
+  SAMP.padBus.gain.value = 1;
+  SAMP.padBus.connect(nativeInputOf(AE.padPhaser));
+}
+function ensureSample(name) {
+  if (SAMP.cache[name]) return Promise.resolve(SAMP.cache[name]);
+  if (!SAMP.pending[name]) {
+    if (typeof Soundfont === 'undefined') return Promise.resolve(null);
+    ensureBuses();
+    SAMP.pending[name] = Soundfont.instrument(Tone.getContext(), 'soundfont/' + name + '.js', {
+      destination: name.startsWith('pad_') || name === 'synth_strings_1' ? SAMP.padBus : SAMP.bus,
+    })
+      .then(inst => { SAMP.cache[name] = inst; return inst; })
+      .catch(err => { console.warn('采样加载失败 ' + name, err); return null; });
+  }
+  return SAMP.pending[name];
+}
 
 function loadInstruments() {
-  if (typeof Soundfont === 'undefined' || SAMP.loading) return;
-  SAMP.loading = true;
-  const ctx = Tone.getContext();
-  if (!SAMP.bus) {
-    /* 用原生 GainNode 直连，绕开 Tone 的 connect 注册表（对包装节点会报错） */
-    const raw = ctx.rawContext;
-    SAMP.bus = raw.createGain();
-    SAMP.bus.gain.value = 1;
-    const dest = (AE.master.input && AE.master.input.input) ? AE.master.input.input : AE.master.input;
-    SAMP.bus.connect(dest);
-  }
-  const names = Array.from(new Set([...Object.values(SAMP_GUITAR), SAMP_KEYS, SAMP_BASS]));
+  const core = [
+    SAMP_GUITAR[state.layers.guitar.patch], SAMP_KEYS, SAMP_BASS, SAMP_PAD[state.layers.synth.patch],
+  ].filter(Boolean);
   let done = 0;
-  sampStatus(`正在加载采样音色 ${done}/${names.length}…（约 8MB）`);
-  names.forEach(name => {
-    Soundfont.instrument(ctx, 'soundfont/' + name + '.js', { destination: SAMP.bus })
-      .then(inst => {
-        SAMP.loaded[name] = inst;
-        done++;
-        sampStatus(done < names.length ? `正在加载采样音色 ${done}/${names.length}…` : '✓ 采样音色已就绪（真实乐器录音）');
-      })
-      .catch(err => { done++; console.warn('采样加载失败 ' + name + ':', err); });
-  });
+  sampStatus(`正在加载采样音色 0/${core.length}…`);
+  core.forEach(n => ensureSample(n).then(() => {
+    done++;
+    sampStatus(done < core.length ? `正在加载采样音色 ${done}/${core.length}…` : '✓ 核心采样音色已就绪');
+  }));
+  /* 后台预载其余吉他采样，切换时零等待 */
+  Object.values(SAMP_GUITAR).forEach(n => { if (!core.includes(n)) setTimeout(() => ensureSample(n), 10000); });
 }
 
 function applyGuitarPatch() {
@@ -554,10 +658,12 @@ function applyMix() {
   AE.keysVol.mute = !state.layers.keys.on;
   AE.bassVol.mute = !state.layers.bass.on;
   AE.drumsVol.mute = !state.layers.drums.on;
+  AE.synthVol.mute = !state.layers.synth.on;
   AE.guitarVol.volume.value = Tone.gainToDb(state.layers.guitar.vol * state.layers.guitar.vol) - 3;
   AE.keysVol.volume.value = Tone.gainToDb(state.layers.keys.vol * state.layers.keys.vol) - 6;
   AE.bassVol.volume.value = Tone.gainToDb(state.layers.bass.vol * state.layers.bass.vol) - 4;
   AE.drumsVol.volume.value = Tone.gainToDb(state.layers.drums.vol * state.layers.drums.vol) - 6;
+  AE.synthVol.volume.value = Tone.gainToDb(state.layers.synth.vol * state.layers.synth.vol) - 6;
   applyGuitarPatch();
 }
 
@@ -582,7 +688,7 @@ function scheduleAll() {
       const t = t16(Math.round(e.beat * 4));
       const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.95;
       Tone.Transport.schedule(tt => {
-        const inst = instName && SAMP.loaded[instName];
+        const inst = instName && SAMP.cache[instName];
         if (inst) inst.play(e.midi, tt, { duration: dur, gain: e.vel * 1.1 });
         else AE.guitar.triggerAttackRelease(midiName(e.midi), dur, tt, e.vel);
       }, t);
@@ -590,7 +696,7 @@ function scheduleAll() {
   }
   /* 电钢琴（Rhodes 采样） */
   if (state.layers.keys.on) {
-    const inst = SAMP.loaded[SAMP_KEYS] || null;
+    const inst = SAMP.cache[SAMP_KEYS] || null;
     for (const e of keysEvents) {
       const t = t16(Math.round(e.beat * 4));
       const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.95;
@@ -601,9 +707,23 @@ function scheduleAll() {
       }, t);
     }
   }
+  /* 合成器 Pad（采样优先，兜底合成链） */
+  if (state.layers.synth.on) {
+    const padName = SAMP_PAD[state.layers.synth.patch];
+    const inst = (padName && SAMP.cache[padName]) || null;
+    for (const e of synthEvents) {
+      const t = t16(Math.round(e.beat * 4));
+      const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.98;
+      const names = e.notes.map(midiName);
+      Tone.Transport.schedule(tt => {
+        if (inst) for (const n of e.notes) inst.play(n, tt, { duration: dur, gain: e.vel * 1.4 });
+        else AE.synthPad.triggerAttackRelease(names, dur, tt, e.vel);
+      }, t);
+    }
+  }
   /* 贝斯（指弹电贝斯采样） */
   if (state.layers.bass.on) {
-    const inst = SAMP.loaded[SAMP_BASS] || null;
+    const inst = SAMP.cache[SAMP_BASS] || null;
     for (const e of bassEvents) {
       const t = t16(Math.round(e.beat * 4));
       const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.95;
@@ -613,11 +733,25 @@ function scheduleAll() {
       }, t);
     }
   }
-  /* 鼓 */
+  /* 鼓（808 模式用 TR-808 复刻音色，其余用原声/电子合成音色） */
   if (state.layers.drums.on) {
+    const is808 = state.layers.drums.patch === '808';
     for (const e of drumEvents) {
       const t = t16(e.step16);
       Tone.Transport.schedule(tt => {
+        if (is808) {
+          switch (e.inst) {
+            case 'kick': trig808kick(tt, e.vel); break;
+            case 'snare': AE.snare808.triggerAttackRelease('C2', '8n', tt, e.vel); AE.snare.triggerAttackRelease('16n', tt, e.vel * 0.3); break;
+            case 'hat': AE.hat808.triggerAttackRelease('G6', '32n', tt, e.vel); break;
+            case 'ohat': AE.ohat808.triggerAttackRelease('G5', '8n', tt, e.vel); break;
+            case 'ride': AE.cowbell808.triggerAttackRelease('A5', '8n', tt, e.vel * 0.8); break;
+            case 'congaH': AE.tom808.triggerAttackRelease('G3', '8n', tt, e.vel); break;
+            case 'congaL': AE.tom808.triggerAttackRelease('E3', '8n', tt, e.vel); break;
+            case 'crash': AE.crash808.triggerAttackRelease('B5', '1m', tt, e.vel); break;
+          }
+          return;
+        }
         switch (e.inst) {
           case 'kick': AE.kick.triggerAttackRelease('C1', '8n', tt, e.vel); break;
           case 'snare': AE.snare.triggerAttackRelease('16n', tt, e.vel); AE.snareBody.triggerAttackRelease('G2', '16n', tt, e.vel * 0.5); break;
@@ -726,6 +860,14 @@ function buildMidi() {
     const t = Math.round(e.beat * tpb);
     const dur = Math.round(e.dur * tpb);
     notePair(t, dur, 2, e.midi, clamp(Math.round(e.vel * 127), 25, 120));
+  }
+  /* 合成器 Pad → ch3（GM 音色号按 Pad 类型） */
+  const PAD_PROGRAM = { halo: 95, sweep: 96, warm: 90, choir: 92, strings: 51, polysynth: 91 };
+  ev.push({ tick: 0, order: 0, bytes: [0xC3, PAD_PROGRAM[state.layers.synth.patch] || 90] });
+  for (const e of synthEvents) {
+    const t = Math.round(e.beat * tpb);
+    const dur = Math.round(e.dur * tpb);
+    for (const n of e.notes) notePair(t, dur, 3, n, clamp(Math.round(e.vel * 127 * 1.4), 15, 100));
   }
   const DRUM_GM = { kick: 36, snare: 38, hat: 42, ohat: 46, ride: 51, congaH: 63, congaL: 64, crash: 49 };
   for (const e of drumEvents) {
@@ -1081,6 +1223,7 @@ function regenerate(reason) {
   selNote = null; drag = null;
   genBass();
   genKeys();
+  genSynthPad();
   genDrums();
   renderSlots();
   renderRoll();
@@ -1144,7 +1287,13 @@ function bindEvents() {
   document.querySelectorAll('#layers .layer').forEach(row => {
     const layer = row.dataset.layer;
     row.querySelector('input[type=checkbox]').onchange = e => { state.layers[layer].on = e.target.checked; applyMix(); reScheduleIfPlaying(); };
-    row.querySelector('.patch').onchange = e => { state.layers[layer].patch = e.target.value; applyGuitarPatch(); regenerate('patch'); };
+    row.querySelector('.patch').onchange = e => {
+      state.layers[layer].patch = e.target.value;
+      applyGuitarPatch();
+      const pn = SAMP_GUITAR[e.target.value] || SAMP_PAD[e.target.value];
+      if (pn) ensureSample(pn).then(() => reScheduleIfPlaying());
+      regenerate('patch');
+    };
     row.querySelector('.vol').oninput = e => { state.layers[layer].vol = e.target.value / 100; applyMix(); };
   });
 

@@ -95,10 +95,21 @@
             <label class="switch"><input type="checkbox" checked><span></span></label>
             <span class="lname">🎸 旋律吉他</span>
             <select class="patch">
-              <option value="clean">采样 · 清音吉他</option>
-              <option value="crunch" selected>采样 · 过载吉他</option>
-              <option value="dist">采样 · 失真吉他</option>
-              <option value="delay">合成 · 氛围延迟</option>
+              <optgroup label="电吉他 · 真实采样">
+                <option value="clean">清音 Clean</option>
+                <option value="crunch" selected>过载 Overdriven</option>
+                <option value="dist">失真 Distortion</option>
+                <option value="jazz">爵士半空心 Jazz</option>
+                <option value="muted">闷音 Muted（Funk）</option>
+                <option value="harmonics">泛音 Harmonics</option>
+              </optgroup>
+              <optgroup label="木吉他 · 真实采样">
+                <option value="steel">钢弦民谣 Steel</option>
+                <option value="nylon">尼龙古典 Nylon</option>
+              </optgroup>
+              <optgroup label="合成器">
+                <option value="delay">氛围延迟 Ambient</option>
+              </optgroup>
             </select>
             <input type="range" class="vol" min="0" max="100" value="80">
           </div>
@@ -132,8 +143,26 @@
               <option value="full">标准</option>
               <option value="lite">简洁</option>
               <option value="drive">加密驱动</option>
+              <option value="808">808 嘻哈鼓组</option>
             </select>
             <input type="range" class="vol" min="0" max="100" value="70">
+          </div>
+          <div class="layer" data-layer="synth">
+            <label class="switch"><input type="checkbox" checked><span></span></label>
+            <span class="lname">🎛 合成器 Pad</span>
+            <select class="patch">
+              <optgroup label="迷幻摇滚">
+                <option value="halo" selected>光环 Pad · 迷幻空间</option>
+                <option value="sweep">扫频 Pad · 迷幻涌动</option>
+                <option value="warm">温暖 Pad · 复古毯</option>
+              </optgroup>
+              <optgroup label="卧室流行">
+                <option value="choir">合唱 Pad · 梦境</option>
+                <option value="strings">合成弦乐 · 磁带感</option>
+                <option value="polysynth">复古 Polysynth · Juno 感</option>
+              </optgroup>
+            </select>
+            <input type="range" class="vol" min="0" max="100" value="45">
           </div>
         </div>
       </section>
