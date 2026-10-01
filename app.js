@@ -480,6 +480,45 @@ function buildAudio() {
   applyMix();
 }
 
+/* ============================================================
+ * 采样音源（真实乐器录音，SoundFont / FluidR3_GM）
+ * ============================================================ */
+const SAMP = { loaded: {}, loading: false, bus: null };
+const SAMP_GUITAR = { clean: 'electric_guitar_clean', crunch: 'overdriven_guitar', dist: 'distortion_guitar' };
+const SAMP_KEYS = 'electric_piano_1';
+const SAMP_BASS = 'electric_bass_finger';
+
+function sampStatus(txt) {
+  const el = document.getElementById('samp-status');
+  if (el) el.textContent = txt || '';
+}
+
+function loadInstruments() {
+  if (typeof Soundfont === 'undefined' || SAMP.loading) return;
+  SAMP.loading = true;
+  const ctx = Tone.getContext();
+  if (!SAMP.bus) {
+    /* 用原生 GainNode 直连，绕开 Tone 的 connect 注册表（对包装节点会报错） */
+    const raw = ctx.rawContext;
+    SAMP.bus = raw.createGain();
+    SAMP.bus.gain.value = 1;
+    const dest = (AE.master.input && AE.master.input.input) ? AE.master.input.input : AE.master.input;
+    SAMP.bus.connect(dest);
+  }
+  const names = Array.from(new Set([...Object.values(SAMP_GUITAR), SAMP_KEYS, SAMP_BASS]));
+  let done = 0;
+  sampStatus(`正在加载采样音色 ${done}/${names.length}…（约 8MB）`);
+  names.forEach(name => {
+    Soundfont.instrument(ctx, 'soundfont/' + name + '.js', { destination: SAMP.bus })
+      .then(inst => {
+        SAMP.loaded[name] = inst;
+        done++;
+        sampStatus(done < names.length ? `正在加载采样音色 ${done}/${names.length}…` : '✓ 采样音色已就绪（真实乐器录音）');
+      })
+      .catch(err => { done++; console.warn('采样加载失败 ' + name + ':', err); });
+  });
+}
+
 function applyGuitarPatch() {
   if (!AE.ready) return;
   const p = state.layers.guitar.patch;
@@ -536,29 +575,42 @@ function scheduleAll() {
   Tone.Transport.swingSubdivision = '16n';
   const bars = state.slots.length;
 
-  /* 吉他旋律 */
+  /* 吉他旋律（优先真实采样，未就绪时回退合成音色） */
   if (state.layers.guitar.on) {
+    const instName = SAMP_GUITAR[state.layers.guitar.patch] || null;
     for (const e of melodyEvents) {
       const t = t16(Math.round(e.beat * 4));
-      const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.92;
-      Tone.Transport.schedule(tt => AE.guitar.triggerAttackRelease(midiName(e.midi), dur, tt, e.vel), t);
+      const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.95;
+      Tone.Transport.schedule(tt => {
+        const inst = instName && SAMP.loaded[instName];
+        if (inst) inst.play(e.midi, tt, { duration: dur, gain: e.vel * 1.1 });
+        else AE.guitar.triggerAttackRelease(midiName(e.midi), dur, tt, e.vel);
+      }, t);
     }
   }
-  /* 电钢琴 */
+  /* 电钢琴（Rhodes 采样） */
   if (state.layers.keys.on) {
+    const inst = SAMP.loaded[SAMP_KEYS] || null;
     for (const e of keysEvents) {
       const t = t16(Math.round(e.beat * 4));
-      const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.9;
+      const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.95;
       const names = e.notes.map(midiName);
-      Tone.Transport.schedule(tt => AE.keys.triggerAttackRelease(names, dur, tt, e.vel), t);
+      Tone.Transport.schedule(tt => {
+        if (inst) for (const n of e.notes) inst.play(n, tt, { duration: dur, gain: e.vel });
+        else AE.keys.triggerAttackRelease(names, dur, tt, e.vel);
+      }, t);
     }
   }
-  /* 贝斯 */
+  /* 贝斯（指弹电贝斯采样） */
   if (state.layers.bass.on) {
+    const inst = SAMP.loaded[SAMP_BASS] || null;
     for (const e of bassEvents) {
       const t = t16(Math.round(e.beat * 4));
-      const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.9;
-      Tone.Transport.schedule(tt => AE.bass.triggerAttackRelease(midiName(e.midi), dur, tt, e.vel), t);
+      const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.95;
+      Tone.Transport.schedule(tt => {
+        if (inst) inst.play(e.midi, tt, { duration: dur, gain: e.vel * 1.3 });
+        else AE.bass.triggerAttackRelease(midiName(e.midi), dur, tt, e.vel);
+      }, t);
     }
   }
   /* 鼓 */
@@ -585,12 +637,16 @@ function scheduleAll() {
 
 async function ensureAudio() {
   if (typeof Tone === 'undefined') return false;
-  if (!state.audioReady) { buildAudio(); state.audioReady = true; }
+  if (!state.audioReady) { buildAudio(); state.audioReady = true; loadInstruments(); }
   try {
     await Tone.start();
     if (Tone.context.state !== 'running') await Tone.context.resume();
+    /* iOS 某些版本需要二次唤醒 */
+    if (Tone.context.state !== 'running') {
+      setTimeout(() => { try { Tone.context.resume(); } catch (e) {} }, 150);
+    }
   } catch (e) { /* 部分浏览器首次手势不完整，下一次点击会重试 */ }
-  return true;
+  return Tone.context.state === 'running';
 }
 
 async function togglePlay() {
@@ -623,7 +679,7 @@ function reScheduleIfPlaying() {
 
 /* ---------- 试听单和弦 ---------- */
 async function auditionChord(i) {
-  if (!state.audioReady) { buildAudio(); state.audioReady = true; }
+  if (!state.audioReady) { buildAudio(); state.audioReady = true; loadInstruments(); }
   await Tone.start();
   const chord = chordTimeline[i];
   if (!chord) return;
@@ -1136,5 +1192,9 @@ function init() {
   populateStatic();
   bindEvents();
   loadPreset(state.presetId);
+  if (/iP(hone|ad|od)/.test(navigator.userAgent)) {
+    const h = document.getElementById('ios-hint');
+    if (h) h.hidden = false;
+  }
 }
 document.addEventListener('DOMContentLoaded', init);

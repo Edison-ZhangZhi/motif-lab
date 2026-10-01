@@ -213,6 +213,11 @@ textarea {
 .stats b { color: var(--ink); font-weight: 500; }
 .exports { display: flex; gap: 8px; }
 
+#ios-hint, .samp-status {
+  width: 100%; font-size: 11px; color: var(--ink-2); margin-top: 10px; letter-spacing: .03em;
+}
+.samp-status { color: var(--ink-3); font-size: 10.5px; margin-top: 4px; }
+
 footer {
   text-align: center; color: var(--ink-3); font-size: 10px; padding: 36px 0 8px;
   line-height: 2; letter-spacing: .06em; border-top: 1px solid var(--line); margin-top: 14px;

@@ -6,6 +6,7 @@
 <title>Motif Lab · 电吉他动机旋律生成器</title>
 <link rel="stylesheet" href="style.css">
 <script src="lib/Tone.js"></script>
+<script src="lib/soundfont-player.min.js"></script>
 </head>
 <body>
 <div class="app">
@@ -48,6 +49,8 @@
         <input type="range" id="ctl-master" min="0" max="100" value="80">
       </div>
     </div>
+    <p id="ios-hint" hidden>🔇 iPhone 上无声？请先拨动手机左侧的「静音开关」（网页音频遵守硬件静音），并调大音量，然后重新点播放</p>
+    <p id="samp-status" class="samp-status"></p>
   </header>
 
   <main>
@@ -92,9 +95,10 @@
             <label class="switch"><input type="checkbox" checked><span></span></label>
             <span class="lname">🎸 旋律吉他</span>
             <select class="patch">
-              <option value="crunch">过载 Crunch</option>
-              <option value="dist">失真 Dist</option>
-              <option value="delay">延迟氛围 Ambient</option>
+              <option value="clean">采样 · 清音吉他</option>
+              <option value="crunch" selected>采样 · 过载吉他</option>
+              <option value="dist">采样 · 失真吉他</option>
+              <option value="delay">合成 · 氛围延迟</option>
             </select>
             <input type="range" class="vol" min="0" max="100" value="80">
           </div>
