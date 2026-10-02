@@ -539,8 +539,7 @@ function buildAudio() {
 
   /* --- 电钢琴：三角波 Poly + 颤音 + 合唱 + 混响 --- */
   AE.keysVol = new Tone.Volume(-6).connect(AE.master);
-  const keysFx = new Tone.Reverb({ decay: 2.2, wet: 0.3 }).connect(AE.keysVol);
-  const keysChorus = new Tone.Chorus(4, 2.5, 0.4).connect(keysFx);
+  const keysChorus = new Tone.Chorus(4, 2.5, 0.4).connect(AE.keysVol);
   AE.keysTremolo = new Tone.Tremolo(5, 0.22).connect(keysChorus);
   AE.keysTremolo.start();
   AE.keys = new Tone.PolySynth(Tone.Synth, {
@@ -594,37 +593,33 @@ function buildAudio() {
 
   /* --- 合成器 Pad 兜底链（采样未就绪时用）：锯齿波 → 移相器 → 大混响 --- */
   AE.synthVol = new Tone.Volume(-9).connect(AE.master);
-  AE.padFx = new Tone.Reverb({ decay: 5, wet: 0.55 }).connect(AE.synthVol);
   AE.padPhaser = new Tone.Phaser(0.4, 4, 400);
   AE.synthPad = new Tone.PolySynth(Tone.Synth, {
     oscillator: { type: 'sawtooth' },
     envelope: { attack: 0.6, decay: 1.5, sustain: 0.5, release: 2.5 },
   }).connect(AE.padPhaser);
 
-  /* --- 采样音色链：分层 EQ/失真 + 共享空间混响（语义音色方案） --- */
-  AE.sampChorus = new Tone.Chorus(2.2, 4.5, 0.3).connect(AE.master);
-  AE.sampChorus.wet.value = 0.35;
-  AE.sampRoom = new Tone.Reverb({ decay: 1.6, wet: 0.16 }).connect(AE.sampChorus);
-  AE.spaceVerb = new Tone.Reverb({ decay: 2.6, wet: 0.45 }).connect(AE.master);
-  AE.toneEqGuitar = new Tone.EQ3({ low: 0, mid: 0, high: 4 }).connect(AE.sampRoom);
+  /* --- 引擎 v2：全链仅 1 个混响 + 廉价双二阶滤波；卷积从 4 降到 1 --- */
+  AE.masterVerb = new Tone.Reverb({ decay: 2.2, wet: 0.3 }).connect(AE.master);
+  /* 吉他/键盘：失真→EQ→主总线 */
+  AE.toneEqGuitar = new Tone.EQ3({ low: 0, mid: 0, high: 3 }).connect(AE.master);
   AE.toneDistGuitar = new Tone.Distortion(0).connect(AE.toneEqGuitar);
-  AE.toneEqKeys = new Tone.EQ3({ low: 0, mid: 0, high: 2 }).connect(AE.sampRoom);
+  AE.toneEqKeys = new Tone.EQ3({ low: 0, mid: 0, high: 2 }).connect(AE.master);
   AE.toneDistKeys = new Tone.Distortion(0).connect(AE.toneEqKeys);
   AE.toneFilterBass = new Tone.Filter(9000, 'lowpass').connect(AE.master);
-  AE.toneEqPad = new Tone.EQ3({ low: 0, mid: 0, high: 0 });
+  /* Pad：移相→EQ→主总线 */
+  AE.toneEqPad = new Tone.EQ3({ low: 0, mid: 0, high: 0 }).connect(AE.master);
   AE.padPhaser.connect(AE.toneEqPad);
-  AE.toneEqPad.connect(AE.padFx);
+  /* 鼓：失真(轻饱和)→EQ→主总线 */
   AE.toneEqDrums = new Tone.EQ3({ low: 0, mid: 0, high: 2 }).connect(AE.master);
   AE.toneDistDrums = new Tone.Distortion(0).connect(AE.toneEqDrums);
-  /* 各层空间发送量（Tone.Gain 节点作 send） */
-  AE.sendGuitar = new Tone.Gain(0.3).connect(AE.spaceVerb);
-  AE.sendKeys = new Tone.Gain(0.3).connect(AE.spaceVerb);
-  AE.sendBass = new Tone.Gain(0.05).connect(AE.spaceVerb);
-  AE.sendPad = new Tone.Gain(0.08).connect(AE.spaceVerb);
-  AE.sendDrums = new Tone.Gain(0.1).connect(AE.spaceVerb);
-  /* 现在所有音色节点就绪，建立鼓链路由 */
-  AE.drumsVol.connect(AE.toneEqDrums);
-  AE.drumsVol.connect(AE.sendDrums);
+  /* 各层空间发送（共享唯一混响） */
+  AE.sendGuitar = new Tone.Gain(0.3).connect(AE.masterVerb);
+  AE.sendKeys = new Tone.Gain(0.3).connect(AE.masterVerb);
+  AE.sendBass = new Tone.Gain(0.05).connect(AE.masterVerb);
+  AE.sendPad = new Tone.Gain(0.12).connect(AE.masterVerb);
+  AE.sendDrums = new Tone.Gain(0.12).connect(AE.masterVerb);
+  AE.drumsVol.connect(AE.toneDistDrums);
 
   /* --- 808 鼓组（经典 TR-808 合成复刻，808 本身就是合成鼓机） --- */
   AE.kick808 = new Tone.Synth({
@@ -1387,9 +1382,10 @@ const STYLE_FX = {
 };
 function applyStyleFx(styleKey) {
   const fx = STYLE_FX[styleKey];
-  if (!fx || !AE.ready) return;
-  AE.sampChorus.wet.value = fx.cw;
-  AE.sampRoom.wet.value = fx.rw;
+  if (!fx || !AE.ready || !AE.masterVerb) return;
+  /* fx.cw→混响湿度, fx.rw→衰减长度映射 */
+  AE.masterVerb.wet.value = Math.min(0.65, fx.cw * 0.75);
+  AE.masterVerb.decay = 1 + fx.rw * 4;
 }
 
 /* ---------- 风格整体配置：切换风格 = 整套编曲画面变换 ---------- */
