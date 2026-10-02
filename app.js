@@ -42,6 +42,7 @@ const state = {
   audioReady: false,
   melodyEdited: false,
   sfBase: (typeof localStorage !== 'undefined' && localStorage.getItem('motif_sf')) || 'soundfont2',
+  perf: (typeof localStorage !== 'undefined' && localStorage.getItem('motif_perf') === '1'),
   tone: (typeof localStorage !== 'undefined' && JSON.parse(localStorage.getItem('motif_tone') || '{}')) || {},
   toneCustom: (typeof localStorage !== 'undefined' && JSON.parse(localStorage.getItem('motif_tonecustom') || '{}')) || {},
 };
@@ -375,13 +376,14 @@ function chooseVoicing(pcs, prevNotes) {
       if (notes[notes.length - 1] <= 81) candidates.push(notes);
     }
   }
-  if (!prevNotes) { const c = candidates[Math.floor(candidates.length / 2)] || candidates[0]; return c.slice(0, 4); }
+  const cap = state.perf ? 3 : 4;
+  if (!prevNotes) { const c = candidates[Math.floor(candidates.length / 2)] || candidates[0]; return c.slice(0, cap); }
   let best = candidates[0], bd = 1e9;
   for (const c of candidates) {
     const d = c.reduce((s, n, i) => s + Math.abs(n - (prevNotes[i] !== undefined ? prevNotes[i] : n)), 0);
     if (d < bd) { bd = d; best = c; }
   }
-  return best.slice(0, 4);
+  return best.slice(0, cap);
 }
 
 function genKeys() {
@@ -474,7 +476,7 @@ function genDrums() {
       }
       if (P.ohat && P.ohat[s] && density !== 'lite') push('ohat', 0.6);
       if (P.ride && P.ride[s]) push('ride', s % 4 === 0 ? 0.8 : 0.5);
-      if (P.crash && P.crash[s] && bar % 4 === 0) push('crash', 0.7);
+      if (P.crash && P.crash[s] && (bar % 4 === 0 || styleKey === 'rock')) push('crash', styleKey === 'rock' ? 0.55 : 0.7);
       if (P.congaH && P.congaH[s]) push('congaH', 0.6);
       if (P.congaL && P.congaL[s]) push('congaL', 0.55);
     }
@@ -484,7 +486,10 @@ function genDrums() {
     }
     /* 风格打击乐层：Afro 全十六分 shekere + 反拍 clap（力量鼓点）；Bossa/RnB 沙锤八分 */
     if (styleKey === 'afro') {
-      for (let s = 0; s < 16; s++) ev.push({ step16: bar * 16 + s, inst: 'shekere', vel: s % 4 === 0 ? 0.55 : 0.32, kit });
+      for (let s = 0; s < 16; s++) {
+        if (state.perf && s % 2 === 1) continue; /* 性能模式：shekere 减半 */
+        ev.push({ step16: bar * 16 + s, inst: 'shekere', vel: s % 4 === 0 ? 0.55 : 0.32, kit });
+      }
       ev.push({ step16: bar * 16 + 4,  inst: 'clap', vel: 0.7, kit });
       ev.push({ step16: bar * 16 + 12, inst: 'clap', vel: 0.75, kit });
     } else if (styleKey === 'bossa' || styleKey === 'rnb') {
@@ -559,6 +564,7 @@ function buildAudio() {
 
   /* --- 鼓组 --- */
   AE.drumsVol = new Tone.Volume(-6); /* 路由在音色链创建后建立 */
+  AE.drumsComp = new Tone.Compressor(-14, 4); /* 力量感：鼓总线压缩 */
   AE.kick = new Tone.MembraneSynth({
     pitchDecay: 0.045, octaves: 6,
     envelope: { attack: 0.001, decay: 0.38, sustain: 0, release: 0.1 },
@@ -619,7 +625,8 @@ function buildAudio() {
   AE.sendBass = new Tone.Gain(0.05).connect(AE.masterVerb);
   AE.sendPad = new Tone.Gain(0.12).connect(AE.masterVerb);
   AE.sendDrums = new Tone.Gain(0.12).connect(AE.masterVerb);
-  AE.drumsVol.connect(AE.toneDistDrums);
+  AE.drumsVol.connect(AE.drumsComp);
+  AE.drumsComp.connect(AE.toneDistDrums);
 
   /* --- 808 鼓组（经典 TR-808 合成复刻，808 本身就是合成鼓机） --- */
   AE.kick808 = new Tone.Synth({
@@ -745,7 +752,7 @@ function loadDrumSamples() {
       .catch(() => {});
   });
 }
-const DRUM_GAIN = { shekere: 1.3, shaker: 0.9, snap: 1.05, clap: 1.15, hat_808: 0.85, kick_808: 1.2, crash: 0.8, rim_click: 1.05, kick_room: 1.3, conga_h: 1.2, conga_l: 1.2, clave: 1.15 };
+const DRUM_GAIN = { shekere: 1.3, shaker: 0.9, snap: 1.1, clap: 1.3, hat_808: 0.9, kick_808: 1.25, crash: 0.95, rim_click: 1.1, kick_room: 1.45, snare_room: 1.2, brush_snare: 1.1, conga_h: 1.25, conga_l: 1.25, clave: 1.2 };
 function playDrumSample(name, t, vel) {
   const buf = DRUM_SAMP.buffers[name];
   if (!buf || !DRUM_SAMP.bus) return false;
@@ -1339,16 +1346,17 @@ const STYLE_TONE = {
 function applyTone(layer) {
   if (!AE.ready) return;
   const t = (state.tone[layer] || { b: 0.5, s: 0.3, t: 0.2 });
+  const perfMul = state.perf ? 0.5 : 1;
   const brightDb = -12 + t.b * 26;
   if (layer === 'guitar' && AE.toneEqGuitar) {
     AE.toneEqGuitar.high.value = brightDb;
     AE.toneEqGuitar.low.value = -4 + t.t * 6;
     AE.toneDistGuitar.distortion = t.t * 0.35;
-    AE.sendGuitar.gain.value = t.s * 0.9;
+    AE.sendGuitar.gain.value = t.s * 0.9 * perfMul;
   } else if (layer === 'keys' && AE.toneEqKeys) {
     AE.toneEqKeys.high.value = brightDb;
     AE.toneDistKeys.distortion = t.t * 0.25;
-    AE.sendKeys.gain.value = t.s * 0.9;
+    AE.sendKeys.gain.value = t.s * 0.9 * perfMul;
   } else if (layer === 'bass' && AE.toneFilterBass) {
     AE.toneFilterBass.frequency.value = 400 + t.b * 9000; /* 200Hz(闷)~9.4kHz(亮)，默认不再闷 */
     AE.sendBass.gain.value = t.s * 0.25;
@@ -1358,7 +1366,7 @@ function applyTone(layer) {
   } else if (layer === 'drums' && AE.toneEqDrums) {
     AE.toneEqDrums.high.value = brightDb;
     AE.toneDistDrums.distortion = t.t * 0.07; /* 轻微饱和，避免鼓毛刺 */
-    AE.sendDrums.gain.value = t.s * 0.7;
+    AE.sendDrums.gain.value = t.s * 0.7 * perfMul;
   }
 }
 function applyStyleTone(styleKey) {
@@ -1882,6 +1890,17 @@ function bindEvents() {
       });
     };
   });
+
+  const perfEl = document.getElementById('ctl-perf');
+  if (perfEl) {
+    perfEl.checked = state.perf;
+    perfEl.onchange = () => {
+      state.perf = perfEl.checked;
+      try { localStorage.setItem('motif_perf', state.perf ? '1' : '0'); } catch (e) {}
+      for (const layer of ['guitar','keys','bass','pad','drums']) applyTone(layer);
+      regenerate('patch');
+    };
+  }
 
   /* 逐层试听：点声部名播 3 个示例音 */
   document.querySelectorAll('#layers .lname').forEach(el => {
