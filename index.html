@@ -121,6 +121,13 @@
               </optgroup>
             </select>
             <input type="range" class="vol" min="0" max="100" value="80">
+            <button class="tone-toggle" data-tone="guitar">音色</button>
+            <div class="tone-panel" id="tone-panel-guitar">
+              <div class="tone-ctl"><label>亮度</label><input type="range" class="tone-slider" data-layer="guitar" data-param="b" min="0" max="100" value="50"></div>
+              <div class="tone-ctl"><label>空间</label><input type="range" class="tone-slider" data-layer="guitar" data-param="s" min="0" max="100" value="50"></div>
+              <div class="tone-ctl"><label>厚度</label><input type="range" class="tone-slider" data-layer="guitar" data-param="t" min="0" max="100" value="50"></div>
+              <button class="tone-reset" data-layer="guitar">↺ 恢复风格默认</button>
+            </div>
           </div>
           <div class="layer" data-layer="keys">
             <label class="switch"><input type="checkbox" checked><span></span></label>
@@ -139,6 +146,13 @@
               </optgroup>
             </select>
             <input type="range" class="vol" min="0" max="100" value="55">
+            <button class="tone-toggle" data-tone="keys">音色</button>
+            <div class="tone-panel" id="tone-panel-keys">
+              <div class="tone-ctl"><label>亮度</label><input type="range" class="tone-slider" data-layer="keys" data-param="b" min="0" max="100" value="50"></div>
+              <div class="tone-ctl"><label>空间</label><input type="range" class="tone-slider" data-layer="keys" data-param="s" min="0" max="100" value="50"></div>
+              <div class="tone-ctl"><label>厚度</label><input type="range" class="tone-slider" data-layer="keys" data-param="t" min="0" max="100" value="50"></div>
+              <button class="tone-reset" data-layer="keys">↺ 恢复风格默认</button>
+            </div>
           </div>
           <div class="layer" data-layer="bass">
             <label class="switch"><input type="checkbox" checked><span></span></label>
@@ -151,6 +165,13 @@
               <option value="bossa">Bossa 交替</option>
             </select>
             <input type="range" class="vol" min="0" max="100" value="70">
+            <button class="tone-toggle" data-tone="bass">音色</button>
+            <div class="tone-panel" id="tone-panel-bass">
+              <div class="tone-ctl"><label>亮度</label><input type="range" class="tone-slider" data-layer="bass" data-param="b" min="0" max="100" value="50"></div>
+              <div class="tone-ctl"><label>空间</label><input type="range" class="tone-slider" data-layer="bass" data-param="s" min="0" max="100" value="50"></div>
+              <div class="tone-ctl"><label>厚度</label><input type="range" class="tone-slider" data-layer="bass" data-param="t" min="0" max="100" value="50"></div>
+              <button class="tone-reset" data-layer="bass">↺ 恢复风格默认</button>
+            </div>
           </div>
           <div class="layer" data-layer="drums">
             <label class="switch"><input type="checkbox" checked><span></span></label>
@@ -163,6 +184,13 @@
               <option value="808">808 嘻哈鼓组</option>
             </select>
             <input type="range" class="vol" min="0" max="100" value="70">
+            <button class="tone-toggle" data-tone="drums">音色</button>
+            <div class="tone-panel" id="tone-panel-drums">
+              <div class="tone-ctl"><label>亮度</label><input type="range" class="tone-slider" data-layer="drums" data-param="b" min="0" max="100" value="50"></div>
+              <div class="tone-ctl"><label>空间</label><input type="range" class="tone-slider" data-layer="drums" data-param="s" min="0" max="100" value="50"></div>
+              <div class="tone-ctl"><label>力度</label><input type="range" class="tone-slider" data-layer="drums" data-param="t" min="0" max="100" value="50"></div>
+              <button class="tone-reset" data-layer="drums">↺ 恢复风格默认</button>
+            </div>
           </div>
           <div class="layer" data-layer="synth">
             <label class="switch"><input type="checkbox" checked><span></span></label>
@@ -180,6 +208,13 @@
               </optgroup>
             </select>
             <input type="range" class="vol" min="0" max="100" value="45">
+            <button class="tone-toggle" data-tone="synth">音色</button>
+            <div class="tone-panel" id="tone-panel-synth">
+              <div class="tone-ctl"><label>亮度</label><input type="range" class="tone-slider" data-layer="synth" data-param="b" min="0" max="100" value="50"></div>
+              <div class="tone-ctl"><label>空间</label><input type="range" class="tone-slider" data-layer="synth" data-param="s" min="0" max="100" value="50"></div>
+              <div class="tone-ctl"><label>厚度</label><input type="range" class="tone-slider" data-layer="synth" data-param="t" min="0" max="100" value="50"></div>
+              <button class="tone-reset" data-layer="synth">↺ 恢复风格默认</button>
+            </div>
           </div>
         </div>
       </section>

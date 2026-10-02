@@ -42,6 +42,8 @@ const state = {
   audioReady: false,
   melodyEdited: false,
   sfBase: (typeof localStorage !== 'undefined' && localStorage.getItem('motif_sf')) || 'soundfont2',
+  tone: (typeof localStorage !== 'undefined' && JSON.parse(localStorage.getItem('motif_tone') || '{}')) || {},
+  toneCustom: (typeof localStorage !== 'undefined' && JSON.parse(localStorage.getItem('motif_tonecustom') || '{}')) || {},
 };
 
 /* 派生数据 */
@@ -557,7 +559,9 @@ function buildAudio() {
   }).connect(AE.bassVol);
 
   /* --- 鼓组 --- */
-  AE.drumsVol = new Tone.Volume(-6).connect(AE.master);
+  AE.drumsVol = new Tone.Volume(-6);
+  AE.drumsVol.connect(AE.toneEqDrums);
+  AE.drumsVol.connect(AE.sendDrums);
   AE.kick = new Tone.MembraneSynth({
     pitchDecay: 0.045, octaves: 6,
     envelope: { attack: 0.001, decay: 0.38, sustain: 0, release: 0.1 },
@@ -594,15 +598,30 @@ function buildAudio() {
   AE.synthVol = new Tone.Volume(-9).connect(AE.master);
   AE.padFx = new Tone.Reverb({ decay: 5, wet: 0.55 }).connect(AE.synthVol);
   AE.padPhaser = new Tone.Phaser(0.4, 4, 400).connect(AE.padFx);
+  /* pad 采样经 toneEqPad 后进移相器 */
   AE.synthPad = new Tone.PolySynth(Tone.Synth, {
     oscillator: { type: 'sawtooth' },
     envelope: { attack: 0.6, decay: 1.5, sustain: 0.5, release: 2.5 },
   }).connect(AE.padPhaser);
 
-  /* --- 采样暖声链：小房间混响 → 轻合唱 → 主总线（Rhodes/吉他的制作感） --- */
+  /* --- 采样音色链：分层 EQ/失真 + 共享空间混响（语义音色方案） --- */
   AE.sampChorus = new Tone.Chorus(2.2, 4.5, 0.3).connect(AE.master);
   AE.sampChorus.wet.value = 0.35;
   AE.sampRoom = new Tone.Reverb({ decay: 1.6, wet: 0.16 }).connect(AE.sampChorus);
+  AE.spaceVerb = new Tone.Reverb({ decay: 2.6, wet: 0.45 }).connect(AE.master);
+  AE.toneEqGuitar = new Tone.EQ3({ low: 0, mid: 0, high: 4 }).connect(AE.sampRoom);
+  AE.toneDistGuitar = new Tone.Distortion(0).connect(AE.toneEqGuitar);
+  AE.toneEqKeys = new Tone.EQ3({ low: 0, mid: 0, high: 2 }).connect(AE.sampRoom);
+  AE.toneDistKeys = new Tone.Distortion(0).connect(AE.toneEqKeys);
+  AE.toneFilterBass = new Tone.Filter(1600, 'lowpass').connect(AE.master);
+  AE.toneEqPad = new Tone.EQ3({ low: 0, mid: 0, high: 0 }).connect(AE.padPhaser);
+  AE.toneEqDrums = new Tone.EQ3({ low: 0, mid: 0, high: 2 }).connect(AE.master);
+  /* 各层空间发送量（Tone.Gain 节点作 send） */
+  AE.sendGuitar = new Tone.Gain(0.3).connect(AE.spaceVerb);
+  AE.sendKeys = new Tone.Gain(0.3).connect(AE.spaceVerb);
+  AE.sendBass = new Tone.Gain(0.05).connect(AE.spaceVerb);
+  AE.sendPad = new Tone.Gain(0.15).connect(AE.spaceVerb);
+  AE.sendDrums = new Tone.Gain(0.1).connect(AE.spaceVerb);
 
   /* --- 808 鼓组（经典 TR-808 合成复刻，808 本身就是合成鼓机） --- */
   AE.kick808 = new Tone.Synth({
@@ -649,6 +668,11 @@ function buildAudio() {
 
   AE.ready = true;
   applyStyleFx(state.styles.length === 1 ? state.styles[0] : 'rnb');
+  for (const layer of ['guitar', 'keys', 'bass', 'pad', 'drums']) applyTone(layer);
+  document.querySelectorAll('.tone-slider').forEach(sl => {
+    const cur = state.tone[sl.dataset.layer];
+    if (cur && cur[sl.dataset.param] !== undefined) sl.value = Math.round(cur[sl.dataset.param] * 100);
+  });
   applyMix();
 }
 
@@ -774,14 +798,36 @@ function nativeInputOf(toneNode) {
   return toneNode.input.input ? toneNode.input.input : toneNode.input;
 }
 function ensureBuses() {
-  if (SAMP.bus) return;
+  if (SAMP.busByRole) return;
   const raw = Tone.getContext().rawContext;
-  SAMP.bus = raw.createGain();           /* 暖声总线：吉他/电钢/贝斯 → 合唱+房间 */
-  SAMP.bus.gain.value = 1;
-  SAMP.bus.connect(nativeInputOf(AE.sampRoom));
-  SAMP.padBus = raw.createGain();        /* Pad 总线：过移相器+大混响 */
-  SAMP.padBus.gain.value = 1;
-  SAMP.padBus.connect(nativeInputOf(AE.padPhaser));
+  SAMP.busByRole = {};
+  const mk = (role) => { const g = raw.createGain(); g.gain.value = 1; SAMP.busByRole[role] = g; return g; };
+  /* 吉他 → 失真→EQ→暖声链；keys → EQ→暖声链；贝斯 → 低通→主总线（不过合唱混响） */
+  mk('guitar').connect(nativeInputOf(AE.toneDistGuitar));
+  mk('keys').connect(nativeInputOf(AE.toneDistKeys));
+  mk('bass').connect(nativeInputOf(AE.toneFilterBass));
+  mk('pad').connect(nativeInputOf(AE.toneEqPad));
+  /* 空间发送（原生 gain → Tone.Gain） */
+  const mkSend = (role, send) => { const g = raw.createGain(); g.gain.value = 0.3; g.connect(nativeInputOf(send)); return g; };
+  SAMP.sendByRole = {
+    guitar: mkSend('guitar', AE.sendGuitar),
+    keys: mkSend('keys', AE.sendKeys),
+    bass: mkSend('bass', AE.sendBass),
+    pad: mkSend('pad', AE.sendPad),
+  };
+  SAMP.busByRole.guitar.connect(SAMP.sendByRole.guitar);
+  SAMP.busByRole.keys.connect(SAMP.sendByRole.keys);
+  SAMP.busByRole.bass.connect(SAMP.sendByRole.bass);
+  SAMP.busByRole.pad.connect(SAMP.sendByRole.pad);
+  /* 兼容旧引用 */
+  SAMP.bus = SAMP.busByRole.guitar;
+  SAMP.padBus = SAMP.busByRole.pad;
+}
+function roleOfName(name) {
+  if (name === SAMP_KEYS) return 'keys';
+  if (name === SAMP_BASS) return 'bass';
+  if (name && (name.startsWith('pad_') || name === 'synth_strings_1')) return 'pad';
+  return 'guitar';
 }
 function ensureSample(name) {
   if (!AE.ready) return Promise.resolve(null);
@@ -792,7 +838,7 @@ function ensureSample(name) {
     ensureBuses();
     const other = state.sfBase === 'soundfont2' ? 'soundfont' : 'soundfont2';
     const tryLoad = (base) => Soundfont.instrument(Tone.getContext(), base + '/' + name + '.js', {
-      destination: name.startsWith('pad_') || name === 'synth_strings_1' ? SAMP.padBus : SAMP.bus,
+      destination: SAMP.busByRole[roleOfName(name)],
     });
     SAMP.pending[key] = tryLoad(state.sfBase)
       .catch(() => tryLoad(other))
@@ -864,7 +910,7 @@ function ensureSampleBank(name, base) {
     if (!AE.ready || typeof Soundfont === 'undefined') return Promise.resolve(null);
     ensureBuses();
     SAMP.pending[key] = Soundfont.instrument(Tone.getContext(), base + '/' + name + '.js', {
-      destination: name.startsWith('pad_') || name === 'synth_strings_1' ? SAMP.padBus : SAMP.bus,
+      destination: SAMP.busByRole[roleOfName(name)],
     }).then(inst => { SAMP.cache[key] = inst; return inst; }).catch(() => null);
   }
   return SAMP.pending[key];
@@ -1280,6 +1326,50 @@ function exportMidi() {
  * ============================================================ */
 const $ = sel => document.querySelector(sel);
 
+/* 语义音色目标（方案2: 语义化EQ，MDPI 2016）：每层 亮度bright/空间space/厚度thick 0~1 */
+const STYLE_TONE = {
+  rnb:   { guitar:{b:0.35,s:0.55,t:0.15}, keys:{b:0.30,s:0.60,t:0.0}, bass:{b:0.30,s:0.15,t:0.0}, pad:{b:0.25,s:0.70,t:0.0}, drums:{b:0.45,s:0.15,t:0.2} },
+  jazz:  { guitar:{b:0.40,s:0.35,t:0.10}, keys:{b:0.35,s:0.40,t:0.0}, bass:{b:0.35,s:0.10,t:0.0}, pad:{b:0.30,s:0.50,t:0.0}, drums:{b:0.50,s:0.20,t:0.1} },
+  rock:  { guitar:{b:0.70,s:0.20,t:0.50}, keys:{b:0.50,s:0.20,t:0.2}, bass:{b:0.55,s:0.10,t:0.3}, pad:{b:0.40,s:0.30,t:0.2}, drums:{b:0.60,s:0.25,t:0.35} },
+  bossa: { guitar:{b:0.50,s:0.35,t:0.05}, keys:{b:0.40,s:0.35,t:0.0}, bass:{b:0.35,s:0.10,t:0.0}, pad:{b:0.30,s:0.40,t:0.0}, drums:{b:0.50,s:0.20,t:0.1} },
+  afro:  { guitar:{b:0.55,s:0.30,t:0.15}, keys:{b:0.50,s:0.25,t:0.1}, bass:{b:0.45,s:0.15,t:0.2}, pad:{b:0.40,s:0.30,t:0.1}, drums:{b:0.55,s:0.30,t:0.3} },
+  hiphop:{ guitar:{b:0.40,s:0.50,t:0.20}, keys:{b:0.30,s:0.65,t:0.0}, bass:{b:0.25,s:0.10,t:0.3}, pad:{b:0.25,s:0.60,t:0.0}, drums:{b:0.50,s:0.40,t:0.4} },
+};
+function applyTone(layer) {
+  if (!AE.ready) return;
+  const t = (state.tone[layer] || { b: 0.5, s: 0.3, t: 0.2 });
+  const brightDb = -12 + t.b * 26;
+  if (layer === 'guitar' && AE.toneEqGuitar) {
+    AE.toneEqGuitar.high.value = brightDb;
+    AE.toneEqGuitar.low.value = -4 + t.t * 6;
+    AE.toneDistGuitar.distortion = t.t * 0.35;
+    AE.sendGuitar.gain.value = t.s * 0.9;
+  } else if (layer === 'keys' && AE.toneEqKeys) {
+    AE.toneEqKeys.high.value = brightDb;
+    AE.toneDistKeys.distortion = t.t * 0.25;
+    AE.sendKeys.gain.value = t.s * 0.9;
+  } else if (layer === 'bass' && AE.toneFilterBass) {
+    AE.toneFilterBass.frequency.value = 400 + t.b * 3200;
+    AE.sendBass.gain.value = t.s * 0.4;
+  } else if (layer === 'pad' && AE.toneEqPad) {
+    AE.toneEqPad.high.value = brightDb;
+    AE.sendPad.gain.value = t.s * 0.5;
+  } else if (layer === 'drums' && AE.toneEqDrums) {
+    AE.toneEqDrums.high.value = brightDb;
+    AE.toneDistDrums.distortion = t.t * 0.3;
+    AE.sendDrums.gain.value = t.s * 0.7;
+  }
+}
+function applyStyleTone(styleKey) {
+  const tbl = STYLE_TONE[styleKey];
+  if (!tbl) return;
+  for (const layer of Object.keys(tbl)) {
+    if (state.toneCustom[layer]) continue; /* 用户手动调过则保留 */
+    state.tone[layer] = Object.assign({}, tbl[layer]);
+    applyTone(layer);
+  }
+}
+
 /* 风格音色性格：合唱/空间混响湿度（RnB 迷幻宽空间 / Jazz 丝滑干净 / Rock 干近 / Afro 打击前置） */
 const STYLE_FX = {
   rnb:   { cw: 0.65, rw: 0.5 },
@@ -1333,6 +1423,7 @@ function applyStyleSetup(styleKey) {
   });
   applyGuitarPatch();
   applyStyleFx(styleKey);
+  applyStyleTone(styleKey);
   const gn = SAMP_GUITAR[cfg.guitar];
   if (gn) ensureSample(gn).then(() => autoAlignTimbres(styleKey));
   else autoAlignTimbres(styleKey);
@@ -1757,6 +1848,37 @@ function bindEvents() {
       }
     };
     row.querySelector('.vol').oninput = e => { state.layers[layer].vol = e.target.value / 100; applyMix(); };
+  });
+
+  /* 语义音色面板 */
+  document.querySelectorAll('.tone-toggle').forEach(btn => {
+    btn.onclick = ev => {
+      ev.stopPropagation();
+      document.getElementById('tone-panel-' + btn.dataset.tone).classList.toggle('open');
+    };
+  });
+  document.querySelectorAll('.tone-slider').forEach(sl => {
+    sl.oninput = () => {
+      const layer = sl.dataset.layer, p = sl.dataset.param;
+      state.tone[layer] = state.tone[layer] || { b: 0.5, s: 0.3, t: 0.2 };
+      state.tone[layer][p] = sl.value / 100;
+      state.toneCustom[layer] = true;
+      try { localStorage.setItem('motif_tone', JSON.stringify(state.tone)); localStorage.setItem('motif_tonecustom', JSON.stringify(state.toneCustom)); } catch (e) {}
+      applyTone(layer);
+    };
+  });
+  document.querySelectorAll('.tone-reset').forEach(btn => {
+    btn.onclick = () => {
+      const layer = btn.dataset.layer;
+      delete state.toneCustom[layer];
+      const dom = state.styles.length === 1 ? state.styles[0] : null;
+      if (dom && STYLE_TONE[dom] && STYLE_TONE[dom][layer]) state.tone[layer] = Object.assign({}, STYLE_TONE[dom][layer]);
+      try { localStorage.setItem('motif_tone', JSON.stringify(state.tone)); localStorage.setItem('motif_tonecustom', JSON.stringify(state.toneCustom)); } catch (e) {}
+      applyTone(layer);
+      document.querySelectorAll('.tone-slider[data-layer="' + layer + '"]').forEach(sl => {
+        sl.value = Math.round((state.tone[layer] ? state.tone[layer][sl.dataset.param] : 0.5) * 100);
+      });
+    };
   });
 
   /* 逐层试听：点声部名播 3 个示例音 */
