@@ -559,9 +559,7 @@ function buildAudio() {
   }).connect(AE.bassVol);
 
   /* --- 鼓组 --- */
-  AE.drumsVol = new Tone.Volume(-6);
-  AE.drumsVol.connect(AE.toneEqDrums);
-  AE.drumsVol.connect(AE.sendDrums);
+  AE.drumsVol = new Tone.Volume(-6); /* 路由在音色链创建后建立 */
   AE.kick = new Tone.MembraneSynth({
     pitchDecay: 0.045, octaves: 6,
     envelope: { attack: 0.001, decay: 0.38, sustain: 0, release: 0.1 },
@@ -597,8 +595,7 @@ function buildAudio() {
   /* --- 合成器 Pad 兜底链（采样未就绪时用）：锯齿波 → 移相器 → 大混响 --- */
   AE.synthVol = new Tone.Volume(-9).connect(AE.master);
   AE.padFx = new Tone.Reverb({ decay: 5, wet: 0.55 }).connect(AE.synthVol);
-  AE.padPhaser = new Tone.Phaser(0.4, 4, 400).connect(AE.padFx);
-  /* pad 采样经 toneEqPad 后进移相器 */
+  AE.padPhaser = new Tone.Phaser(0.4, 4, 400);
   AE.synthPad = new Tone.PolySynth(Tone.Synth, {
     oscillator: { type: 'sawtooth' },
     envelope: { attack: 0.6, decay: 1.5, sustain: 0.5, release: 2.5 },
@@ -613,15 +610,21 @@ function buildAudio() {
   AE.toneDistGuitar = new Tone.Distortion(0).connect(AE.toneEqGuitar);
   AE.toneEqKeys = new Tone.EQ3({ low: 0, mid: 0, high: 2 }).connect(AE.sampRoom);
   AE.toneDistKeys = new Tone.Distortion(0).connect(AE.toneEqKeys);
-  AE.toneFilterBass = new Tone.Filter(1600, 'lowpass').connect(AE.master);
-  AE.toneEqPad = new Tone.EQ3({ low: 0, mid: 0, high: 0 }).connect(AE.padPhaser);
+  AE.toneFilterBass = new Tone.Filter(9000, 'lowpass').connect(AE.master);
+  AE.toneEqPad = new Tone.EQ3({ low: 0, mid: 0, high: 0 });
+  AE.padPhaser.connect(AE.toneEqPad);
+  AE.toneEqPad.connect(AE.padFx);
   AE.toneEqDrums = new Tone.EQ3({ low: 0, mid: 0, high: 2 }).connect(AE.master);
+  AE.toneDistDrums = new Tone.Distortion(0).connect(AE.toneEqDrums);
   /* 各层空间发送量（Tone.Gain 节点作 send） */
   AE.sendGuitar = new Tone.Gain(0.3).connect(AE.spaceVerb);
   AE.sendKeys = new Tone.Gain(0.3).connect(AE.spaceVerb);
   AE.sendBass = new Tone.Gain(0.05).connect(AE.spaceVerb);
-  AE.sendPad = new Tone.Gain(0.15).connect(AE.spaceVerb);
+  AE.sendPad = new Tone.Gain(0.08).connect(AE.spaceVerb);
   AE.sendDrums = new Tone.Gain(0.1).connect(AE.spaceVerb);
+  /* 现在所有音色节点就绪，建立鼓链路由 */
+  AE.drumsVol.connect(AE.toneEqDrums);
+  AE.drumsVol.connect(AE.sendDrums);
 
   /* --- 808 鼓组（经典 TR-808 合成复刻，808 本身就是合成鼓机） --- */
   AE.kick808 = new Tone.Synth({
@@ -668,6 +671,7 @@ function buildAudio() {
 
   AE.ready = true;
   applyStyleFx(state.styles.length === 1 ? state.styles[0] : 'rnb');
+  applyStyleTone(state.styles.length === 1 ? state.styles[0] : 'rnb');
   for (const layer of ['guitar', 'keys', 'bass', 'pad', 'drums']) applyTone(layer);
   document.querySelectorAll('.tone-slider').forEach(sl => {
     const cur = state.tone[sl.dataset.layer];
@@ -806,7 +810,7 @@ function ensureBuses() {
   mk('guitar').connect(nativeInputOf(AE.toneDistGuitar));
   mk('keys').connect(nativeInputOf(AE.toneDistKeys));
   mk('bass').connect(nativeInputOf(AE.toneFilterBass));
-  mk('pad').connect(nativeInputOf(AE.toneEqPad));
+  mk('pad').connect(nativeInputOf(AE.padPhaser));
   /* 空间发送（原生 gain → Tone.Gain） */
   const mkSend = (role, send) => { const g = raw.createGain(); g.gain.value = 0.3; g.connect(nativeInputOf(send)); return g; };
   SAMP.sendByRole = {
@@ -925,23 +929,24 @@ async function autoAlignTimbres(styleKey) {
     pad: SAMP_PAD[state.layers.synth.patch],
   };
   const picks = [];
+  SAMP.descCache = SAMP.descCache || {};
   for (const [role, name] of Object.entries(roles)) {
     if (!name || !targets[role]) continue;
-    const banks = ['soundfont2', 'soundfont'];
-    const descs = [];
-    for (const base of banks) {
-      const inst = await ensureSampleBank(name, base);
-      if (!inst || !inst.buffers) { descs.push(null); continue; }
-      const keyName = inst.buffers['E3'] ? 'E3' : Object.keys(inst.buffers)[Math.floor(Object.keys(inst.buffers).length / 2)];
-      descs.push(timbreDescriptors(inst.buffers[keyName]));
-    }
+    /* 只分析已在缓存中的库：不触发下载/解码，避免播放前二次风暴 */
+    const banks = ['soundfont2', 'soundfont'].filter(b => SAMP.cache[b + ':' + name]);
+    if (banks.length < 2) continue; /* 只有一个库可对比时不切换 */
     const tg = targets[role];
-    let best = state.sfBase, bd = 1e9;
-    banks.forEach((base, i) => {
-      if (!descs[i]) return;
-      const d = Math.abs(descs[i].bright - tg.b) + Math.abs(descs[i].sustain - tg.s);
+    let best = SAMP.roleBank[role] || state.sfBase, bd = 1e9;
+    for (const base of banks) {
+      const ck = base + ':' + name;
+      if (!SAMP.descCache[ck]) {
+        const inst = SAMP.cache[ck];
+        const keyName = inst.buffers['E3'] ? 'E3' : Object.keys(inst.buffers)[Math.floor(Object.keys(inst.buffers).length / 2)];
+        SAMP.descCache[ck] = timbreDescriptors(inst.buffers[keyName]);
+      }
+      const d = Math.abs(SAMP.descCache[ck].bright - tg.b) + Math.abs(SAMP.descCache[ck].sustain - tg.s);
       if (d < bd) { bd = d; best = base; }
-    });
+    }
     SAMP.roleBank[role] = best;
     picks.push(role + '→' + (best === 'soundfont2' ? 'MK' : 'F3'));
   }
@@ -1165,15 +1170,16 @@ async function togglePlay() {
     restoreSampleBuses();
     applyMix();
     (async () => {
-      /* 播放闸：首次等待核心采样解码完成，杜绝边播边解码的卡顿 */
+      /* 播放闸：仅会话首次等待核心采样（6s 封顶），之后直接播 */
       const need = [SAMP_GUITAR[state.layers.guitar.patch], SAMP_KEYS, SAMP_BASS, SAMP_PAD[state.layers.synth.patch]].filter(Boolean);
       const t0 = Date.now();
-      while (need.some(n => !SAMP.cache[state.sfBase + ':' + n]) && Date.now() - t0 < 9000) {
+      while (!state._gateDone && need.some(n => !SAMP.cache[state.sfBase + ':' + n]) && Date.now() - t0 < 6000) {
         need.forEach(n => ensureSample(n));
         sampStatus('正在准备音色…');
         await new Promise(r => setTimeout(r, 250));
         if (state.playing) return; /* 等待中被再次点击则取消 */
       }
+      state._gateDone = true;
       sampStatus('');
       restoreSampleBuses();
       scheduleAll();
@@ -1349,14 +1355,14 @@ function applyTone(layer) {
     AE.toneDistKeys.distortion = t.t * 0.25;
     AE.sendKeys.gain.value = t.s * 0.9;
   } else if (layer === 'bass' && AE.toneFilterBass) {
-    AE.toneFilterBass.frequency.value = 400 + t.b * 3200;
-    AE.sendBass.gain.value = t.s * 0.4;
+    AE.toneFilterBass.frequency.value = 400 + t.b * 9000; /* 200Hz(闷)~9.4kHz(亮)，默认不再闷 */
+    AE.sendBass.gain.value = t.s * 0.25;
   } else if (layer === 'pad' && AE.toneEqPad) {
     AE.toneEqPad.high.value = brightDb;
-    AE.sendPad.gain.value = t.s * 0.5;
+    AE.sendPad.gain.value = t.s * 0.25; /* pad 自带大混响，space 发送减半防糊 */
   } else if (layer === 'drums' && AE.toneEqDrums) {
     AE.toneEqDrums.high.value = brightDb;
-    AE.toneDistDrums.distortion = t.t * 0.3;
+    AE.toneDistDrums.distortion = t.t * 0.07; /* 轻微饱和，避免鼓毛刺 */
     AE.sendDrums.gain.value = t.s * 0.7;
   }
 }
