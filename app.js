@@ -333,6 +333,15 @@ function genBass() {
       push(1.5, fifth, 0.45, 0.7);
       push(2, oct, 0.9, 0.75);
       push(3.5, fifth, 0.45, 0.7);
+    } else if (pat === 'hiphop') {
+      /* 半速 808：第1拍长音 + 第3拍后滑向下一和弦根 */
+      const nextChord = chordTimeline[(bar + 1) % bars];
+      const nextRoot = 28 + ((nextChord.rootPC + 12 - 4) % 12);
+      push(0, r + 12, 1.9, 0.95);
+      push(2.5, r + 19, 1.1, 0.7);
+      ev[ev.length - 2].b808 = true;
+      ev[ev.length - 1].b808 = true;
+      ev[ev.length - 1].slideTo = clamp(nextRoot + 12, 30, 50);
     } else { /* afro：弹性 16 分 Vamp */
       push(0, r, 0.4, 0.85);
       push(0.75, oct, 0.2, 0.55);
@@ -643,6 +652,25 @@ function buildAudio() {
   applyMix();
 }
 
+/* Trap 808 贝斯：kick_808 采样按音高变速 + 长衰减 + 句尾滑音 */
+function play808(midi, t, dur, vel, slideTo) {
+  const buf = DRUM_SAMP.buffers.kick_808;
+  if (!buf || !DRUM_SAMP.bus) return false;
+  const raw = Tone.getContext().rawContext;
+  const src = raw.createBufferSource();
+  src.buffer = buf;
+  src.playbackRate.setValueAtTime(Math.pow(2, (midi - 36) / 12), t);
+  if (slideTo) src.playbackRate.exponentialRampToValueAtTime(Math.pow(2, (slideTo - 36) / 12), t + dur);
+  const g = raw.createGain();
+  const v = vel * 1.25;
+  g.gain.setValueAtTime(v, t);
+  g.gain.setValueAtTime(v, t + dur * 0.55);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  src.connect(g); g.connect(DRUM_SAMP.bus);
+  src.start(t); src.stop(t + dur + 0.1);
+  return true;
+}
+
 /* 808 底鼓：正弦波 150Hz→40Hz 快速下滑（经典 808 低音炮） */
 function trig808kick(t, vel) {
   const o = AE.kick808.oscillator;
@@ -666,6 +694,7 @@ const DRUM_KITS = {
   afro:  { kick:'kick_room', snare:'clave', hat:'shekere', ohat:'shekere', ride:'shekere', crash:null, congaH:'conga_h', congaL:'conga_l', ghost:null },
   rnb:   { kick:'kick_808', snare:'snap', hat:'hat_808', ohat:'hat_808', ride:'hat_808', crash:'crash', congaH:null, congaL:null, ghost:'snap' },
   s808:  { kick:'kick_808', snare:null, hat:'hat_808', ohat:'hat_808', ride:'hat_808', crash:'crash', congaH:null, congaL:null, ghost:null },
+  hiphop:{ kick:'kick_808', snare:'clap', hat:'hat_808', ohat:'hat_808', ride:null, crash:'crash', congaH:null, congaL:null, ghost:null },
 };
 function loadDrumSamples() {
   if (DRUM_SAMP.started || !AE.ready) return;
@@ -722,7 +751,8 @@ const TIMING_OFF = { rnb: 0.016, afro: -0.008, jazz: 0.004, rock: 0, bossa: 0.00
  * 采样音源（真实乐器录音，SoundFont / FluidR3_GM，CC 协议免费库）
  * 按需加载：核心音色立即加载，其余后台预载
  * ============================================================ */
-const SAMP = { cache: {}, pending: {}, bus: null, padBus: null };
+const SAMP = { cache: {}, pending: {}, bus: null, padBus: null,
+  roleBank: (typeof localStorage !== 'undefined' && JSON.parse(localStorage.getItem('motif_rolebank') || '{}')) || {} };
 const SAMP_GUITAR = {
   clean: 'electric_guitar_clean', crunch: 'overdriven_guitar', dist: 'distortion_guitar',
   jazz: 'electric_guitar_jazz', muted: 'electric_guitar_muted', harmonics: 'guitar_harmonics',
@@ -771,8 +801,107 @@ function ensureSample(name) {
   }
   return SAMP.pending[key];
 }
-function sampOf(name) {
-  return SAMP.cache[state.sfBase + ':' + name] || null;
+function sampOf(name, role) {
+  const bank = (role && SAMP.roleBank[role]) || state.sfBase;
+  return SAMP.cache[bank + ':' + name] || SAMP.cache[state.sfBase + ':' + name] || null;
+}
+
+/* ================= 音色描述子自动对齐 =================
+ * 学术方案（QMUL 音色描述子 / TinySOL 检索）：
+ * 频谱质心≈明亮度、尾部能量比≈延音；按风格目标表自动挑选 MusyngKite/FluidR3 */
+function _fft(re, im) {
+  const N = re.length;
+  for (let i = 1, j = 0; i < N; i++) {
+    let bit = N >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; }
+  }
+  for (let len = 2; len <= N; len <<= 1) {
+    const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < N; i += len) {
+      let cwr = 1, cwi = 0;
+      for (let j = 0; j < len / 2; j++) {
+        const ur = re[i + j], ui = im[i + j];
+        const vr = re[i + j + len / 2] * cwr - im[i + j + len / 2] * cwi;
+        const vi = re[i + j + len / 2] * cwi + im[i + j + len / 2] * cwr;
+        re[i + j] = ur + vr; im[i + j] = ui + vi;
+        re[i + j + len / 2] = ur - vr; im[i + j + len / 2] = ui - vi;
+        const nwr = cwr * wr - cwi * wi;
+        cwi = cwr * wi + cwi * wr; cwr = nwr;
+      }
+    }
+  }
+}
+function timbreDescriptors(buf) {
+  const d = buf.getChannelData(0), sr = buf.sampleRate, N = 2048;
+  const re = new Float32Array(N), im = new Float32Array(N);
+  const off = Math.min(Math.floor(d.length * 0.1), Math.max(0, d.length - N));
+  for (let i = 0; i < N; i++) re[i] = d[off + i] || 0;
+  _fft(re, im);
+  let num = 0, den = 0;
+  for (let k = 1; k < N / 2; k++) {
+    const mag = Math.hypot(re[k], im[k]);
+    num += mag * k * sr / N; den += mag;
+  }
+  const bright = clamp((den ? num / den : 0) / 4500, 0, 1);
+  let eAll = 0, eTail = 0;
+  for (let i = 0; i < d.length; i++) { const v = d[i] * d[i]; eAll += v; if (i > d.length * 0.7) eTail += v; }
+  return { bright, sustain: clamp((eAll ? eTail / eAll : 0) * 2.2, 0, 1) };
+}
+const STYLE_TIMBRE = {
+  rnb:   { guitar:{b:0.30,s:0.80}, keys:{b:0.30,s:0.75}, bass:{b:0.25,s:0.90}, pad:{b:0.25,s:0.95} },
+  jazz:  { guitar:{b:0.35,s:0.60}, keys:{b:0.30,s:0.65}, bass:{b:0.30,s:0.60}, pad:{b:0.30,s:0.80} },
+  rock:  { guitar:{b:0.62,s:0.45}, keys:{b:0.45,s:0.40}, bass:{b:0.50,s:0.40}, pad:{b:0.40,s:0.50} },
+  bossa: { guitar:{b:0.45,s:0.55}, keys:{b:0.35,s:0.50}, bass:{b:0.35,s:0.55}, pad:{b:0.30,s:0.70} },
+  afro:  { guitar:{b:0.50,s:0.50}, keys:{b:0.45,s:0.45}, bass:{b:0.40,s:0.60}, pad:{b:0.35,s:0.60} },
+  hiphop:{ guitar:{b:0.35,s:0.75}, keys:{b:0.25,s:0.85}, bass:{b:0.20,s:0.95}, pad:{b:0.20,s:0.95} },
+};
+function ensureSampleBank(name, base) {
+  const key = base + ':' + name;
+  if (SAMP.cache[key]) return Promise.resolve(SAMP.cache[key]);
+  if (!SAMP.pending[key]) {
+    if (!AE.ready || typeof Soundfont === 'undefined') return Promise.resolve(null);
+    ensureBuses();
+    SAMP.pending[key] = Soundfont.instrument(Tone.getContext(), base + '/' + name + '.js', {
+      destination: name.startsWith('pad_') || name === 'synth_strings_1' ? SAMP.padBus : SAMP.bus,
+    }).then(inst => { SAMP.cache[key] = inst; return inst; }).catch(() => null);
+  }
+  return SAMP.pending[key];
+}
+async function autoAlignTimbres(styleKey) {
+  const targets = STYLE_TIMBRE[styleKey];
+  if (!targets || !AE.ready) return;
+  const roles = {
+    guitar: SAMP_GUITAR[state.layers.guitar.patch],
+    keys: SAMP_KEYS,
+    bass: SAMP_BASS,
+    pad: SAMP_PAD[state.layers.synth.patch],
+  };
+  const picks = [];
+  for (const [role, name] of Object.entries(roles)) {
+    if (!name || !targets[role]) continue;
+    const banks = ['soundfont2', 'soundfont'];
+    const descs = [];
+    for (const base of banks) {
+      const inst = await ensureSampleBank(name, base);
+      if (!inst || !inst.buffers) { descs.push(null); continue; }
+      const keyName = inst.buffers['E3'] ? 'E3' : Object.keys(inst.buffers)[Math.floor(Object.keys(inst.buffers).length / 2)];
+      descs.push(timbreDescriptors(inst.buffers[keyName]));
+    }
+    const tg = targets[role];
+    let best = state.sfBase, bd = 1e9;
+    banks.forEach((base, i) => {
+      if (!descs[i]) return;
+      const d = Math.abs(descs[i].bright - tg.b) + Math.abs(descs[i].sustain - tg.s);
+      if (d < bd) { bd = d; best = base; }
+    });
+    SAMP.roleBank[role] = best;
+    picks.push(role + '→' + (best === 'soundfont2' ? 'MK' : 'F3'));
+  }
+  try { localStorage.setItem('motif_rolebank', JSON.stringify(SAMP.roleBank)); } catch (e) {}
+  sampStatus('音色对齐：' + picks.join(' · '));
+  reScheduleIfPlaying();
 }
 
 function loadInstruments() {
@@ -865,7 +994,7 @@ function scheduleAll() {
       const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.95;
       const toff = TIMING_OFF[state.styles.length === 1 ? state.styles[0] : styleOfBar(e.beat)] || 0;
       Tone.Transport.schedule(tt => {
-        const inst = instName && sampOf(instName);
+        const inst = instName && sampOf(instName, 'guitar');
         if (inst) inst.play(e.midi, tt + toff, { duration: dur, gain: e.vel * 1.1 });
         else AE.guitar.triggerAttackRelease(midiName(e.midi), dur, tt + toff, e.vel);
       }, t);
@@ -873,14 +1002,14 @@ function scheduleAll() {
   }
   /* 电钢琴（Rhodes 采样） */
   if (state.layers.keys.on) {
-    const inst = sampOf(SAMP_KEYS);
+    const inst = sampOf(SAMP_KEYS, 'keys');
     for (const e of keysEvents) {
       const t = t16(Math.round(e.beat * 4));
       const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.95;
       const names = e.notes.map(midiName);
       Tone.Transport.schedule(tt => {
         const gi = e.inst && e.inst.startsWith('guitar:') ? e.inst.slice(7) : null;
-        const gInst = gi && sampOf(SAMP_GUITAR[gi]);
+        const gInst = gi && sampOf(SAMP_GUITAR[gi], 'guitar');
         if (gInst) for (const n of e.notes) gInst.play(n, tt, { duration: dur, gain: e.vel * 1.1 });
         else if (inst) for (const n of e.notes) inst.play(n, tt, { duration: dur, gain: e.vel });
         else AE.keys.triggerAttackRelease(names, dur, tt, e.vel);
@@ -890,7 +1019,7 @@ function scheduleAll() {
   /* 合成器 Pad（采样优先，兜底合成链） */
   if (state.layers.synth.on) {
     const padName = SAMP_PAD[state.layers.synth.patch];
-    const inst = (padName && sampOf(padName)) || null;
+    const inst = (padName && sampOf(padName, 'pad')) || null;
     for (const e of synthEvents) {
       const t = t16(Math.round(e.beat * 4));
       const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.98;
@@ -903,11 +1032,17 @@ function scheduleAll() {
   }
   /* 贝斯（指弹电贝斯采样） */
   if (state.layers.bass.on) {
-    const inst = sampOf(SAMP_BASS);
+    const inst = sampOf(SAMP_BASS, 'bass');
     for (const e of bassEvents) {
       const t = t16(Math.round(e.beat * 4));
       const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.95;
       Tone.Transport.schedule(tt => {
+        if (e.b808) {
+          if (!play808(e.midi, tt, dur * 1.6, e.vel, e.slideTo)) {
+            AE.bass.triggerAttackRelease(midiName(e.midi), dur, tt, e.vel);
+          }
+          return;
+        }
         if (inst) inst.play(e.midi, tt, { duration: dur, gain: e.vel * 1.3 });
         else AE.bass.triggerAttackRelease(midiName(e.midi), dur, tt, e.vel);
       }, t);
@@ -1019,6 +1154,35 @@ function reScheduleDebounced() {
   _rsTimer = setTimeout(reScheduleIfPlaying, 160);
 }
 
+async function auditionLayer(layer) {
+  if (!(await ensureAudio())) return;
+  const t = Tone.now() + 0.05;
+  const seq = [60, 64, 67];
+  if (layer === 'guitar') {
+    const name = SAMP_GUITAR[state.layers.guitar.patch];
+    const inst = name && sampOf(name, 'guitar');
+    if (inst) { for (let i = 0; i < 3; i++) inst.play(seq[i], t + i * 0.22, { duration: 0.2, gain: 0.9 }); }
+    else for (let i = 0; i < 3; i++) AE.guitar.triggerAttackRelease(midiName(seq[i]), 0.2, t + i * 0.22, 0.8);
+  } else if (layer === 'keys') {
+    const inst = sampOf(SAMP_KEYS, 'keys');
+    if (inst) inst.play([52, 55, 59, 62], t, { duration: 1.2, gain: 0.8 });
+    else AE.keys.triggerAttackRelease(['E3','G3','B3','D4'], 1.2, t, 0.7);
+  } else if (layer === 'bass') {
+    const inst = sampOf(SAMP_BASS, 'bass');
+    if (inst) { for (let i = 0; i < 3; i++) inst.play(40 + i * 5, t + i * 0.25, { duration: 0.25, gain: 1.1 }); }
+    else for (let i = 0; i < 3; i++) AE.bass.triggerAttackRelease(midiName(40 + i * 5), 0.25, t + i * 0.25, 0.9);
+  } else if (layer === 'drums') {
+    const kit = DRUM_KITS[state.layers.drums.patch === '808' ? 's808' : (state.styles[0] in DRUM_KITS ? state.styles[0] : 'rnb')];
+    playDrumSample(kit.kick, t, 0.9); playDrumSample(kit.snare || 'snare_room', t + 0.25, 0.8);
+    playDrumSample(kit.hat || 'hat_closed', t + 0.5, 0.6);
+  } else if (layer === 'synth') {
+    const name = SAMP_PAD[state.layers.synth.patch];
+    const inst = name && sampOf(name, 'pad');
+    if (inst) inst.play([48, 52, 55, 59], t, { duration: 1.6, gain: 0.9 });
+    else AE.synthPad.triggerAttackRelease(['C3','E3','G3','B3'], 1.6, t, 0.5);
+  }
+}
+
 /* ---------- 试听单和弦 ---------- */
 async function auditionChord(i) {
   if (!state.audioReady) { buildAudio(); state.audioReady = true; loadInstruments(); }
@@ -1123,6 +1287,7 @@ const STYLE_FX = {
   rock:  { cw: 0.08, rw: 0.1 },
   bossa: { cw: 0.3,  rw: 0.28 },
   afro:  { cw: 0.12, rw: 0.18 },
+  hiphop:{ cw: 0.2,  rw: 0.35 },
 };
 function applyStyleFx(styleKey) {
   const fx = STYLE_FX[styleKey];
@@ -1138,6 +1303,7 @@ const STYLE_SETUP = {
   rock:  { guitar: 'dist',   keys: 'auto',  drums: 'drive', swing: 0,  bpm: 122, synth: 'sweep' },
   bossa: { guitar: 'nylon',  keys: 'auto',  drums: 'auto',  swing: 10, bpm: 138, synth: 'warm' },
   afro:  { guitar: 'clean',  keys: 'auto',  drums: 'drive', swing: 12, bpm: 104, synth: 'halo' },
+  hiphop:{ guitar: 'clean',  keys: 'pad',   drums: 'auto',  swing: 0,  bpm: 92,  synth: 'halo' },
 };
 
 function setStyles(list) {
@@ -1168,7 +1334,8 @@ function applyStyleSetup(styleKey) {
   applyGuitarPatch();
   applyStyleFx(styleKey);
   const gn = SAMP_GUITAR[cfg.guitar];
-  if (gn) ensureSample(gn);
+  if (gn) ensureSample(gn).then(() => autoAlignTimbres(styleKey));
+  else autoAlignTimbres(styleKey);
 }
 
 function populateStatic() {
@@ -1590,6 +1757,13 @@ function bindEvents() {
       }
     };
     row.querySelector('.vol').oninput = e => { state.layers[layer].vol = e.target.value / 100; applyMix(); };
+  });
+
+  /* 逐层试听：点声部名播 3 个示例音 */
+  document.querySelectorAll('#layers .lname').forEach(el => {
+    el.style.cursor = 'pointer';
+    el.title = '点击试听该声部音色';
+    el.onclick = () => auditionLayer(el.closest('.layer').dataset.layer);
   });
 
   /* 进行 */
