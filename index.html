@@ -67,6 +67,14 @@
           <button class="chip" data-style="afro">Afro</button>
         </div>
         <p class="hint" id="fusion-hint">已选：RnB · 融合时节奏型 / 音阶 / 律动按小节交替混合</p>
+        <div class="sf-row">
+          <label>音色库</label>
+          <select id="ctl-sfbase">
+            <option value="soundfont2">MusyngKite · 高保真</option>
+            <option value="soundfont">FluidR3 · 经典</option>
+          </select>
+          <span class="sf-note">随时对比切换，偏好自动保存</span>
+        </div>
         <div class="keymap" id="scale-display"></div>
       </section>
 
@@ -117,9 +125,17 @@
             <label class="switch"><input type="checkbox" checked><span></span></label>
             <span class="lname">🎹 电钢琴</span>
             <select class="patch">
-              <option value="comp">Comping 点缀</option>
-              <option value="pad">和声长音 Pad</option>
-              <option value="bossa">Bossa 节奏型</option>
+              <optgroup label="智能">
+                <option value="auto">跟随风格（自动分配乐器）</option>
+              </optgroup>
+              <optgroup label="Afrobeat">
+                <option value="afro">Afro 交错 Stabs</option>
+              </optgroup>
+              <optgroup label="通用">
+                <option value="comp">Comping 点缀</option>
+                <option value="pad">和声长音 Pad</option>
+                <option value="bossa">Bossa 节奏型</option>
+              </optgroup>
             </select>
             <input type="range" class="vol" min="0" max="100" value="55">
           </div>
@@ -186,6 +202,7 @@
       <div class="roll-tools">
         <span class="roll-hint">编辑卷帘：点空白添加音符 · 拖动移动 · 拖右缘改时值 · 双击删除 · 手动改动不会被覆盖</span>
         <button id="btn-del-note" class="btn small">✕ 删除选中</button>
+        <button id="btn-rematch" class="btn small" hidden>⚡ 让旋律适配新和弦</button>
         <button id="btn-reset-melody" class="btn small">↺ 重新生成旋律</button>
       </div>
       <canvas id="roll" height="230"></canvas>
@@ -204,6 +221,7 @@
   </main>
 </div>
 <script src="theory.js"></script>
+<script src="cells.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

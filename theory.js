@@ -5,8 +5,11 @@
 'use strict';
 
 const NOTES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const FLAT_NOTES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'];
 const pcName = pc => NOTES[((pc % 12) + 12) % 12];
+const pcNameFlat = pc => FLAT_NOTES[((pc % 12) + 12) % 12];
 const midiName = m => pcName(m) + (Math.floor(m / 12) - 1);
+const midiNameFlat = m => pcNameFlat(m) + (Math.floor(m / 12) - 1);
 
 /* ---------- 调式：音程结构 + 每级默认和弦 ---------- */
 const MODES = {
@@ -109,6 +112,7 @@ function scalePCsForChord(rootPC, qKey, keyRootPC, mode) {
 const STYLES = {
   rnb: {
     name: 'RnB', scaleBias: 'pentMinor',
+    mel: { stepP: 0.62, density: 0.38, durBias: 0.65, rep: 0.5, synco: 0.8, blue: false, regLo: 62, regHi: 86, maxLeap: 7 },
     rhythm: [
       [[0, 4], [6, 2], [8, 4], [14, 2]],
       [[0, 2], [3, 2], [8, 4], [11, 2], [14, 2]],
@@ -120,6 +124,7 @@ const STYLES = {
   },
   jazz: {
     name: 'Jazz', scaleBias: 'major',
+    mel: { stepP: 0.7, density: 0.35, durBias: 0.45, rep: 0.35, synco: 0.6, blue: true, regLo: 62, regHi: 88, maxLeap: 8 },
     rhythm: [
       [[0, 4], [6, 2], [8, 4], [12, 2]],
       [[0, 2], [2, 2], [4, 4], [10, 2], [12, 4]],
@@ -131,6 +136,7 @@ const STYLES = {
   },
   rock: {
     name: 'Rock', scaleBias: 'blues',
+    mel: { stepP: 0.38, density: 0.5, durBias: 0.35, rep: 0.8, synco: 0.25, blue: true, regLo: 58, regHi: 82, maxLeap: 9 },
     rhythm: [
       [[0, 2], [2, 2], [4, 2], [6, 2], [8, 2], [10, 2], [12, 2], [14, 2]],
       [[0, 4], [4, 4], [8, 4], [12, 4]],
@@ -142,6 +148,7 @@ const STYLES = {
   },
   bossa: {
     name: 'Bossa Nova', scaleBias: 'major',
+    mel: { stepP: 0.82, density: 0.5, durBias: 0.5, rep: 0.4, synco: 0.85, blue: false, regLo: 62, regHi: 86, maxLeap: 6 },
     rhythm: [
       [[0, 2], [3, 2], [6, 2], [8, 2], [11, 2], [14, 2]],
       [[0, 2], [6, 2], [8, 2], [11, 2], [14, 2]],
@@ -153,6 +160,7 @@ const STYLES = {
   },
   afro: {
     name: 'Afro', scaleBias: 'pentMinor',
+    mel: { stepP: 0.5, density: 0.65, durBias: 0.25, rep: 0.8, synco: 0.6, blue: false, regLo: 60, regHi: 84, maxLeap: 7 },
     rhythm: [
       [[0, 1], [3, 1], [6, 2], [8, 1], [11, 1], [14, 2]],
       [[0, 2], [3, 1], [6, 1], [8, 2], [11, 1], [14, 1]],
@@ -254,6 +262,14 @@ const PRESETS = [
     desc: 'Ⅰ–Ⅴ–ⅵ–Ⅳ：全球最知名走向，RnB 化可加 9/13 延伸音。',
     slots: [{ d: 1, q: 'add9' }, { d: 5, q: '9' }, { d: 6, q: 'min9' }, { d: 4, q: 'add9' },
             { d: 1, q: 'add9' }, { d: 5, q: '9' }, { d: 6, q: 'min9' }, { d: 4, q: 'maj9' }] },
+  { id: 'rnb-mixture', name: 'RnB 调式混合 1-5-4-♭6（Daniel Caesar 式）', styles: ['rnb'],
+    desc: 'Ⅰmaj7–ⅴm7–Ⅳmaj7–♭Ⅵmaj7：从同主音小调借和弦，《Best Part》式朦胧色彩。Daniel Caesar / D’Angelo 招牌语法。',
+    slots: [{ d: 1, q: 'maj7' }, { d: 5, q: 'min7' }, { d: 4, q: 'maj7' }, { d: 6, acc: -1, q: 'maj7' },
+            { d: 1, q: 'maj9' }, { d: 5, q: 'min9' }, { d: 4, q: 'maj9' }, { d: 6, acc: -1, q: 'maj7' }] },
+  { id: 'rnb-chroma', name: 'RnB 半音滑接（陶喆式）', styles: ['rnb'],
+    desc: 'Ⅰmaj9–♯Ⅰ°7–ⅱm9–Ⅴ13：高半音减七经过和弦，陶喆《十点半的飞机》式滑接语法，方大同《Love Song》同款离调感。',
+    slots: [{ d: 1, q: 'maj9' }, { d: 1, acc: 1, q: 'dim7' }, { d: 2, q: 'min9' }, { d: 5, q: '13' },
+            { d: 1, q: 'maj9' }, { d: 1, acc: 1, q: 'dim7' }, { d: 2, q: 'min9' }, { d: 5, q: '9' }] },
 ];
 
 /* ---------- 级数显示 ---------- */
