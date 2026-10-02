@@ -364,13 +364,13 @@ function chooseVoicing(pcs, prevNotes) {
       if (notes[notes.length - 1] <= 81) candidates.push(notes);
     }
   }
-  if (!prevNotes) return candidates[Math.floor(candidates.length / 2)] || candidates[0];
+  if (!prevNotes) { const c = candidates[Math.floor(candidates.length / 2)] || candidates[0]; return c.slice(0, 4); }
   let best = candidates[0], bd = 1e9;
   for (const c of candidates) {
     const d = c.reduce((s, n, i) => s + Math.abs(n - (prevNotes[i] !== undefined ? prevNotes[i] : n)), 0);
     if (d < bd) { bd = d; best = c; }
   }
-  return best;
+  return best.slice(0, 4);
 }
 
 function genKeys() {
@@ -516,9 +516,8 @@ function buildAudio() {
      双锯齿声源 → 电子管波形塑形前级 → 三段 EQ → 箱体 IR 卷积 → 压缩 → 反馈延迟 --- */
   AE.guitarVol = new Tone.Volume(-3).connect(AE.master);
   AE.guitarDelay = new Tone.FeedbackDelay('8n.', 0.28).connect(AE.guitarVol);
-  AE.guitarCab = new Tone.Convolver().connect(AE.guitarDelay);
-  AE.guitarCab.buffer = makeCabIR();
-  AE.guitarComp = new Tone.Compressor(-16, 3).connect(AE.guitarCab);
+  /* 吉他 cab 卷积仅合成回退用：采样为主的时代先旁路省一个卷积器（手机 CPU） */
+  AE.guitarComp = new Tone.Compressor(-16, 3).connect(AE.guitarDelay);
   AE.guitarEq = new Tone.EQ3({ low: -1, mid: 0.5, high: 2.5, lowFrequency: 220, highFrequency: 2400 }).connect(AE.guitarComp);
   AE.guitarPre = new Tone.WaveShaper(driveCurve(6), 2048).connect(AE.guitarEq);
   AE.guitar = new Tone.Synth({
@@ -984,9 +983,23 @@ async function togglePlay() {
   } else {
     restoreSampleBuses();
     applyMix();
-    scheduleAll();
-    Tone.Transport.start();
-    state.playing = true;
+    (async () => {
+      /* 播放闸：首次等待核心采样解码完成，杜绝边播边解码的卡顿 */
+      const need = [SAMP_GUITAR[state.layers.guitar.patch], SAMP_KEYS, SAMP_BASS, SAMP_PAD[state.layers.synth.patch]].filter(Boolean);
+      const t0 = Date.now();
+      while (need.some(n => !SAMP.cache[state.sfBase + ':' + n]) && Date.now() - t0 < 9000) {
+        need.forEach(n => ensureSample(n));
+        sampStatus('正在准备音色…');
+        await new Promise(r => setTimeout(r, 250));
+        if (state.playing) return; /* 等待中被再次点击则取消 */
+      }
+      sampStatus('');
+      restoreSampleBuses();
+      scheduleAll();
+      Tone.Transport.start();
+      state.playing = true;
+      updatePlayBtn();
+    })();
   }
   updatePlayBtn();
 }
@@ -999,6 +1012,11 @@ function updatePlayBtn() {
 /* 播放中改动 → 立即重排 */
 function reScheduleIfPlaying() {
   if (state.playing && state.audioReady) scheduleAll();
+}
+let _rsTimer = null;
+function reScheduleDebounced() {
+  clearTimeout(_rsTimer);
+  _rsTimer = setTimeout(reScheduleIfPlaying, 160);
 }
 
 /* ---------- 试听单和弦 ---------- */
@@ -1523,12 +1541,12 @@ function bindEvents() {
   $('#ctl-bpm').oninput = e => {
     state.bpm = +e.target.value;
     $('#bpm-val').textContent = state.bpm;
-    reScheduleIfPlaying();
+    reScheduleDebounced();
   };
   $('#ctl-swing').oninput = e => {
     state.swing = +e.target.value / 100;
     $('#swing-val').textContent = e.target.value;
-    reScheduleIfPlaying();
+    reScheduleDebounced();
   };
   $('#ctl-key').onchange = e => { state.keyRoot = +e.target.value; regenerate('key'); };
   $('#ctl-mode').onchange = e => { state.mode = e.target.value; regenerate('mode'); };
@@ -1563,8 +1581,13 @@ function bindEvents() {
       state.layers[layer].patch = e.target.value;
       applyGuitarPatch();
       const pn = SAMP_GUITAR[e.target.value] || SAMP_PAD[e.target.value];
-      if (pn) ensureSample(pn).then(() => reScheduleIfPlaying());
-      regenerate('patch');
+      if (pn && !sampOf(pn)) {
+        sampStatus('加载音色中…');
+        ensureSample(pn).then(() => { sampStatus(''); regenerate('patch'); });
+        if (!state.playing) regenerate('patch'); /* 未播放先刷新界面，声音用回退 */
+      } else {
+        regenerate('patch');
+      }
     };
     row.querySelector('.vol').oninput = e => { state.layers[layer].vol = e.target.value / 100; applyMix(); };
   });
