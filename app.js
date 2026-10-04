@@ -685,10 +685,14 @@ function buildAudio() {
 /* ================= 真实电吉他采样引擎（Freesound CC0 单音录制） =================
  * 解决 SoundFont 吉他"像合成器"的问题：真实琴体采样 + 就近取音 + 微随机 + 滑音 */
 const GUITAR_SAMP = { buffers: {}, started: false };
-const GUITAR_NOTE_FILES = ['E2','G2','A2','B2','C#3','D3','E3','F#3','G3','A3','B3','C#4','D4','E4','F#4','G4','A4','B4','D5','E5'];
-const GUITAR_PATCH_MAP = { clean:'clean', crunch:'crunch', dist:'dist', jazz:'clean', muted:'clean', harmonics:'clean', steel:'clean', nylon:'clean', delay:'clean' };
+/* tonejs-instruments 真实采样（电吉他=Karoryfer, 木吉他=Iowa），音名 s=升号 */
+const GUITAR_SETS = {
+  electric: ['E2','Fs2','Cs2','A2','C3','Ds3','Fs3','A3','C4','Ds4','Fs4','A4','C5','Ds5','Fs5','A5','C6'],
+  acoustic: ['A2','As2','B2','C3','Cs3','D3','Ds3','E3','F3','Fs3','G3','Gs3','A3','As3','B3','C4','A4'],
+};
+const GUITAR_PATCH_MAP = { clean:'electric', crunch:'electric', dist:'electric', jazz:'electric', muted:'electric', harmonics:'electric', delay:'electric', steel:'acoustic', nylon:'acoustic' };
 function noteNameToMidi(name) {
-  const m = name.match(/^([A-G])(#?)(-?\d)$/);
+  const m = name.match(/^([A-G])(s?)(-?\d)$/);
   if (!m) return 40;
   const base = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }[m[1]];
   return (parseInt(m[3]) + 1) * 12 + base + (m[2] ? 1 : 0);
@@ -697,20 +701,20 @@ function loadGuitarSamples() {
   if (GUITAR_SAMP.started) return;
   GUITAR_SAMP.started = true;
   const raw = Tone.getContext().rawContext;
-  for (const timbre of ['clean', 'crunch', 'dist']) {
-    GUITAR_SAMP.buffers[timbre] = {};
-    for (const note of GUITAR_NOTE_FILES) {
-      fetch('guitar/' + timbre + '/' + note + '.mp3')
+  for (const set of ['electric', 'acoustic']) {
+    GUITAR_SAMP.buffers[set] = {};
+    for (const note of GUITAR_SETS[set]) {
+      fetch('guitar2/' + set + '/' + note + '.mp3')
         .then(r => r.ok ? r.arrayBuffer() : Promise.reject())
         .then(ab => raw.decodeAudioData(ab))
-        .then(buf => { GUITAR_SAMP.buffers[timbre][noteNameToMidi(note)] = buf; })
+        .then(buf => { GUITAR_SAMP.buffers[set][noteNameToMidi(note)] = buf; })
         .catch(() => {});
     }
   }
 }
 function playGuitarReal(patch, midi, t, dur, vel) {
-  const timbre = GUITAR_PATCH_MAP[patch] || 'clean';
-  const bank = GUITAR_SAMP.buffers[timbre] || {};
+  const set = GUITAR_PATCH_MAP[patch] || 'electric';
+  const bank = GUITAR_SAMP.buffers[set] || {};
   const keys = Object.keys(bank).map(Number);
   if (!keys.length) return false;
   let best = keys[0], bd = 99;
@@ -719,14 +723,14 @@ function playGuitarReal(patch, midi, t, dur, vel) {
   const raw = Tone.getContext().rawContext;
   const src = raw.createBufferSource();
   src.buffer = bank[best];
-  src.playbackRate.value = Math.pow(2, (midi - best) / 12) * (1 + (Math.random() * 0.012 - 0.006));
+  src.playbackRate.value = Math.pow(2, (midi - best) / 12) * (1 + (Math.random() * 0.01 - 0.005));
   const g = raw.createGain();
   g.gain.setValueAtTime(0.0001, t);
   g.gain.exponentialRampToValueAtTime(Math.max(vel, 0.05), t + 0.012);
   g.gain.setValueAtTime(Math.max(vel, 0.05), t + Math.max(0.05, dur - 0.1));
-  g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.28);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.3);
   src.connect(g); g.connect(SAMP.busByRole.guitar);
-  src.start(t); src.stop(t + dur + 0.35);
+  src.start(t); src.stop(t + dur + 0.4);
   return true;
 }
 
