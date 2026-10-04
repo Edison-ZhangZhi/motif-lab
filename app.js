@@ -682,6 +682,54 @@ function buildAudio() {
   applyMix();
 }
 
+/* ================= 真实电吉他采样引擎（Freesound CC0 单音录制） =================
+ * 解决 SoundFont 吉他"像合成器"的问题：真实琴体采样 + 就近取音 + 微随机 + 滑音 */
+const GUITAR_SAMP = { buffers: {}, started: false };
+const GUITAR_NOTE_FILES = ['E2','G2','A2','B2','C#3','D3','E3','F#3','G3','A3','B3','C#4','D4','E4','F#4','G4','A4','B4','D5','E5'];
+const GUITAR_PATCH_MAP = { clean:'clean', crunch:'crunch', dist:'dist', jazz:'clean', muted:'clean', harmonics:'clean', steel:'clean', nylon:'clean', delay:'clean' };
+function noteNameToMidi(name) {
+  const m = name.match(/^([A-G])(#?)(-?\d)$/);
+  if (!m) return 40;
+  const base = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }[m[1]];
+  return (parseInt(m[3]) + 1) * 12 + base + (m[2] ? 1 : 0);
+}
+function loadGuitarSamples() {
+  if (GUITAR_SAMP.started) return;
+  GUITAR_SAMP.started = true;
+  const raw = Tone.getContext().rawContext;
+  for (const timbre of ['clean', 'crunch', 'dist']) {
+    GUITAR_SAMP.buffers[timbre] = {};
+    for (const note of GUITAR_NOTE_FILES) {
+      fetch('guitar/' + timbre + '/' + note + '.mp3')
+        .then(r => r.ok ? r.arrayBuffer() : Promise.reject())
+        .then(ab => raw.decodeAudioData(ab))
+        .then(buf => { GUITAR_SAMP.buffers[timbre][noteNameToMidi(note)] = buf; })
+        .catch(() => {});
+    }
+  }
+}
+function playGuitarReal(patch, midi, t, dur, vel) {
+  const timbre = GUITAR_PATCH_MAP[patch] || 'clean';
+  const bank = GUITAR_SAMP.buffers[timbre] || {};
+  const keys = Object.keys(bank).map(Number);
+  if (!keys.length) return false;
+  let best = keys[0], bd = 99;
+  for (const k of keys) { const d = Math.abs(k - midi); if (d < bd) { bd = d; best = k; } }
+  if (bd > 7) return false; /* 缺音区交还 SoundFont */
+  const raw = Tone.getContext().rawContext;
+  const src = raw.createBufferSource();
+  src.buffer = bank[best];
+  src.playbackRate.value = Math.pow(2, (midi - best) / 12) * (1 + (Math.random() * 0.012 - 0.006));
+  const g = raw.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(Math.max(vel, 0.05), t + 0.012);
+  g.gain.setValueAtTime(Math.max(vel, 0.05), t + Math.max(0.05, dur - 0.1));
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.28);
+  src.connect(g); g.connect(SAMP.busByRole.guitar);
+  src.start(t); src.stop(t + dur + 0.35);
+  return true;
+}
+
 /* Trap 808 贝斯：kick_808 采样按音高变速 + 长衰减 + 句尾滑音 */
 function play808(midi, t, dur, vel, slideTo) {
   const buf = DRUM_SAMP.buffers.kick_808;
@@ -1047,6 +1095,7 @@ function scheduleAll() {
       const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.95;
       const toff = TIMING_OFF[state.styles.length === 1 ? state.styles[0] : styleOfBar(e.beat)] || 0;
       Tone.Transport.schedule(tt => {
+        if (playGuitarReal(state.layers.guitar.patch, e.midi, tt + toff, dur, e.vel * 1.05)) return;
         const inst = instName && sampOf(instName, 'guitar');
         if (inst) inst.play(e.midi, tt + toff, { duration: dur, gain: e.vel * 1.1 });
         else AE.guitar.triggerAttackRelease(midiName(e.midi), dur, tt + toff, e.vel);
@@ -1145,7 +1194,7 @@ function scheduleAll() {
 
 async function ensureAudio() {
   if (typeof Tone === 'undefined') return false;
-  if (!state.audioReady) { buildAudio(); state.audioReady = true; loadInstruments(); loadDrumSamples(); }
+  if (!state.audioReady) { buildAudio(); state.audioReady = true; loadInstruments(); loadDrumSamples(); loadGuitarSamples(); }
   try {
     await Tone.start();
     if (Tone.context.state !== 'running') await Tone.context.resume();
@@ -1214,9 +1263,14 @@ async function auditionLayer(layer) {
   const seq = [60, 64, 67];
   if (layer === 'guitar') {
     const name = SAMP_GUITAR[state.layers.guitar.patch];
-    const inst = name && sampOf(name, 'guitar');
-    if (inst) { for (let i = 0; i < 3; i++) inst.play(seq[i], t + i * 0.22, { duration: 0.2, gain: 0.9 }); }
-    else for (let i = 0; i < 3; i++) AE.guitar.triggerAttackRelease(midiName(seq[i]), 0.2, t + i * 0.22, 0.8);
+    if (!GUITAR_SAMP.buffers[GUITAR_PATCH_MAP[state.layers.guitar.patch]]) loadGuitarSamples();
+    for (let i = 0; i < 3; i++) {
+      if (!playGuitarReal(state.layers.guitar.patch, seq[i], t + i * 0.22, 0.2, 0.9)) {
+        const inst = name && sampOf(name, 'guitar');
+        if (inst) inst.play(seq[i], t + i * 0.22, { duration: 0.2, gain: 0.9 });
+        else AE.guitar.triggerAttackRelease(midiName(seq[i]), 0.2, t + i * 0.22, 0.8);
+      }
+    }
   } else if (layer === 'keys') {
     const inst = sampOf(SAMP_KEYS, 'keys');
     if (inst) inst.play([52, 55, 59, 62], t, { duration: 1.2, gain: 0.8 });
