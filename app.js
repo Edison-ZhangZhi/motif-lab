@@ -498,14 +498,28 @@ function genSynthPad() {
   const bars = totalBars();
   const ev = [];
   let prevVoicing = null;
+  const patch = state.layers.synth.patch;
   for (let bar = 0; bar < bars; bar++) {
     const chord = chordAtBar(bar);
     const keyForVoicing = state.styles.length > 1 ? state.styles[bar % state.styles.length] : state.styles[0];
     const voicing = chooseVoicing(styleVoicingPcs(chord.pcs, keyForVoicing), prevVoicing);
     prevVoicing = voicing;
-    ev.push({ beat: bar * 4, notes: voicing, dur: 3.9, vel: 0.3 + rng() * 0.08 });
-    /* 迷幻/卧室流行的点缀：偶尔第 3 拍轻点高八度 */
-    if (rng() < 0.35) ev.push({ beat: bar * 4 + 2, notes: voicing.map(n => Math.min(n + 12, 96)), dur: 0.5, vel: 0.15 });
+    if (patch === 'sweep') {
+      /* Rock：隔小节低音铺底，给失真吉他让位 */
+      if (bar % 2 === 0) ev.push({ beat: bar * 4, notes: voicing.slice(0, 2), dur: 7.6, vel: 0.32 + rng() * 0.06 });
+    } else if (patch === 'warm') {
+      /* Jazz/Bossa：2+2 呼吸式短铺，留出 walking bass 的空间 */
+      ev.push({ beat: bar * 4, notes: voicing, dur: 1.85, vel: 0.28 + rng() * 0.06 });
+      if (rng() < 0.6) ev.push({ beat: bar * 4 + 2, notes: voicing, dur: 1.7, vel: 0.24 + rng() * 0.05 });
+    } else if (patch === 'halo') {
+      /* Afro/Hip-Hop：长铺但减力减花，黑暗空间感 */
+      ev.push({ beat: bar * 4, notes: voicing, dur: 3.9, vel: 0.22 + rng() * 0.05 });
+      if (rng() < 0.12) ev.push({ beat: bar * 4 + 2, notes: voicing.map(n => Math.min(n + 12, 96)), dur: 0.5, vel: 0.12 });
+    } else {
+      /* choir 等：长音铺底，八度点缀降为 20% */
+      ev.push({ beat: bar * 4, notes: voicing, dur: 3.9, vel: 0.3 + rng() * 0.08 });
+      if (rng() < 0.2) ev.push({ beat: bar * 4 + 2, notes: voicing.map(n => Math.min(n + 12, 96)), dur: 0.5, vel: 0.15 });
+    }
   }
   synthEvents = ev;
 }
@@ -734,6 +748,15 @@ function buildAudio() {
   AE.sendBass = new Tone.Gain(0.05).connect(AE.masterVerb);
   AE.sendPad = new Tone.Gain(0.12).connect(AE.masterVerb);
   AE.sendDrums = new Tone.Gain(0.12).connect(AE.masterVerb);
+  /* --- 爵士颤音琴：FM 金属音色 + 长释放（jazz 风格键盘专用） --- */
+  AE.keysVibes = new Tone.PolySynth(Tone.FMSynth, {
+    harmonicity: 3.01, modulationIndex: 12,
+    oscillator: { type: 'sine' },
+    envelope: { attack: 0.002, decay: 0.9, sustain: 0.12, release: 2.0 },
+    modulation: { type: 'sine' },
+    modulationEnvelope: { attack: 0.002, decay: 0.25, sustain: 0.3, release: 0.5 },
+  }).connect(nativeInputOf(AE.toneDistKeys));
+  AE.keysVibes.volume.value = -4;
   AE.drumsVol.connect(AE.drumsComp);
   AE.drumsComp.connect(AE.toneDistDrums);
   /* 鼓房间声：0.45s 短混响 send（kick/snare 的"房间麦"，鼓机→真鼓） */
@@ -804,6 +827,35 @@ const GUITAR_SETS = {
   acoustic: ['A2','As2','B2','C3','Cs3','D3','Ds3','E3','F3','Fs3','G3','Gs3','A3','As3','B3','C4','A4'],
 };
 const GUITAR_PATCH_MAP = { clean:'electric', crunch:'electric', dist:'electric', jazz:'electric', muted:'electric', harmonics:'electric', delay:'electric', steel:'acoustic', nylon:'acoustic' };
+/* 按 patch 的音色塑造：真实采样只有两套库，风格差异靠效果链分家。
+   drive→线路失真量, lpf→低通, gate→音门（闷音）, vol→音量补偿 */
+const GUITAR_PATCH_FX = {
+  clean:    { drive: 0,   lpf: 20000, gate: 1.00, vol: 1.00 },
+  delay:    { drive: 0,   lpf: 20000, gate: 1.00, vol: 1.00 },
+  harmonics:{ drive: 0,   lpf: 16000, gate: 0.70, vol: 0.55 },
+  jazz:     { drive: 2,   lpf: 10500, gate: 1.00, vol: 0.90 },
+  crunch:   { drive: 8,   lpf: 9000,  gate: 1.00, vol: 1.00 },
+  dist:     { drive: 30,  lpf: 7200,  gate: 1.00, vol: 1.00 },
+  muted:    { drive: 3,   lpf: 5000,  gate: 0.35, vol: 0.90 },
+};
+const GUITAR_FX_CHAINS = {};
+function guitarFxChain(patch, raw) {
+  const fx = GUITAR_PATCH_FX[patch] || GUITAR_PATCH_FX.clean;
+  if (fx.drive === 0 && fx.lpf >= 20000 && fx.gate === 1 && fx.vol === 1) return SAMP.busByRole.guitar;
+  let head = GUITAR_FX_CHAINS[patch];
+  if (!head) {
+    const shaper = raw.createWaveShaper();
+    shaper.curve = driveCurve(fx.drive);
+    shaper.oversample = '2x';
+    const lpf = raw.createBiquadFilter();
+    lpf.type = 'lowpass'; lpf.frequency.value = fx.lpf; lpf.Q.value = 0.7;
+    const vol = raw.createGain(); vol.gain.value = fx.vol;
+    shaper.connect(lpf); lpf.connect(vol); vol.connect(SAMP.busByRole.guitar);
+    head = shaper;
+    GUITAR_FX_CHAINS[patch] = head;
+  }
+  return head;
+}
 function noteNameToMidi(name) {
   const m = name.match(/^([A-G])(s?)(-?\d)$/);
   if (!m) return 40;
@@ -833,6 +885,9 @@ function playGuitarReal(patch, midi, t, dur, vel) {
   let best = keys[0], bd = 99;
   for (const k of keys) { const d = Math.abs(k - midi); if (d < bd) { bd = d; best = k; } }
   if (bd > 7) return false; /* 缺音区交还 SoundFont */
+  const fx = GUITAR_PATCH_FX[patch] || GUITAR_PATCH_FX.clean;
+  const out = guitarFxChain(patch, Tone.getContext().rawContext);
+  if (fx.gate < 1) dur = Math.max(0.07, Math.min(dur, 0.08 + dur * fx.gate));
   const raw = Tone.getContext().rawContext;
   const src = raw.createBufferSource();
   src.buffer = bank[best];
@@ -842,7 +897,7 @@ function playGuitarReal(patch, midi, t, dur, vel) {
   g.gain.exponentialRampToValueAtTime(Math.max(vel, 0.05), t + 0.012);
   g.gain.setValueAtTime(Math.max(vel, 0.05), t + Math.max(0.05, dur - 0.1));
   g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.3);
-  src.connect(g); g.connect(SAMP.busByRole.guitar);
+  src.connect(g); g.connect(out);
   src.start(t); src.stop(t + dur + 0.4);
   /* 双轨录制：厚度>0.5 时叠第二轨（±声像/微延迟/微失谐） */
   const th = state.tone.guitar ? state.tone.guitar.t : 0.2;
@@ -858,8 +913,8 @@ function playGuitarReal(patch, midi, t, dur, vel) {
     g2.gain.setValueAtTime(Math.max(v2, 0.03), t + Math.max(0.05, dur - 0.1));
     g2.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.3);
     const pan = raw2.createStereoPanner ? raw2.createStereoPanner() : null;
-    if (pan) { pan.pan.value = 0.45; g2.connect(pan); pan.connect(SAMP.busByRole.guitar); }
-    else g2.connect(SAMP.busByRole.guitar);
+    if (pan) { pan.pan.value = 0.45; g2.connect(pan); pan.connect(out); }
+    else g2.connect(out);
     src2.connect(g2);
     src2.start(t + 0.012); src2.stop(t + dur + 0.45);
   }
@@ -1016,6 +1071,11 @@ const SAMP_GUITAR = {
   steel: 'acoustic_guitar_steel', nylon: 'acoustic_guitar_nylon',
 };
 const SAMP_KEYS = 'electric_piano_1';
+/* 键盘按风格分音色：jazz=FM 颤音琴合成器(@vibes)，hiphop=暗黑 polysynth 长铺，其余 Rhodes */
+const SAMP_KEYS_BY_STYLE = {
+  rnb: SAMP_KEYS, jazz: '@vibes', rock: SAMP_KEYS,
+  bossa: SAMP_KEYS, afro: SAMP_KEYS, hiphop: 'pad_3_polysynth',
+};
 const SAMP_BASS = 'electric_bass_finger';
 const SAMP_PAD = {
   halo: 'pad_7_halo', sweep: 'pad_8_sweep', warm: 'pad_2_warm',
@@ -1185,8 +1245,9 @@ async function autoAlignTimbres(styleKey) {
 }
 
 function loadInstruments() {
+  const ksCore = SAMP_KEYS_BY_STYLE[state.styles.length === 1 ? state.styles[0] : 'rnb'] || SAMP_KEYS;
   const core = [
-    SAMP_GUITAR[state.layers.guitar.patch], SAMP_KEYS, SAMP_BASS, SAMP_PAD[state.layers.synth.patch],
+    SAMP_GUITAR[state.layers.guitar.patch], ksCore === '@vibes' ? SAMP_KEYS : ksCore, SAMP_BASS, SAMP_PAD[state.layers.synth.patch],
   ].filter(Boolean);
   let done = 0;
   sampStatus(`正在加载采样音色 0/${core.length}…`);
@@ -1281,20 +1342,24 @@ function scheduleAll() {
       }, t);
     }
   }
-  /* 电钢琴（Rhodes 采样） */
+  /* 键盘（按风格分音色：Rhodes/颤音琴/暗黑铺） */
   if (state.layers.keys.on) {
-    const inst = sampOf(SAMP_KEYS, 'keys');
     for (const e of keysEvents) {
       const t = t16(Math.round(e.beat * 4));
       const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.95;
       const names = e.notes.map(midiName);
       const koff = voiceOff(styleOfBar(e.beat), 'keys', e.beat);
+      const ks = SAMP_KEYS_BY_STYLE[styleOfBar(e.beat)] || SAMP_KEYS;
       Tone.Transport.schedule(tt2 => { const tt = tt2 + koff;
         const gi = e.inst && e.inst.startsWith('guitar:') ? e.inst.slice(7) : null;
         const gInst = gi && sampOf(SAMP_GUITAR[gi], 'guitar');
         if (gInst) for (const n of e.notes) gInst.play(n, tt, { duration: dur, gain: e.vel * 1.1 });
-        else if (inst) for (const n of e.notes) inst.play(n, tt, { duration: dur, gain: e.vel });
-        else AE.keys.triggerAttackRelease(names, dur, tt, e.vel);
+        else if (ks === '@vibes') AE.keysVibes.triggerAttackRelease(names, dur, tt, e.vel * 0.85);
+        else {
+          const inst = ks && sampOf(ks, 'keys');
+          if (inst) for (const n of e.notes) inst.play(n, tt, { duration: dur, gain: e.vel });
+          else AE.keys.triggerAttackRelease(names, dur, tt, e.vel);
+        }
       }, t);
     }
   }
