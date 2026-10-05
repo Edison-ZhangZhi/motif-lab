@@ -112,7 +112,7 @@ function scalePCsForChord(rootPC, qKey, keyRootPC, mode) {
 const STYLES = {
   rnb: {
     name: 'RnB', scaleBias: 'pentMinor',
-    mel: { stepP: 0.62, density: 0.38, durBias: 0.65, rep: 0.5, synco: 0.8, blue: false, regLo: 62, regHi: 86, maxLeap: 7 },
+    mel: { stepP: 0.66, density: 0.72, durBias: 0.55, rep: 0.5, synco: 0.85, blue: false, regLo: 64, regHi: 88, maxLeap: 9 }, /* 目标 4±0.5 音/小节 */
     rhythm: [
       [[0, 4], [6, 2], [8, 4], [14, 2]],
       [[0, 2], [3, 2], [8, 4], [11, 2], [14, 2]],
@@ -136,7 +136,7 @@ const STYLES = {
   },
   rock: {
     name: 'Rock', scaleBias: 'blues',
-    mel: { stepP: 0.38, density: 0.5, durBias: 0.35, rep: 0.8, synco: 0.25, blue: true, regLo: 58, regHi: 82, maxLeap: 9 },
+    mel: { stepP: 0.38, density: 0.5, durBias: 0.35, rep: 0.8, synco: 0.25, blue: true, regLo: 58, regHi: 82, maxLeap: 12 },
     rhythm: [
       [[0, 2], [2, 2], [4, 2], [6, 2], [8, 2], [10, 2], [12, 2], [14, 2]],
       [[0, 4], [4, 4], [8, 4], [12, 4]],
@@ -211,6 +211,11 @@ const DRUM_PATTERNS = {
     snare: [1,0,0,1, 0,0,1,0, 1,0,0,1, 0,0,1,0],
     hat:   [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0],
   },
+  beach: { /* 陶喆《沙滩》式：无鼓组，shaker 16分 + 偶尔 rimshot */
+    kick:  [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0],
+    snare: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
+    hat:   [1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1],
+  },
   hiphop: {
     kick:  [1,0,0,0, 0,0,0,0, 0,0,1,0, 0,0,0,1],
     snare: [0,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0],
@@ -219,8 +224,9 @@ const DRUM_PATTERNS = {
     crash: [1,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0],
   },
   afro: {
-    kick:  [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0],
+    kick:  [1,0,0,0, 0,0,0,0, 0,0,1,0, 0,0,0,0],   /* 底鼓稀疏：空间让给 shekere/bell */
     snare: [1,0,0,1, 0,0,1,0, 1,0,0,1, 0,0,1,0],   /* son clave 音型 */
+    bell:  [1,0,0,1, 0,0,1,0, 1,0,0,1, 0,0,1,0],   /* bell 回答层（0e0e 语汇） */
     hat:   [1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1],
     congaH:[0,0,0,1, 0,0,1,0, 0,0,0,1, 0,0,1,0],
     congaL:[0,0,0,0, 0,1,0,0, 0,0,0,0, 0,1,0,1],
@@ -297,6 +303,14 @@ const PRESETS = [
     desc: 'Ⅰmaj7–ⅴm7–Ⅳmaj7–♭Ⅵmaj7：从同主音小调借和弦，《Best Part》式朦胧色彩。Daniel Caesar / D’Angelo 招牌语法。',
     slots: [{ d: 1, q: 'maj7' }, { d: 5, q: 'min7' }, { d: 4, q: 'maj7' }, { d: 6, acc: -1, q: 'maj7' },
             { d: 1, q: 'maj9' }, { d: 5, q: 'min9' }, { d: 4, q: 'maj9' }, { d: 6, acc: -1, q: 'maj7' }] },
+  { id: 'rnb-drift', name: 'RnB 调式漂流 I-vi-♭VII-♭VI（Best Part 式）', styles: ['rnb'],
+    desc: 'Ⅰmaj9–ⅵm9–♭Ⅶmaj9–♭Ⅵmaj9：调式借用的漂流感，Daniel Caesar《Best Part》语法。',
+    slots: [{ d: 1, q: 'maj9' }, { d: 6, q: 'min9' }, { d: 7, acc: -1, q: 'maj9' }, { d: 6, acc: -1, q: 'maj9' },
+            { d: 1, q: 'maj9' }, { d: 6, q: 'min9' }, { d: 7, acc: -1, q: 'maj9' }, { d: 6, acc: -1, q: 'maj7' }] },
+  { id: 'rnb-chrom-desc', name: 'RnB 半音下行链（爱爱爱式）', styles: ['rnb'],
+    desc: '♭Ⅲmaj9–Ⅱm9–♭Ⅱm9–Ⅰm9：连续半音下行的 m7 链，方大同《爱爱爱》副歌语法。建议切自然小调。',
+    slots: [{ d: 3, acc: -1, q: 'maj9' }, { d: 2, q: 'min9' }, { d: 2, acc: -1, q: 'min9' }, { d: 1, q: 'min9' },
+            { d: 3, acc: -1, q: 'maj9' }, { d: 2, q: 'min9' }, { d: 2, acc: -1, q: 'min9' }, { d: 1, q: 'min7' }] },
   { id: 'rnb-chroma', name: 'RnB 半音滑接（陶喆式）', styles: ['rnb'],
     desc: 'Ⅰmaj9–♯Ⅰ°7–ⅱm9–Ⅴ13：高半音减七经过和弦，陶喆《十点半的飞机》式滑接语法，方大同《Love Song》同款离调感。',
     slots: [{ d: 1, q: 'maj9' }, { d: 1, acc: 1, q: 'dim7' }, { d: 2, q: 'min9' }, { d: 5, q: '13' },

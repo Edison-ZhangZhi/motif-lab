@@ -272,6 +272,26 @@ function genMelody() {
       }
     }
 
+    /* 高密度：组内二次陈述（整体+1小节，变化尾音），达成 4±0.5 音/小节 */
+    if (params.density > 0.6 && placed.length) {
+      cell.r.forEach((on16b, i) => {
+        const bar = bar0 + Math.floor((on16b + 16) / 16);
+        if (bar >= bars) return;
+        const on = (on16b + 16) % 16;
+        const chord = chordAtBar(bar);
+        const rel = (anchor % 12) + cell.iv[i] - ch0.rootPC;
+        let pc = ((chord.rootPC + rel) % 12 + 12) % 12;
+        if (on % 4 === 0 && !chord.pcs.includes(pc)) pc = nearestPc(pc, chord.pcs);
+        else if (on % 4 !== 0 && !chord.scalePCs.includes(pc)) pc = nearestPc(pc, chord.scalePCs);
+        let m = null, bd2 = 99;
+        for (let mm = params.regLo; mm <= params.regHi; mm++) {
+          if (mm % 12 !== pc) continue;
+          const d = Math.abs(mm - prev); if (d < bd2) { bd2 = d; m = mm; }
+        }
+        if (m !== null) { placed.push({ beat: bar * 4 + on / 4, on16: on, midi: m, i }); prev = m; }
+      });
+      placed.sort((a, b) => a.beat - b.beat);
+    }
     /* 写入事件：句尾长音 + 分风格力度 */
     const isLastGroup = g === groups - 1;
     placed.forEach((p, idx) => {
@@ -348,6 +368,14 @@ function genBass() {
       push(1.5, fifth, 0.45, 0.7);
       push(2, oct, 0.9, 0.75);
       push(3.5, fifth, 0.45, 0.7);
+    } else if (pat === 'riff' || state.layers.drums.patch === 'beach') {
+      /* 沙滩 riff：附点固定音型反复（全曲律动来源） */
+      push(0, r, 0.45, 0.85);
+      push(0.75, r + 7, 0.2, 0.6);
+      push(1.5, r, 0.35, 0.7);
+      push(2.25, r + 12, 0.2, 0.55);
+      push(3, r, 0.4, 0.7);
+      push(3.5, r + 10, 0.25, 0.5);
     } else if (pat === 'hiphop') {
       /* 半速 808：第1拍长音 + 第3拍后滑向下一和弦根 */
       const nextChord = chordAtBar(bar + 1);
@@ -490,7 +518,7 @@ function genDrums() {
     if (patName === 'auto' || patName === '808') patName = STYLES[styleKey].drums;
     const P = DRUM_PATTERNS[patName] || DRUM_PATTERNS.rnb;
     const density = state.layers.drums.patch;
-    const kit = DRUM_KITS[state.layers.drums.patch === '808' ? 's808' : styleKey] || DRUM_KITS.rnb;
+    const kit = DRUM_KITS[state.layers.drums.patch === '808' ? 's808' : state.layers.drums.patch === 'beach' ? 'beach' : styleKey] || DRUM_KITS.rnb;
     for (let s = 0; s < 16; s++) {
       const push = (inst, vel) => {
         const essential = inst === 'kick' || inst === 'snare';
@@ -503,31 +531,40 @@ function genDrums() {
       if (P.hat && P.hat[s]) {
         if (density === 'lite' && s % 4 !== 0) continue;
         if (density === 'drive' && rng() < 0.3) { push('hat', 0.5); continue; }
-        push('hat', s % 4 === 0 ? 0.75 : 0.45);
+        const hatBase = patName === 'beach' ? (s % 4 === 0 ? 0.62 : 0.4 + rng() * 0.18) : (s % 4 === 0 ? 0.75 : 0.45);
+        push('hat', hatBase);
       }
       if (P.ohat && P.ohat[s] && density !== 'lite') push('ohat', 0.6);
       if (P.ride && P.ride[s]) push('ride', s % 4 === 0 ? 0.8 : 0.5);
       if (P.crash && P.crash[s] && (bar % 4 === 0 || styleKey === 'rock')) push('crash', styleKey === 'rock' ? 0.55 : 0.7);
       if (P.congaH && P.congaH[s]) push('congaH', 0.6);
       if (P.congaL && P.congaL[s]) push('congaL', 0.55);
+      if (P.bell && P.bell[s]) push('bell', s % 4 === 0 ? 0.55 : 0.4);
+      /* Fela 式 break：每 16 小节最后一拍全停 */
+      if (styleKey === 'afro' && bar % 16 === 15 && s >= 12) {
+        ev.filter(x => x.step16 === bar * 16 + s).forEach(x => { x._drop = true; });
+      }
     }
-    /* 结尾加花 */
-    if (bar === bars - 1) {
+    /* 结尾加花（Afro break 小节不加） */
+    if (bar === bars - 1 && !(styleKey === 'afro' && bar % 16 === 15)) {
       for (let s = 12; s < 16; s++) ev.push({ step16: bar * 16 + s, inst: s % 2 ? 'snare' : 'hat', vel: 0.5 + (s - 12) * 0.12, kit });
     }
     /* 风格打击乐层：Afro 全十六分 shekere + 反拍 clap（力量鼓点）；Bossa/RnB 沙锤八分 */
     if (styleKey === 'afro') {
       for (let s = 0; s < 16; s++) {
         if (state.perf && s % 2 === 1) continue; /* 性能模式：shekere 减半 */
-        ev.push({ step16: bar * 16 + s, inst: 'shekere', vel: s % 4 === 0 ? 0.55 : 0.32, kit });
+        if (bar % 16 === 15 && s >= 12) continue; /* Fela break：shekere 同停 */
+        ev.push({ step16: bar * 16 + s, inst: 'shekere', vel: s % 4 === 0 ? 0.7 : 0.4, kit });
       }
-      ev.push({ step16: bar * 16 + 4,  inst: 'clap', vel: 0.7, kit });
-      ev.push({ step16: bar * 16 + 12, inst: 'clap', vel: 0.75, kit });
+      if (bar % 16 !== 15) {
+        ev.push({ step16: bar * 16 + 4,  inst: 'clap', vel: 0.7, kit });
+        ev.push({ step16: bar * 16 + 12, inst: 'clap', vel: 0.75, kit });
+      }
     } else if (styleKey === 'bossa' || styleKey === 'rnb') {
       for (let s = 0; s < 16; s += 2) ev.push({ step16: bar * 16 + s, inst: 'shaker', vel: s % 4 === 0 ? 0.42 : 0.3, kit });
     }
   }
-  drumEvents = ev;
+  drumEvents = ev.filter(x => !x._drop);
 }
 
 /* ============================================================
@@ -843,10 +880,11 @@ const DRUM_KITS = {
   rock:  { kick:'kick_room', snare:'snare_room', hat:'hat_closed', ohat:'hat_closed', ride:'hat_closed', crash:'crash', congaH:null, congaL:null, ghost:'snare_room' },
   jazz:  { kick:null, snare:'brush_snare', hat:null, ohat:'hat_closed', ride:null, crash:'crash', congaH:null, congaL:null, ghost:'brush_snare' },
   bossa: { kick:null, snare:'rim_click', hat:'shaker', ohat:'shaker', ride:'shaker', crash:'crash', congaH:null, congaL:null, ghost:'rim_click' },
-  afro:  { kick:'kick_room', snare:'clave', hat:'shekere', ohat:'shekere', ride:'shekere', crash:null, congaH:'conga_h', congaL:'conga_l', ghost:null },
+  afro:  { kick:'kick_room', snare:'clave', hat:'shekere', ohat:'shekere', ride:'shekere', bell:'clave', crash:null, congaH:'conga_h', congaL:'conga_l', ghost:null },
   rnb:   { kick:'kick_808', snare:'snap', hat:'hat_808', ohat:'hat_808', ride:'hat_808', crash:'crash', congaH:null, congaL:null, ghost:'snap' },
   s808:  { kick:'kick_808', snare:null, hat:'hat_808', ohat:'hat_808', ride:'hat_808', crash:'crash', congaH:null, congaL:null, ghost:null },
   hiphop:{ kick:'kick_808', snare:'clap', hat:'hat_808', ohat:'hat_808', ride:null, crash:'crash', congaH:null, congaL:null, ghost:null },
+  beach: { kick:null, snare:'rim_click', hat:'shaker', ohat:'shaker', ride:null, crash:null, congaH:null, congaL:null, ghost:null },
 };
 function loadDrumSamples() {
   if (DRUM_SAMP.started || !AE.ready) return;
@@ -906,11 +944,11 @@ function restoreSampleBuses() {
 }
 /* 微时值引擎：每轨独立的 timing profile（真实演奏各声部前后不一）+ 乐句内 rubato */
 const TIMING_PROFILE = {
-  rnb:   { drums: 0.010, hat: -0.006, bass: 0.006, keys: 0.004, melody: 0.016, pad: 0.003 },
+  rnb:   { drums: 0.010, hat: -0.006, bass: 0.012, keys: 0.020, melody: 0.018, pad: 0.008 }, /* 推-拉：鼓抢拍/和声躺（D'Angelo 系） */
   jazz:  { drums: 0.006, hat: -0.004, bass: 0.008, keys: 0.006, melody: 0.010, pad: 0.004 },
   rock:  { drums: -0.002, hat: 0.0, bass: 0.0, keys: 0.0, melody: 0.0, pad: 0.0 },
   bossa: { drums: 0.004, hat: -0.003, bass: 0.006, keys: 0.003, melody: 0.006, pad: 0.002 },
-  afro:  { drums: -0.006, hat: -0.004, bass: -0.004, keys: 0.0, melody: 0.008, pad: 0.002 },
+  afro:  { drums: 0.006, hat: 0.002, bass: 0.0, keys: 0.0, melody: 0.0, pad: 0.0 }, /* 论文：Afrobeat 鼓略早于网格 */
   hiphop:{ drums: 0.004, hat: -0.005, bass: 0.0, keys: 0.003, melody: 0.012, pad: 0.003 },
 };
 function voiceOff(styleKey, voice, beat) {
@@ -1308,6 +1346,7 @@ function scheduleAll() {
           case 'ride': AE.ride.triggerAttackRelease('A5', '8n', tt, e.vel); break;
           case 'congaH': AE.conga.triggerAttackRelease('A3', '16n', tt, e.vel); break;
           case 'congaL': AE.conga.triggerAttackRelease('F3', '16n', tt, e.vel); break;
+          case 'bell': AE.rim808.triggerAttackRelease('A5', '16n', tt, e.vel * 0.8); break;
           case 'crash': AE.crash.triggerAttackRelease('B5', '1m', tt, e.vel); break;
         }
       }, t);
@@ -1476,7 +1515,7 @@ function buildMidi() {
     const dur = Math.round(e.dur * tpb);
     for (const n of e.notes) notePair(t, dur, 3, n, clamp(Math.round(e.vel * 127 * 1.4), 15, 100));
   }
-  const DRUM_GM = { kick: 36, snare: 38, hat: 42, ohat: 46, ride: 51, congaH: 63, congaL: 64, crash: 49 };
+  const DRUM_GM = { kick: 36, snare: 38, hat: 42, ohat: 46, ride: 51, bell: 56, congaH: 63, congaL: 64, crash: 49, shekere: 70, shaker: 70, clap: 39, snap: 37, clave: 75 };
   for (const e of drumEvents) {
     const t = Math.round(e.step16 * tpb / 4) + swingAdd(e.step16);
     const note = DRUM_GM[e.inst]; if (note === undefined) continue;

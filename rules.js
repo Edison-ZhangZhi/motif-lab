@@ -39,7 +39,10 @@ function ruleTonality() {
     if (strong && !ch.pcs.includes(pc)) {
       e.midi = snapMidi(e.midi, ch.pcs);
     } else if (!scalePCs.includes(pc)) {
-      e.midi = snapMidi(e.midi, scalePCs);
+      /* 半音经过音豁免：级进解决到下一音则保留（参考曲 31% 半音连接） */
+      const nx = melodyEvents.find(x => x.beat > e.beat);
+      const resolves = nx && Math.abs(nx.midi - e.midi) <= 2;
+      if (!resolves) e.midi = snapMidi(e.midi, scalePCs);
     }
   }
   /* 贝斯：变化音（调外）只允许级进解决到和弦音，否则修正为和弦音 */
