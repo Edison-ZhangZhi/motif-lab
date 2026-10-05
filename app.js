@@ -527,6 +527,22 @@ function makeCabIR(dur = 0.22, decay = 5) {
 function buildAudio() {
   if (AE.ready) return;
   AE.master = new Tone.Volume(-2).connect(new Tone.Limiter(-1).toDestination());
+  AE.masterMeter = new Tone.Meter({ normalRange: false, smoothing: 0.85 });
+  AE.limiterRef = new Tone.Limiter(-1);
+  /* master → meter 监听（并联，不影响信号链） */
+  setTimeout(() => { try { AE.master.connect(AE.masterMeter); } catch (e) {} }, 0);
+  /* 慢速 AGC：每 700ms 看一次均值，向 -14dB 靠拢，范围 ±6dB */
+  setInterval(() => {
+    if (!state.playing || !AE.masterMeter) return;
+    let db = -60;
+    try { const v = AE.masterMeter.getValue(); db = typeof v === 'number' ? v : -60; } catch (e) { return; }
+    if (db < -45 || db > -3) return;
+    const err = -14 - db;
+    if (Math.abs(err) < 2.5) return;
+    const cur = AE.master.volume.value;
+    const next = Math.max(-14, Math.min(8, cur + Math.sign(err) * 0.8));
+    AE.master.volume.value = next;
+  }, 700);
 
   /* --- 旋律吉他（效果器链路）：
      双锯齿声源 → 电子管波形塑形前级 → 三段 EQ → 箱体 IR 卷积 → 压缩 → 反馈延迟 --- */
@@ -627,6 +643,10 @@ function buildAudio() {
   AE.sendDrums = new Tone.Gain(0.12).connect(AE.masterVerb);
   AE.drumsVol.connect(AE.drumsComp);
   AE.drumsComp.connect(AE.toneDistDrums);
+  /* 鼓房间声：0.45s 短混响 send（kick/snare 的"房间麦"，鼓机→真鼓） */
+  AE.drumRoom = new Tone.Reverb({ decay: 0.45, wet: 1 }).connect(AE.master);
+  AE.drumRoomSend = new Tone.Gain(0.16).connect(AE.drumRoom);
+  AE.drumsComp.connect(AE.drumRoomSend);
 
   /* --- 808 鼓组（经典 TR-808 合成复刻，808 本身就是合成鼓机） --- */
   AE.kick808 = new Tone.Synth({
@@ -731,6 +751,25 @@ function playGuitarReal(patch, midi, t, dur, vel) {
   g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.3);
   src.connect(g); g.connect(SAMP.busByRole.guitar);
   src.start(t); src.stop(t + dur + 0.4);
+  /* 双轨录制：厚度>0.5 时叠第二轨（±声像/微延迟/微失谐） */
+  const th = state.tone.guitar ? state.tone.guitar.t : 0.2;
+  if (th > 0.5) {
+    const raw2 = Tone.getContext().rawContext;
+    const src2 = raw2.createBufferSource();
+    src2.buffer = bank[best];
+    src2.playbackRate.value = Math.pow(2, (midi - best) / 12) * 1.006;
+    const g2 = raw2.createGain();
+    const v2 = vel * 0.55;
+    g2.gain.setValueAtTime(0.0001, t + 0.012);
+    g2.gain.exponentialRampToValueAtTime(Math.max(v2, 0.03), t + 0.024);
+    g2.gain.setValueAtTime(Math.max(v2, 0.03), t + Math.max(0.05, dur - 0.1));
+    g2.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.3);
+    const pan = raw2.createStereoPanner ? raw2.createStereoPanner() : null;
+    if (pan) { pan.pan.value = 0.45; g2.connect(pan); pan.connect(SAMP.busByRole.guitar); }
+    else g2.connect(SAMP.busByRole.guitar);
+    src2.connect(g2);
+    src2.start(t + 0.012); src2.stop(t + dur + 0.45);
+  }
   return true;
 }
 
@@ -816,7 +855,15 @@ function playDrumSample(name, t, vel) {
   const v = vel * (DRUM_GAIN[name] || 1);
   g.gain.setValueAtTime(v, t);
   g.gain.exponentialRampToValueAtTime(0.0001, t + Math.min(buf.duration * 0.85, 1.8));
-  src.connect(g); g.connect(DRUM_SAMP.bus);
+  src.connect(g);
+  if (vel < 0.45 && (name === 'snare_room' || name === 'snare808' || name === 'snap')) {
+    /* 幽灵音/轻击：低通变暗 = 真实轻击鼓皮音色（非仅调音量） */
+    const lp = raw.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = 2200;
+    g.connect(lp); lp.connect(DRUM_SAMP.bus);
+  } else {
+    g.connect(DRUM_SAMP.bus);
+  }
   src.start(t);
   return true;
 }
