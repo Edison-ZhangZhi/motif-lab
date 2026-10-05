@@ -35,7 +35,7 @@ const state = {
     guitar: { on: true, vol: 0.8, patch: 'crunch' },
     keys:   { on: true, vol: 0.55, patch: 'comp' },
     bass:   { on: true, vol: 0.7, patch: 'auto' },
-    drums:  { on: true, vol: 0.7, patch: 'auto' },
+    drums:  { on: true, vol: 0.8, patch: 'auto' },
     synth:  { on: true, vol: 0.45, patch: 'halo' },
   },
   playing: false,
@@ -552,18 +552,18 @@ function genDrums() {
       } else if (P.snare && P.snare[s]) {
         push('snare', patName === 'bossa' ? 0.45 : 0.9);
       }
-      if (P.ghost && P.ghost[s] && rng() < 0.5) push('snare', 0.3);
+      if (P.ghost && P.ghost[s] && rng() < 0.5) push('snare', 0.38);
       if (P.hat && P.hat[s]) {
         if (density === 'lite' && s % 4 !== 0) continue;
         if (density === 'drive' && rng() < 0.3) { push('hat', 0.5); continue; }
-        const hatBase = patName === 'beach' ? (s % 4 === 0 ? 0.62 : 0.4 + rng() * 0.18) : (s % 4 === 0 ? 0.75 : 0.45);
+        const hatBase = patName === 'beach' ? (s % 4 === 0 ? 0.62 : 0.4 + rng() * 0.18) : (s % 4 === 0 ? 0.85 : 0.6); /* 律动载体站出来 */
         push('hat', hatBase);
       }
       if (P.ohat && P.ohat[s] && density !== 'lite') push('ohat', 0.6);
       if (P.ride && P.ride[s]) push('ride', s % 4 === 0 ? 0.8 : 0.5);
       if (P.crash && P.crash[s] && (bar % 4 === 0 || (styleKey === 'rock' && energy > 0.55))) push('crash', styleKey === 'rock' ? 0.5 : 0.7);
-      if (P.congaH && P.congaH[s]) push('congaH', 0.6);
-      if (P.congaL && P.congaL[s]) push('congaL', 0.55);
+      if (P.congaH && P.congaH[s]) push('congaH', 0.7);
+      if (P.congaL && P.congaL[s]) push('congaL', 0.65);
       if (P.bell && P.bell[s]) push('bell', s % 4 === 0 ? 0.55 : 0.4);
       /* Fela 式 break：每 16 小节最后一拍全停 */
       if (styleKey === 'afro' && bar % 16 === 15 && s >= 12) {
@@ -593,14 +593,14 @@ function genDrums() {
       for (let s = 0; s < 16; s++) {
         if (state.perf && s % 2 === 1) continue; /* 性能模式：shekere 减半 */
         if (bar % 16 === 15 && s >= 12) continue; /* Fela break：shekere 同停 */
-        ev.push({ step16: bar * 16 + s, inst: 'shekere', vel: s % 4 === 0 ? 0.7 : 0.4, kit });
+        ev.push({ step16: bar * 16 + s, inst: 'shekere', vel: s % 4 === 0 ? 0.7 : 0.45, kit });
       }
       if (bar % 16 !== 15) {
-        ev.push({ step16: bar * 16 + 4,  inst: 'clap', vel: 0.7, kit });
-        ev.push({ step16: bar * 16 + 12, inst: 'clap', vel: 0.75, kit });
+        ev.push({ step16: bar * 16 + 4,  inst: 'clap', vel: 0.8, kit });
+        ev.push({ step16: bar * 16 + 12, inst: 'clap', vel: 0.85, kit });
       }
     } else if (styleKey === 'bossa' || styleKey === 'rnb') {
-      for (let s = 0; s < 16; s += 2) ev.push({ step16: bar * 16 + s, inst: 'shaker', vel: s % 4 === 0 ? 0.42 : 0.3, kit });
+      for (let s = 0; s < 16; s += 2) ev.push({ step16: bar * 16 + s, inst: 'shaker', vel: s % 4 === 0 ? 0.5 : 0.38, kit });
     }
   }
   drumEvents = ev.filter(x => !x._drop);
@@ -644,7 +644,7 @@ function buildAudio() {
     let db = -60;
     try { const v = AE.masterMeter.getValue(); db = typeof v === 'number' ? v : -60; } catch (e) { return; }
     if (db < -45 || db > -3) return;
-    const err = -14 - db;
+    const err = -11 - db; /* 瞬态音乐 RMS 目标抬高，鼓才剩得下头 */
     if (Math.abs(err) < 2.5) return;
     const cur = AE.master.volume.value;
     const next = Math.max(-14, Math.min(8, cur + Math.sign(err) * 0.8));
@@ -704,12 +704,12 @@ function buildAudio() {
     envelope: { attack: 0.001, decay: 0.05, release: 0.02 },
     harmonicity: 5.1, modulationIndex: 24, resonance: 5000, octaves: 1.2,
   }).connect(AE.drumsVol);
-  AE.hat.volume.value = -14;
+  AE.hat.volume.value = -6; /* 兜底也要听得见 */
   AE.ride = new Tone.MetalSynth({
     envelope: { attack: 0.001, decay: 0.35, release: 0.05 },
     harmonicity: 5.1, modulationIndex: 18, resonance: 3200, octaves: 1,
   }).connect(AE.drumsVol);
-  AE.ride.volume.value = -16;
+  AE.ride.volume.value = -8;
   AE.conga = new Tone.MembraneSynth({
     pitchDecay: 0.02, octaves: 3,
     envelope: { attack: 0.001, decay: 0.18, sustain: 0 },
@@ -718,7 +718,7 @@ function buildAudio() {
     envelope: { attack: 0.001, decay: 0.8, release: 0.1 },
     harmonicity: 5.1, modulationIndex: 30, resonance: 4000, octaves: 1.5,
   }).connect(AE.drumsVol);
-  AE.crash.volume.value = -16;
+  AE.crash.volume.value = -8;
 
   /* --- 合成器 Pad 兜底链（采样未就绪时用）：锯齿波 → 移相器 → 大混响 --- */
   AE.synthVol = new Tone.Volume(-9).connect(AE.master);
@@ -966,9 +966,9 @@ const DRUM_KITS = {
   hiphop:{ kick:'kick_808', snare:'clap', hat:'hat_808', ohat:'hat_808', ride:null, crash:'crash', congaH:null, congaL:null, ghost:null },
   beach: { kick:null, snare:'rim_click', hat:'shaker', ohat:'shaker', ride:null, crash:null, congaH:null, congaL:null, ghost:null },
 };
-function loadDrumSamples() {
-  if (DRUM_SAMP.started || !AE.ready) return;
-  DRUM_SAMP.started = true;
+function loadDrumSamples(isRetry) {
+  if ((!isRetry && DRUM_SAMP.started) || DRUM_SAMP.loading || !AE.ready) return;
+  DRUM_SAMP.started = true; DRUM_SAMP.loading = true;
   const raw = Tone.getContext().rawContext;
   DRUM_SAMP.bus = raw.createGain();
   DRUM_SAMP.bus.gain.value = 1;
@@ -989,8 +989,20 @@ function loadDrumSamples() {
         }
         DRUM_SAMP.buffers[name] = buf;
       })
-      .catch(() => {});
+      .catch(() => { DRUM_SAMP.fail = (DRUM_SAMP.fail || 0) + 1; });
   });
+  /* 6s 后清点：缺失自动重试一次，仍失败明确提示（网络差时鼓会无声，必须可见） */
+  setTimeout(() => {
+    DRUM_SAMP.loading = false;
+    const missing = DRUM_FILES.filter(n => !DRUM_SAMP.buffers[n]).length;
+    if (missing && !DRUM_SAMP.retried) {
+      DRUM_SAMP.retried = true;
+      sampStatus('鼓采样 ' + missing + '/15 未加载，重试中…');
+      loadDrumSamples(true);
+    } else if (missing) {
+      sampStatus('鼓采样 ' + missing + '/15 加载失败（网络），已用合成鼓兜底');
+    }
+  }, 6000);
 }
 const DRUM_GAIN = { shekere: 1.3, shaker: 0.9, snap: 1.1, clap: 1.3, hat_808: 0.9, kick_808: 1.25, crash: 0.95, rim_click: 1.1, kick_room: 1.45, snare_room: 1.2, brush_snare: 1.1, conga_h: 1.25, conga_l: 1.25, clave: 1.2 };
 function playDrumSample(name, t, vel) {
@@ -1303,7 +1315,7 @@ function applyMix() {
   AE.guitarVol.volume.value = Tone.gainToDb(state.layers.guitar.vol * state.layers.guitar.vol) - 3;
   AE.keysVol.volume.value = Tone.gainToDb(state.layers.keys.vol * state.layers.keys.vol) - 6;
   AE.bassVol.volume.value = Tone.gainToDb(state.layers.bass.vol * state.layers.bass.vol) - 4;
-  AE.drumsVol.volume.value = Tone.gainToDb(state.layers.drums.vol * state.layers.drums.vol) - 6;
+  AE.drumsVol.volume.value = Tone.gainToDb(state.layers.drums.vol * state.layers.drums.vol) - 2; /* 鼓要穿透垫底，推子抬高 */
   AE.synthVol.volume.value = Tone.gainToDb(state.layers.synth.vol * state.layers.synth.vol) - 6;
   applyGuitarPatch();
 }
@@ -1691,19 +1703,19 @@ function applyStyleTone(styleKey) {
 
 /* 风格音色性格：合唱/空间混响湿度（RnB 迷幻宽空间 / Jazz 丝滑干净 / Rock 干近 / Afro 打击前置） */
 const STYLE_FX = {
-  rnb:   { cw: 0.65, rw: 0.5 },
+  rnb:   { cw: 0.45, rw: 0.42 },
   jazz:  { cw: 0.25, rw: 0.22 },
   rock:  { cw: 0.08, rw: 0.1 },
   bossa: { cw: 0.3,  rw: 0.28 },
   afro:  { cw: 0.12, rw: 0.18 },
-  hiphop:{ cw: 0.2,  rw: 0.35 },
+  hiphop:{ cw: 0.2,  rw: 0.28 },
 };
 function applyStyleFx(styleKey) {
   const fx = STYLE_FX[styleKey];
   if (!fx || !AE.ready || !AE.masterVerb) return;
   /* fx.cw→混响湿度, fx.rw→衰减长度映射 */
-  AE.masterVerb.wet.value = Math.min(0.65, fx.cw * 0.75);
-  AE.masterVerb.decay = 1 + fx.rw * 4;
+  AE.masterVerb.wet.value = Math.min(0.5, fx.cw * 0.6); /* 收敛：wash 会埋掉鼓和律动 */
+  AE.masterVerb.decay = 1 + fx.rw * 3.2;
 }
 
 /* ---------- 风格整体配置：切换风格 = 整套编曲画面变换 ---------- */
