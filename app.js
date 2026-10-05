@@ -1234,9 +1234,10 @@ function scheduleAll() {
       const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.98;
       const names = e.notes.map(midiName);
       const poff = voiceOff(styleOfBar(e.beat), 'pad', e.beat);
+      const lag = e.padLag || 0;
       Tone.Transport.schedule(tt => {
-        if (inst) for (const n of e.notes) inst.play(n, tt + poff, { duration: dur, gain: e.vel * 1.4 });
-        else AE.synthPad.triggerAttackRelease(names, dur, tt + poff, e.vel);
+        if (inst) for (const n of e.notes) inst.play(n, tt + poff + lag, { duration: dur, gain: e.vel * 1.4 });
+        else AE.synthPad.triggerAttackRelease(names, dur, tt + poff + lag, e.vel);
       }, t);
     }
   }
@@ -1961,6 +1962,7 @@ function regenerate(reason) {
   genKeys();
   genSynthPad();
   genDrums();
+  applyCompositionRules(); /* 作曲规则器：调度前检测修正 */
   renderSlots();
   renderRoll();
   renderStats();
