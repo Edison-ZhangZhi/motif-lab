@@ -385,6 +385,11 @@ function genBass() {
       ev[ev.length - 2].b808 = true;
       ev[ev.length - 1].b808 = true;
       ev[ev.length - 1].slideTo = clamp(nextRoot + 12, 30, 50);
+      if (rng() < 0.4) { /* Future 式 3.75 拍抢拍 808 滑音 */
+        push(3.75, r + 12, 0.2, 0.5);
+        ev[ev.length - 1].b808 = true;
+        ev[ev.length - 1].slideTo = clamp(nextRoot + 12, 30, 50);
+      }
     } else { /* afro：弹性 16 分 Vamp */
       push(0, r, 0.4, 0.85);
       push(0.75, oct, 0.2, 0.55);
@@ -525,8 +530,14 @@ function genDrums() {
         if (!essential && rng() > energy + 0.35) return; /* 低能量段裁掉装饰音 */
         ev.push({ step16: bar * 16 + s, inst, vel: vel * (0.65 + energy * 0.45), kit });
       };
-      if (P.kick && P.kick[s]) push('kick', 1);
-      if (P.snare && P.snare[s]) push('snare', patName === 'jazz' || patName === 'bossa' ? 0.55 : 0.9);
+      if (P.kick && P.kick[s]) push('kick', patName === 'jazz' ? 0.3 : (patName === 'bossa' ? 0.55 : (patName === 'afro' ? 0.7 : 1)));
+      if (patName === 'jazz') {
+        /* 爵士军鼓 = 反拍应答 comping，不是摇滚式 backbeat */
+        if (P.snare && P.snare[s] && rng() < 0.35) push('snare', 0.5);
+        if ((s === 3 || s === 7 || s === 11 || s === 14) && rng() < 0.22) push('snare', 0.32);
+      } else if (P.snare && P.snare[s]) {
+        push('snare', patName === 'bossa' ? 0.45 : 0.9);
+      }
       if (P.ghost && P.ghost[s] && rng() < 0.5) push('snare', 0.3);
       if (P.hat && P.hat[s]) {
         if (density === 'lite' && s % 4 !== 0) continue;
@@ -536,7 +547,7 @@ function genDrums() {
       }
       if (P.ohat && P.ohat[s] && density !== 'lite') push('ohat', 0.6);
       if (P.ride && P.ride[s]) push('ride', s % 4 === 0 ? 0.8 : 0.5);
-      if (P.crash && P.crash[s] && (bar % 4 === 0 || styleKey === 'rock')) push('crash', styleKey === 'rock' ? 0.55 : 0.7);
+      if (P.crash && P.crash[s] && (bar % 4 === 0 || (styleKey === 'rock' && energy > 0.55))) push('crash', styleKey === 'rock' ? 0.5 : 0.7);
       if (P.congaH && P.congaH[s]) push('congaH', 0.6);
       if (P.congaL && P.congaL[s]) push('congaL', 0.55);
       if (P.bell && P.bell[s]) push('bell', s % 4 === 0 ? 0.55 : 0.4);
@@ -545,9 +556,23 @@ function genDrums() {
         ev.filter(x => x.step16 === bar * 16 + s).forEach(x => { x._drop = true; });
       }
     }
+    /* Rock：每 4 小节末加花进下一段（Nirvana/GNR 式） */
+    if (styleKey === 'rock' && bar % 4 === 3 && bar !== bars - 1 && energy > 0.45) {
+      for (let s = 12; s < 16; s++) ev.push({ step16: bar * 16 + s, inst: 'snare', vel: 0.45 + (s - 12) * 0.15, kit });
+    }
     /* 结尾加花（Afro break 小节不加） */
     if (bar === bars - 1 && !(styleKey === 'afro' && bar % 16 === 15)) {
       for (let s = 12; s < 16; s++) ev.push({ step16: bar * 16 + s, inst: s % 2 ? 'snare' : 'hat', vel: 0.5 + (s - 12) * 0.12, kit });
+    }
+    /* Hip-Hop：32 分 hat 滚奏（每 2 小节随机一整拍）+ 偶发 16 分三连音顿奏 */
+    if (styleKey === 'hiphop') {
+      if (bar % 2 === 1) {
+        const rollBeat = 4 * Math.floor(rng() * 4);
+        for (let k = 0; k < 8; k++) ev.push({ step16: bar * 16 + rollBeat + k * 0.5, inst: 'hat', vel: 0.45 + k * 0.045, kit });
+      }
+      if (bar % 8 === 7 && rng() < 0.6) {
+        for (let k = 0; k < 6; k++) ev.push({ step16: bar * 16 + 8 + k * (2 / 3), inst: 'hat', vel: 0.4 + k * 0.05, kit });
+      }
     }
     /* 风格打击乐层：Afro 全十六分 shekere + 反拍 clap（力量鼓点）；Bossa/RnB 沙锤八分 */
     if (styleKey === 'afro') {
@@ -945,10 +970,10 @@ function restoreSampleBuses() {
 /* 微时值引擎：每轨独立的 timing profile（真实演奏各声部前后不一）+ 乐句内 rubato */
 const TIMING_PROFILE = {
   rnb:   { drums: 0.010, hat: -0.006, bass: 0.012, keys: 0.020, melody: 0.018, pad: 0.008 }, /* 推-拉：鼓抢拍/和声躺（D'Angelo 系） */
-  jazz:  { drums: 0.006, hat: -0.004, bass: 0.008, keys: 0.006, melody: 0.010, pad: 0.004 },
+  jazz:  { drums: 0.006, hat: -0.004, bass: 0.008, keys: 0.010, melody: 0.016, pad: 0.004 }, /* 独奏在镲后：behind the beat */
   rock:  { drums: -0.002, hat: 0.0, bass: 0.0, keys: 0.0, melody: 0.0, pad: 0.0 },
   bossa: { drums: 0.004, hat: -0.003, bass: 0.006, keys: 0.003, melody: 0.006, pad: 0.002 },
-  afro:  { drums: 0.006, hat: 0.002, bass: 0.0, keys: 0.0, melody: 0.0, pad: 0.0 }, /* 论文：Afrobeat 鼓略早于网格 */
+  afro:  { drums: 0.006, hat: 0.002, bass: 0.0, keys: 0.0, melody: 0.004, pad: 0.002 }, /* 论文：Afrobeat 鼓略早于网格 */
   hiphop:{ drums: 0.004, hat: -0.005, bass: 0.0, keys: 0.003, melody: 0.012, pad: 0.003 },
 };
 function voiceOff(styleKey, voice, beat) {
@@ -1619,11 +1644,11 @@ function applyStyleFx(styleKey) {
 /* ---------- 风格整体配置：切换风格 = 整套编曲画面变换 ---------- */
 const STYLE_SETUP = {
   rnb:   { guitar: 'clean',  keys: 'comp',  drums: 'full',  swing: 22, bpm: 85,  synth: 'choir' },
-  jazz:  { guitar: 'jazz',   keys: 'comp',  drums: 'auto',  swing: 32, bpm: 110, synth: 'warm' },
+  jazz:  { guitar: 'jazz',   keys: 'comp',  drums: 'auto',  swing: 41, bpm: 110, synth: 'warm' }, /* swing 2.39:1 偏好窗口 */
   rock:  { guitar: 'dist',   keys: 'auto',  drums: 'drive', swing: 0,  bpm: 122, synth: 'sweep' },
-  bossa: { guitar: 'nylon',  keys: 'auto',  drums: 'auto',  swing: 10, bpm: 138, synth: 'warm' },
-  afro:  { guitar: 'clean',  keys: 'auto',  drums: 'drive', swing: 12, bpm: 104, synth: 'halo' },
-  hiphop:{ guitar: 'clean',  keys: 'pad',   drums: 'auto',  swing: 0,  bpm: 92,  synth: 'halo' },
+  bossa: { guitar: 'nylon',  keys: 'auto',  drums: 'auto',  swing: 2,  bpm: 78,  synth: 'warm' }, /* 138=Samba，78 才是 Bossa */
+  afro:  { guitar: 'clean',  keys: 'auto',  drums: 'drive', swing: 4,  bpm: 104, synth: 'halo' },
+  hiphop:{ guitar: 'clean',  keys: 'pad',   drums: 'auto',  swing: 0,  bpm: 140, synth: 'halo' }, /* trap 标准速度 */
 };
 
 function setStyles(list) {

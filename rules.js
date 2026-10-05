@@ -59,7 +59,7 @@ function ruleTonality() {
 
 /* ---- 2. 鼓密度预算 ---- */
 const DRUM_BUDGET = { rnb: 24, jazz: 16, rock: 22, bossa: 20, afro: 34, hiphop: 18 };
-const SNARE_WHITELIST = { rnb: [4, 12], jazz: [4, 12], rock: [4, 12], bossa: [4, 12], afro: null, hiphop: [8] };
+const SNARE_WHITELIST = { rnb: [4, 12], jazz: [4, 12], rock: [4, 12], bossa: [3, 4, 6, 8, 11, 12, 14], afro: null, hiphop: [8] };
 function ruleDrumBudget() {
   const bars = totalBars();
   const minKickGapSteps = Math.max(1, Math.round(0.09 / secPer16())); /* kick ≥90ms 去连击 */
@@ -129,6 +129,7 @@ function ruleKickBassInterlock() {
   const nearKick = s => { for (let k = s - gapSteps; k <= s + gapSteps; k++) if (kickSteps.has(k)) return true; return false; };
   for (const e of bassEvents) {
     const s = Math.round(e.beat * 4);
+    if (e.b808 && e.slideTo !== undefined) continue; /* 808 抢拍滑音是有意为之，不被互锁挪走 */
     if (!nearKick(s)) continue;
     let placed = false;
     for (const cand of [s + 1, s + 2, s - 1, s - 2]) {
