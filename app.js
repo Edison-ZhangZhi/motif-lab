@@ -228,6 +228,16 @@ function genMelody() {
       const rel = (anchor % 12) + cell.iv[i] - ch0.rootPC;   // 相对原和弦根
       let pc = ((chord.rootPC + rel) % 12 + 12) % 12;
       const strong = on % 4 === 0;
+      if (!strong && !chord.scalePCs.includes(pc)) {
+        /* 弱拍也要落在调式音阶内：跨和弦平移只保音程不保调性，
+           小和弦的和弦音平移到主和弦可能变调外音（如 F#m 的 A → Amaj9 的 C） */
+        let bestPc = pc, bd2 = 99;
+        for (const spc of chord.scalePCs) {
+          const d = Math.min(Math.abs(spc - pc), 12 - Math.abs(spc - pc));
+          if (d < bd2) { bd2 = d; bestPc = spc; }
+        }
+        pc = bestPc;
+      }
       if (strong && !chord.pcs.includes(pc)) {
         /* 强拍 snap 到最近和弦音 */
         let bestPc = pc, bd = 99;
@@ -1421,12 +1431,14 @@ async function auditionChord(i) {
  * MIDI 导出（SMF format 0，PPQ=96）
  * ============================================================ */
 function buildMidi() {
-  const PPQ = 96, tpb = PPQ / 4; // 每拍 ticks
+  const PPQ = 96, tpb = PPQ; // 每拍 ticks = PPQ（每四分音符）——修复 4 倍时间压缩
   const ev = [];                 // {tick, order, bytes}
   const meta = (tick, type, data) => ev.push({ tick, order: 0, bytes: [0xFF, type, data.length, ...data] });
   const totalTicks = totalBars() * 4 * tpb;
   const noteOn = (tick, ch, note, vel) => ev.push({ tick, order: 2, bytes: [0x90 | ch, note, vel] });
   const noteOff = (tick, ch, note) => ev.push({ tick, order: 1, bytes: [0x80 | ch, note, 0] });
+  /* swing 对齐：与 Tone.Transport.swing('16n') 一致，奇数 16 分位移 */
+  const swingAdd = pos16 => (Math.round(pos16) % 2 === 1 ? Math.round(state.swing * tpb / 4) : 0);
   const notePair = (t, dur, ch, note, vel) => {
     if (t >= totalTicks) return;
     noteOn(t, ch, note, vel);
@@ -1442,17 +1454,17 @@ function buildMidi() {
   ev.push({ tick: 0, order: 0, bytes: [0xC2, 33] });
 
   for (const e of melodyEvents) {
-    const t = Math.round(e.beat * tpb);
+    const t = Math.round(e.beat * tpb) + swingAdd(e.beat * 4);
     const dur = Math.round(e.dur * tpb);
     notePair(t, dur, 0, e.midi, clamp(Math.round(e.vel * 127), 25, 127));
   }
   for (const e of keysEvents) {
-    const t = Math.round(e.beat * tpb);
+    const t = Math.round(e.beat * tpb) + swingAdd(e.beat * 4);
     const dur = Math.round(e.dur * tpb);
     for (const n of e.notes) notePair(t, dur, 1, n, clamp(Math.round(e.vel * 127), 20, 110));
   }
   for (const e of bassEvents) {
-    const t = Math.round(e.beat * tpb);
+    const t = Math.round(e.beat * tpb) + swingAdd(e.beat * 4);
     const dur = Math.round(e.dur * tpb);
     notePair(t, dur, 2, e.midi, clamp(Math.round(e.vel * 127), 25, 120));
   }
@@ -1460,13 +1472,13 @@ function buildMidi() {
   const PAD_PROGRAM = { halo: 95, sweep: 96, warm: 90, choir: 92, strings: 51, polysynth: 91 };
   ev.push({ tick: 0, order: 0, bytes: [0xC3, PAD_PROGRAM[state.layers.synth.patch] || 90] });
   for (const e of synthEvents) {
-    const t = Math.round(e.beat * tpb);
+    const t = Math.round(e.beat * tpb) + swingAdd(e.beat * 4);
     const dur = Math.round(e.dur * tpb);
     for (const n of e.notes) notePair(t, dur, 3, n, clamp(Math.round(e.vel * 127 * 1.4), 15, 100));
   }
   const DRUM_GM = { kick: 36, snare: 38, hat: 42, ohat: 46, ride: 51, congaH: 63, congaL: 64, crash: 49 };
   for (const e of drumEvents) {
-    const t = Math.round(e.step16 * tpb / 4);
+    const t = Math.round(e.step16 * tpb / 4) + swingAdd(e.step16);
     const note = DRUM_GM[e.inst]; if (note === undefined) continue;
     notePair(t, Math.round(tpb / 4), 9, note, clamp(Math.round(e.vel * 127), 20, 127));
   }
