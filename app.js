@@ -35,7 +35,7 @@ const state = {
     guitar: { on: true, vol: 0.8, patch: 'crunch' },
     keys:   { on: true, vol: 0.55, patch: 'comp' },
     bass:   { on: true, vol: 0.7, patch: 'auto' },
-    drums:  { on: true, vol: 0.8, patch: 'auto' },
+    drums:  { on: true, vol: 0.9, patch: 'auto' },
     synth:  { on: true, vol: 0.45, patch: 'halo' },
   },
   playing: false,
@@ -179,10 +179,11 @@ function genMelody() {
     const reuse = lastCell && (isAfro ? (g % 2 === 1) : (cellRng() < params.rep));
     if (reuse && lastCell) {
       cell = { r: lastCell.r.slice(), iv: lastCell.iv.slice() };
-      if (isAfro || rng() < 0.5) { /* 呼应：反向或变尾 */
-        if (isAfro && g % 2 === 1) cell.iv = cell.iv.map(v => -v);
-        else if (cellRng() < 0.6) cell.iv[cell.iv.length - 1] += (cellRng() < 0.5 ? 2 : -2);
-      }
+      const rv = rng();
+      if (isAfro && g % 2 === 1) cell.iv = cell.iv.map(v => -v);       /* 呼应：反向 */
+      else if (rv < 0.35) cell.iv[cell.iv.length - 1] += (cellRng() < 0.5 ? 2 : -2); /* 变尾 */
+      else if (rv < 0.6) cell.iv = cell.iv.map(v => v + (cellRng() < 0.5 ? 2 : -2)); /* 模进：整体平移 */
+      else if (rv < 0.75) cell.r = cell.r.map((r2, i) => i === cell.r.length - 1 ? Math.max(0, r2 - 1) : r2); /* 尾音提前一个16分 */
     } else {
       let pool = (CELL_LIB[styleKey] || CELL_LIB.rnb).slice();
       /* 文本偏好过滤：级进/跳进 */
@@ -504,21 +505,35 @@ function genSynthPad() {
     const keyForVoicing = state.styles.length > 1 ? state.styles[bar % state.styles.length] : state.styles[0];
     const voicing = chooseVoicing(styleVoicingPcs(chord.pcs, keyForVoicing), prevVoicing);
     prevVoicing = voicing;
+    const energy = sectionAt(bar).energy;
+    /* 呼吸：弱段多休止，不再每小节必响（收束句保留） */
+    const restP = energy < 0.4 ? 0.5 : energy < 0.7 ? 0.28 : 0.12;
+    if (rng() < restP && bar % 4 !== 3) continue;
+    /* 变化进入点：不再永远第 1 拍 */
+    const entryR = rng();
+    const entry = entryR < 0.58 ? 0 : entryR < 0.78 ? 1 : entryR < 0.92 ? 1.5 : 2.5;
     if (patch === 'sweep') {
       /* Rock：隔小节低音铺底，给失真吉他让位 */
       if (bar % 2 === 0) ev.push({ beat: bar * 4, notes: voicing.slice(0, 2), dur: 7.6, vel: 0.32 + rng() * 0.06 });
     } else if (patch === 'warm') {
       /* Jazz/Bossa：2+2 呼吸式短铺，留出 walking bass 的空间 */
-      ev.push({ beat: bar * 4, notes: voicing, dur: 1.85, vel: 0.28 + rng() * 0.06 });
+      ev.push({ beat: bar * 4 + entry, notes: voicing, dur: 1.85, vel: 0.28 + rng() * 0.06 });
       if (rng() < 0.6) ev.push({ beat: bar * 4 + 2, notes: voicing, dur: 1.7, vel: 0.24 + rng() * 0.05 });
     } else if (patch === 'halo') {
       /* Afro/Hip-Hop：长铺但减力减花，黑暗空间感 */
-      ev.push({ beat: bar * 4, notes: voicing, dur: 3.9, vel: 0.22 + rng() * 0.05 });
+      ev.push({ beat: bar * 4 + entry, notes: voicing, dur: Math.max(1.2, 3.9 - entry), vel: 0.22 + rng() * 0.05 });
       if (rng() < 0.12) ev.push({ beat: bar * 4 + 2, notes: voicing.map(n => Math.min(n + 12, 96)), dur: 0.5, vel: 0.12 });
     } else {
       /* choir 等：长音铺底，八度点缀降为 20% */
-      ev.push({ beat: bar * 4, notes: voicing, dur: 3.9, vel: 0.3 + rng() * 0.08 });
+      ev.push({ beat: bar * 4 + entry, notes: voicing, dur: Math.max(1.2, 3.9 - entry), vel: 0.3 + rng() * 0.08 });
       if (rng() < 0.2) ev.push({ beat: bar * 4 + 2, notes: voicing.map(n => Math.min(n + 12, 96)), dur: 0.5, vel: 0.15 });
+    }
+    /* 抢拍预示：18% 概率在前一小节末 16 分提前涌入（swell） */
+    if (bar > 0 && rng() < 0.18) ev.push({ beat: bar * 4 - 0.25, notes: voicing, dur: 0.4, vel: 0.12 });
+    /* 高音色彩声部：25% 在第 3 拍后半拍点最高音 → pad 有自己的"旋律线" */
+    if (rng() < 0.25) {
+      const top = voicing[voicing.length - 1];
+      ev.push({ beat: bar * 4 + 2.5, notes: [Math.min(top + 12, 96)], dur: 0.6, vel: 0.14 + rng() * 0.06 });
     }
   }
   synthEvents = ev;
@@ -539,12 +554,13 @@ function genDrums() {
     const density = state.layers.drums.patch;
     const kit = DRUM_KITS[state.layers.drums.patch === '808' ? 's808' : state.layers.drums.patch === 'beach' ? 'beach' : styleKey] || DRUM_KITS.rnb;
     for (let s = 0; s < 16; s++) {
+      const arc = [0.92, 0.97, 1.0, 1.06]; /* v2 四小节呼吸弧：第 4 小节冲刺进下一段 */
       const push = (inst, vel) => {
         const essential = inst === 'kick' || inst === 'snare';
         if (!essential && rng() > energy + 0.35) return; /* 低能量段裁掉装饰音 */
-        ev.push({ step16: bar * 16 + s, inst, vel: vel * (0.65 + energy * 0.45), kit });
+        ev.push({ step16: bar * 16 + s, inst, vel: vel * (0.65 + energy * 0.45) * arc[bar % 4], kit });
       };
-      if (P.kick && P.kick[s]) push('kick', patName === 'jazz' ? 0.3 : (patName === 'bossa' ? 0.55 : (patName === 'afro' ? 0.7 : 1)));
+      if (P.kick && P.kick[s]) push('kick', (patName === 'jazz' ? 0.3 : (patName === 'bossa' ? 0.55 : (patName === 'afro' ? 0.7 : 1))) * (s % 4 === 0 ? 1.0 : 0.85)); /* v2 kick 重音弹跳 */
       if (patName === 'jazz') {
         /* 爵士军鼓 = 反拍应答 comping，不是摇滚式 backbeat */
         if (P.snare && P.snare[s] && rng() < 0.35) push('snare', 0.5);
@@ -687,7 +703,7 @@ function buildAudio() {
 
   /* --- 鼓组 --- */
   AE.drumsVol = new Tone.Volume(-6); /* 路由在音色链创建后建立 */
-  AE.drumsComp = new Tone.Compressor(-14, 4); /* 力量感：鼓总线压缩 */
+  AE.drumsComp = new Tone.Compressor(-16, 3.5); /* v2：全鼓挤进同一动态包络，一起呼吸 */
   AE.kick = new Tone.MembraneSynth({
     pitchDecay: 0.045, octaves: 6,
     envelope: { attack: 0.001, decay: 0.38, sustain: 0, release: 0.1 },
@@ -761,7 +777,7 @@ function buildAudio() {
   AE.drumsComp.connect(AE.toneDistDrums);
   /* 鼓房间声：0.45s 短混响 send（kick/snare 的"房间麦"，鼓机→真鼓） */
   AE.drumRoom = new Tone.Reverb({ decay: 0.45, wet: 1 }).connect(AE.master);
-  AE.drumRoomSend = new Tone.Gain(0.16).connect(AE.drumRoom);
+  AE.drumRoomSend = new Tone.Gain(0.24).connect(AE.drumRoom); /* v2：鼓件共享同一"房间" */
   AE.drumsComp.connect(AE.drumRoomSend);
 
   /* --- 808 鼓组（经典 TR-808 合成复刻，808 本身就是合成鼓机） --- */
@@ -877,7 +893,7 @@ function loadGuitarSamples() {
     }
   }
 }
-function playGuitarReal(patch, midi, t, dur, vel) {
+function playGuitarReal(patch, midi, t, dur, vel, slideFrom) {
   const set = GUITAR_PATCH_MAP[patch] || 'electric';
   const bank = GUITAR_SAMP.buffers[set] || {};
   const keys = Object.keys(bank).map(Number);
@@ -892,6 +908,24 @@ function playGuitarReal(patch, midi, t, dur, vel) {
   const src = raw.createBufferSource();
   src.buffer = bank[best];
   src.playbackRate.value = Math.pow(2, (midi - best) / 12) * (1 + (Math.random() * 0.01 - 0.005));
+  if (slideFrom && slideFrom !== midi && Math.abs(midi - slideFrom) <= 7) {
+    /* 滑音：从前一音高滑到目标（≤7 半音才滑，大跳保持干净分离） */
+    src.playbackRate.setValueAtTime(Math.pow(2, (slideFrom - best) / 12), t);
+    src.playbackRate.exponentialRampToValueAtTime(Math.pow(2, (midi - best) / 12), t + 0.07);
+  } else if (dur >= 0.5) {
+    /* 长音揉弦：~5Hz 微幅颤音，0.25s 后进入（真人习惯），收尾渐停 */
+    const cents = midi >= 70 ? 9 : 6;
+    const depth = src.playbackRate.value * (Math.pow(2, cents / 1200) - 1);
+    const vib = raw.createOscillator();
+    const vg = raw.createGain();
+    vib.frequency.value = 5.1 + Math.random() * 0.7;
+    vg.gain.setValueAtTime(0, t);
+    vg.gain.linearRampToValueAtTime(depth, t + 0.25);
+    vg.gain.setValueAtTime(depth, t + Math.max(0.3, dur - 0.1));
+    vg.gain.linearRampToValueAtTime(0, t + dur + 0.1);
+    vib.connect(vg); vg.connect(src.playbackRate);
+    vib.start(t); vib.stop(t + dur + 0.15);
+  }
   const g = raw.createGain();
   g.gain.setValueAtTime(0.0001, t);
   g.gain.exponentialRampToValueAtTime(Math.max(vel, 0.05), t + 0.012);
@@ -901,13 +935,13 @@ function playGuitarReal(patch, midi, t, dur, vel) {
   src.start(t); src.stop(t + dur + 0.4);
   /* 双轨录制：厚度>0.5 时叠第二轨（±声像/微延迟/微失谐） */
   const th = state.tone.guitar ? state.tone.guitar.t : 0.2;
-  if (th > 0.5) {
+  if (th > 0.08) { /* 默认双轨：t=0.15 的 RnB/Jazz 不再是单薄单轨 */
     const raw2 = Tone.getContext().rawContext;
     const src2 = raw2.createBufferSource();
     src2.buffer = bank[best];
     src2.playbackRate.value = Math.pow(2, (midi - best) / 12) * 1.006;
     const g2 = raw2.createGain();
-    const v2 = vel * 0.55;
+    const v2 = vel * (0.25 + th * 0.6); /* t=0.5 时与旧版 0.55 一致 */
     g2.gain.setValueAtTime(0.0001, t + 0.012);
     g2.gain.exponentialRampToValueAtTime(Math.max(v2, 0.03), t + 0.024);
     g2.gain.setValueAtTime(Math.max(v2, 0.03), t + Math.max(0.05, dur - 0.1));
@@ -1008,6 +1042,8 @@ const DRUM_GAIN = { shekere: 1.3, shaker: 0.9, snap: 1.1, clap: 1.3, hat_808: 0.
 function playDrumSample(name, t, vel) {
   const buf = DRUM_SAMP.buffers[name];
   if (!buf || !DRUM_SAMP.bus) return false;
+  t += Math.random() * 0.008 - 0.004; /* v2 人性化：±4ms 偏移 */
+  vel *= 1 + (Math.random() * 0.12 - 0.06); /* ±6% 力度抖动 */
   const raw = Tone.getContext().rawContext;
   const src = raw.createBufferSource();
   src.buffer = buf;
@@ -1342,12 +1378,17 @@ function scheduleAll() {
   /* 吉他旋律（优先真实采样，未就绪时回退合成音色） */
   if (state.layers.guitar.on) {
     const instName = SAMP_GUITAR[state.layers.guitar.patch] || null;
+    let prevMel = null;
     for (const e of melodyEvents) {
       const t = t16(Math.round(e.beat * 4));
       const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.95;
       const toff = voiceOff(styleOfBar(e.beat), 'melody', e.beat);
+      /* 紧邻且级进的两个音 → 滑音连接（真人吉他手的第一习惯） */
+      const slideFrom = prevMel && e.beat - prevMel.end <= 0.16 && e.midi !== prevMel.midi
+        && Math.abs(e.midi - prevMel.midi) <= 7 ? prevMel.midi : null;
+      prevMel = { midi: e.midi, end: e.beat + e.dur };
       Tone.Transport.schedule(tt => {
-        if (playGuitarReal(state.layers.guitar.patch, e.midi, tt + toff, dur, e.vel * 1.05)) return;
+        if (playGuitarReal(state.layers.guitar.patch, e.midi, tt + toff, dur, e.vel * 1.05, slideFrom)) return;
         const inst = instName && sampOf(instName, 'guitar');
         if (inst) inst.play(e.midi, tt + toff, { duration: dur, gain: e.vel * 1.1 });
         else AE.guitar.triggerAttackRelease(midiName(e.midi), dur, tt + toff, e.vel);
@@ -1687,7 +1728,7 @@ function applyTone(layer) {
     AE.sendPad.gain.value = t.s * 0.25; /* pad 自带大混响，space 发送减半防糊 */
   } else if (layer === 'drums' && AE.toneEqDrums) {
     AE.toneEqDrums.high.value = brightDb;
-    AE.toneDistDrums.distortion = t.t * 0.07; /* 轻微饱和，避免鼓毛刺 */
+    AE.toneDistDrums.distortion = Math.max(0.12, t.t * 0.07); /* v2：饱和常开底线=鼓皮粘合感 */
     AE.sendDrums.gain.value = t.s * 0.7 * perfMul;
   }
 }
