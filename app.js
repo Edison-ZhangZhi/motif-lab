@@ -1205,11 +1205,11 @@ const GUITAR_PATCH_FX = {
    afro highlife 清亮 / hiphop 闷暗 sparse hook */
 const GUITAR_STYLE_FX = {
   rnb:    { drive: 1.5, lpf: 11000, gate: 1.00, vol: 0.95 }, /* v4.3 提空气感 */
-  jazz:   { drive: 2,   lpf: 8000,  gate: 1.00, vol: 0.90 },
+  jazz:   { drive: 1.5, lpf: 7200,  gate: 1.00, vol: 0.95 }, /* v5.1 空心琴体：少推子失真、收敛高频 */
   rock:   { drive: 12,  lpf: 6800,  gate: 1.00, vol: 1.05 },
   bossa:  { drive: 0,   lpf: 12500, gate: 1.00, vol: 0.90 },
   afro:   { drive: 2,   lpf: 8800,  gate: 1.00, vol: 0.95 },
-  hiphop: { drive: 0,   lpf: 5200,  gate: 1.00, vol: 0.85 },
+  hiphop: { drive: 1.5, lpf: 4200,  gate: 0.85, vol: 0.90 }, /* v5.1 采样 chop 美学：更闷更狠，微失真给砂砾 */
 };
 const GUITAR_FX_CHAINS = {}; /* patch|style -> chain head */
 function guitarFxChain(patch, raw, styleKey) {
@@ -1262,7 +1262,7 @@ function playGuitarReal(patch, midi, t, dur, vel, slideFrom, legato, styleKey) {
   if (!keys.length) return false;
   let best = keys[0], bd = 99;
   for (const k of keys) { const d = Math.abs(k - midi); if (d < bd) { bd = d; best = k; } }
-  if (bd > 7) return false; /* 缺音区交还 SoundFont */
+  if (bd > 5) return false; /* v5.1：>5 半音 playbackRate 共振峰漂移=塑料味，交还 SoundFont */
   const fx = Object.assign({}, GUITAR_PATCH_FX[patch] || GUITAR_PATCH_FX.clean, GUITAR_STYLE_FX[styleKey] || {});
   const out = guitarFxChain(patch, Tone.getContext().rawContext, styleKey);
   if (fx.gate < 1) dur = Math.max(0.07, Math.min(dur, 0.08 + dur * fx.gate));
@@ -1290,16 +1290,17 @@ function playGuitarReal(patch, midi, t, dur, vel, slideFrom, legato, styleKey) {
     vib.start(t); vib.stop(t + dur + 0.15);
   }
   const g = raw.createGain();
-  /* v4 §2.3：换气 attack 12ms / 连线 attack 30ms（音头不再一刀齐） */
-  const atk = legato ? 0.030 : 0.012;
+  /* v5.1：attack 随机化（6~20ms/24~38ms）+ jazz 拇指柔音 ×1.6 + 轻音软起 ×1.3——消灭"每音一个模子"的机器感 */
+  const atk = (legato ? 0.024 + Math.random() * 0.014 : 0.008 + Math.random() * 0.012)
+    * (styleKey === 'jazz' ? 1.6 : 1) * (vel < 0.5 ? 1.3 : 1);
   g.gain.setValueAtTime(0.0001, t);
   g.gain.exponentialRampToValueAtTime(Math.max(vel, 0.05), t + atk);
   g.gain.setValueAtTime(Math.max(vel, 0.05), t + Math.max(0.05, dur - 0.1));
-  g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.3);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.25 + Math.random() * 0.25);
   src.connect(g); g.connect(out);
   src.start(t); src.stop(t + dur + 0.4);
   /* v4 §2.3：前一音快速闪避到 0.45×——旋律"连成线"而不是一颗颗蹦 */
-  if (GUITAR_SAMP._lastG && t - GUITAR_SAMP._lastT < 0.9 && GUITAR_SAMP._lastG !== g) { /* v4.3 闪避窗口放宽 */
+  if (GUITAR_SAMP._lastG && !legato && t - GUITAR_SAMP._lastT < 0.9 && GUITAR_SAMP._lastG !== g) { /* v5.1：连线时前音保持，断奏才闪避 */
     try {
       GUITAR_SAMP._lastG.gain.cancelScheduledValues(t);
       GUITAR_SAMP._lastG.gain.setTargetAtTime(GUITAR_SAMP._lastVel * 0.35, t, 0.012); /* v4.3 叠音残响更少 */
@@ -1320,7 +1321,7 @@ function playGuitarReal(patch, midi, t, dur, vel, slideFrom, legato, styleKey) {
     g2.gain.setValueAtTime(0.0001, t + 0.012);
     g2.gain.exponentialRampToValueAtTime(Math.max(v2, 0.03), t + 0.024);
     g2.gain.setValueAtTime(Math.max(v2, 0.03), t + Math.max(0.05, dur - 0.1));
-    g2.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.3);
+    g2.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.25 + Math.random() * 0.25);
     const pan = raw2.createStereoPanner ? raw2.createStereoPanner() : null;
     if (pan) { pan.pan.value = 0.45; g2.connect(pan); pan.connect(out); }
     else g2.connect(out);
@@ -1819,12 +1820,12 @@ function scheduleAll() {
     for (let i = 0; i < melodyEvents.length; i++) {
       const e = melodyEvents[i];
       const nx = melodyEvents[i + 1];
-      const t = t16(Math.round(e.beat * 4));
+      const t = t16(Math.round(e.beat * SPB()));
       /* v4 §2.2 tie：标记了连线的音，时值延长到下一音起音（不断开） */
       let durSteps = Math.max(1, Math.round(e.dur * 4));
       if (e.tie && nx && nx.beat - e.beat <= 2 && !nx.ghost) durSteps = Math.max(durSteps, Math.round((nx.beat - e.beat) * 4));
       const dur = durSteps * secPer16() * 0.95;
-      const toff = voiceOff(styleOfBar(e.beat), 'melody', e.beat) + baseSwingSec(e.beat * 4);
+      const toff = voiceOff(styleOfBar(e.beat), 'melody', e.beat) + baseSwingSec(e.beat * SPB());
       /* v4 §2.3 滑音放宽：tie 级进必滑（|Δ|≤2）；|Δ|≤5 且缝隙 ≤0.25 拍也滑；大跳干净分离 */
       const gapBeats = prevMel ? e.beat - prevMel.end : 99;
       const dMidi = prevMel ? e.midi - prevMel.midi : 0;
@@ -1838,13 +1839,13 @@ function scheduleAll() {
         const gduck = duckMulAt(e.beat, 0.85); /* v4.2 吉他随 kick/snare 闪避，让鼓 */
         if (src === 'sf') {
           const inst = instName && sampOf(instName, 'guitar');
-          if (inst) { inst.play(e.midi, pgt, { duration: dur, gain: e.vel * 1.1 * gduck * (e.slur ? 0.82 : 1) }); return; }
+          if (inst) { inst.play(e.midi, pgt, { duration: dur + (e.dur >= 1 ? 0.15 : 0.07), gain: e.vel * 1.05 * gduck * (e.slur ? 0.82 : 1) }); return; } /* v5.1 SF 音放尾巴，不再硬截 */
           if (playGuitarReal(state.layers.guitar.patch, e.midi, pgt, dur, e.vel * 1.05 * gduck, slideFrom, e.tie || e.slur, melStyle)) return;
           AE.guitar.triggerAttackRelease(midiName(e.midi), dur, pgt, e.vel * gduck * (e.slur ? 0.82 : 1));
         } else {
           if (playGuitarReal(state.layers.guitar.patch, e.midi, pgt, dur, e.vel * 1.05 * gduck, slideFrom, e.tie || e.slur, melStyle)) return;
           const inst = instName && sampOf(instName, 'guitar');
-          if (inst) inst.play(e.midi, pgt, { duration: dur, gain: e.vel * 1.1 * gduck });
+          if (inst) inst.play(e.midi, pgt, { duration: dur + (e.dur >= 1 ? 0.15 : 0.07), gain: e.vel * 1.05 * gduck });
           else AE.guitar.triggerAttackRelease(midiName(e.midi), dur, pgt, e.vel * gduck);
         }
       }, t);
@@ -1853,10 +1854,10 @@ function scheduleAll() {
   /* 键盘（按风格分音色：Rhodes/颤音琴/暗黑铺） */
   if (state.layers.keys.on) {
     for (const e of keysEvents) {
-      const t = t16(Math.round(e.beat * 4));
+      const t = t16(Math.round(e.beat * SPB()));
       const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.95;
       const names = e.notes.map(midiName);
-      const koff = voiceOff(styleOfBar(e.beat), 'keys', e.beat) + baseSwingSec(e.beat * 4);
+      const koff = voiceOff(styleOfBar(e.beat), 'keys', e.beat) + baseSwingSec(e.beat * SPB());
       const ks = SAMP_KEYS_BY_STYLE[styleOfBar(e.beat)] || SAMP_KEYS;
       const kduck = duckMulAt(e.beat, 0.78); /* B6：kick/snare 后和声闪避（v4.2 加深，泵感=鼓的力量感） */
       Tone.Transport.schedule(tt2 => { const tt = tt2 + koff;
@@ -1875,10 +1876,10 @@ function scheduleAll() {
   /* 合成器 Pad（v4 S2 换挡换色：音色按小节风格解析，不再整曲一个音色） */
   if (state.layers.synth.on) {
     for (const e of synthEvents) {
-      const t = t16(Math.round(e.beat * 4));
+      const t = t16(Math.round(e.beat * SPB()));
       const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.98;
       const names = e.notes.map(midiName);
-      const poff = voiceOff(styleOfBar(e.beat), 'pad', e.beat) + baseSwingSec(e.beat * 4);
+      const poff = voiceOff(styleOfBar(e.beat), 'pad', e.beat) + baseSwingSec(e.beat * SPB());
       const lag = e.padLag || 0;
       const pcfg = PAD_BY_STYLE[styleOfBar(e.beat)] || PAD_BY_STYLE.rnb;
       const padName = SAMP_PAD[pcfg.bank];
@@ -1904,14 +1905,14 @@ function scheduleAll() {
   /* 贝斯（指弹电贝斯采样）+ kick-bass ducking */
   if (state.layers.bass.on) {
     const inst = sampOf(SAMP_BASS, 'bass');
-    const kickBeats = drumEvents.filter(d => d.inst === 'kick').map(d => d.step16 / 4);
+    const kickBeats = drumEvents.filter(d => d.inst === 'kick').map(d => d.step16 / SPB());
     for (const e of bassEvents) {
       /* kick 后 120ms 内的贝斯音自动避让 -3dB（假侧链） */
       const ducked = kickBeats.some(k => { const d = e.beat - k; return d > 0.001 && d < 0.12; });
       const duckMul = ducked ? 0.7 : 1;
-      const t = t16(Math.round(e.beat * 4));
+      const t = t16(Math.round(e.beat * SPB()));
       const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.95;
-      const boff = voiceOff(styleOfBar(e.beat), 'bass', e.beat) + baseSwingSec(e.beat * 4);
+      const boff = voiceOff(styleOfBar(e.beat), 'bass', e.beat) + baseSwingSec(e.beat * SPB());
       Tone.Transport.schedule(tt => {
         if (e.b808) {
           if (!play808(e.midi, tt, dur * 1.6, e.vel, e.slideTo)) {
@@ -2220,12 +2221,12 @@ const $ = sel => document.querySelector(sel);
 
 /* 语义音色目标（方案2: 语义化EQ，MDPI 2016）：每层 亮度bright/空间space/厚度thick 0~1 */
 const STYLE_TONE = {
-  rnb:   { guitar:{b:0.50,s:0.32,t:0.10}, keys:{b:0.30,s:0.50,t:0.0}, bass:{b:0.30,s:0.15,t:0.0}, pad:{b:0.25,s:0.70,t:0.0}, drums:{b:0.45,s:0.15,t:0.2} }, /* v4.3 吉他提亮+收湿声 */
-  jazz:  { guitar:{b:0.52,s:0.28,t:0.10}, keys:{b:0.35,s:0.40,t:0.0}, bass:{b:0.35,s:0.10,t:0.0}, pad:{b:0.30,s:0.50,t:0.0}, drums:{b:0.50,s:0.20,t:0.1} },
+  rnb:   { guitar:{b:0.46,s:0.30,t:0.10}, keys:{b:0.30,s:0.50,t:0.0}, bass:{b:0.30,s:0.15,t:0.0}, pad:{b:0.25,s:0.70,t:0.0}, drums:{b:0.45,s:0.15,t:0.2} }, /* v4.3 吉他提亮+收湿声 */
+  jazz:  { guitar:{b:0.44,s:0.26,t:0.10}, keys:{b:0.35,s:0.40,t:0.0}, bass:{b:0.35,s:0.10,t:0.0}, pad:{b:0.30,s:0.50,t:0.0}, drums:{b:0.50,s:0.20,t:0.1} },
   rock:  { guitar:{b:0.70,s:0.20,t:0.50}, keys:{b:0.50,s:0.20,t:0.2}, bass:{b:0.55,s:0.10,t:0.3}, pad:{b:0.40,s:0.30,t:0.2}, drums:{b:0.60,s:0.25,t:0.35} },
   bossa: { guitar:{b:0.58,s:0.30,t:0.05}, keys:{b:0.40,s:0.35,t:0.0}, bass:{b:0.35,s:0.10,t:0.0}, pad:{b:0.30,s:0.40,t:0.0}, drums:{b:0.50,s:0.20,t:0.1} },
   afro:  { guitar:{b:0.55,s:0.28,t:0.15}, keys:{b:0.50,s:0.25,t:0.1}, bass:{b:0.45,s:0.15,t:0.2}, pad:{b:0.40,s:0.30,t:0.1}, drums:{b:0.55,s:0.30,t:0.3} },
-  hiphop:{ guitar:{b:0.48,s:0.30,t:0.20}, keys:{b:0.30,s:0.65,t:0.0}, bass:{b:0.25,s:0.10,t:0.3}, pad:{b:0.25,s:0.60,t:0.0}, drums:{b:0.50,s:0.40,t:0.4} },
+  hiphop:{ guitar:{b:0.42,s:0.24,t:0.20}, keys:{b:0.30,s:0.65,t:0.0}, bass:{b:0.25,s:0.10,t:0.3}, pad:{b:0.25,s:0.60,t:0.0}, drums:{b:0.50,s:0.40,t:0.4} },
 };
 function applyTone(layer) {
   if (!AE.ready) return;
@@ -2234,8 +2235,8 @@ function applyTone(layer) {
   const brightDb = -12 + t.b * 26;
   if (layer === 'guitar' && AE.toneEqGuitar) {
     AE.toneEqGuitar.high.value = brightDb;
-    AE.toneEqGuitar.low.value = -4 + t.t * 6;
-    AE.toneEqGuitar.mid.value = -2.5 + t.t * 5; /* v4.3 250-2500Hz 让位：糊的频段 */
+    AE.toneEqGuitar.low.value = -2 + t.t * 4;
+    AE.toneEqGuitar.mid.value = 0.5 + t.t * 2.5; /* v5.1 琴体归位：塑料感=中频掏空，糊该由低频频段管 */
     AE.toneDistGuitar.distortion = t.t * 0.35;
     AE.sendGuitar.gain.value = t.s * 0.65 * perfMul; /* v4.3 混响发送收敛 */
   } else if (layer === 'keys' && AE.toneEqKeys) {
