@@ -345,6 +345,7 @@ function genMelody() {
 
   /* v4 M4-M6 + 连线标记：切分拖拍 / 装饰语汇 / 轮廓约束 / tie-breath */
   postMelodyCraft(events, rng, firstParams);
+  melodyFlowPass(events, rng, firstStyle); /* v4.2 流动性整形 */
   /* 排序 + 终止：尾音落最后和弦根/三/五 */
   events.sort((a, b) => a.beat - b.beat);
   if (events.length) {
@@ -360,6 +361,46 @@ function genMelody() {
   }
   melodyEvents = events;
   state._params = firstParams;
+}
+
+/* ================= v4.2 流动性整形：跨组连线 + 乐句力度拱 + 圆滑音标记 =================
+   线上 v4.1 实测：组内衔接率 86-91%，但组与组之间仍"断气"——乐句级流动性靠本通道补齐 */
+const FLOW_SUS_BEATS = { rnb: 4, jazz: 3.5, bossa: 3.5, rock: 3, afro: 2, hiphop: 4 };
+function melodyFlowPass(events, rng, styleKey) {
+  if (!events.length) return;
+  const core = events.filter(e => !e.ghost).sort((a, b) => a.beat - b.beat);
+  const susCap = FLOW_SUS_BEATS[styleKey] || 3;
+  /* 1) 跨组连线：时值延伸到下一 onset（风格上限内），乐句内部不许断气 */
+  for (let i = 0; i < core.length; i++) {
+    const e = core[i];
+    const nxt = i + 1 < core.length ? core[i + 1] : null;
+    const gap = nxt ? nxt.beat - e.beat : susCap;
+    e.dur = clamp(Math.min(gap, susCap), 0.25, susCap);
+  }
+  /* 2) 乐句力度拱：组内正弦拱（中段最强）、组尾 taper、组头轻 accent——真实乐手的呼吸 */
+  const GROUP_BEATS = 8;
+  let gs = Math.floor(core[0].beat / GROUP_BEATS) * GROUP_BEATS;
+  let phrase = [];
+  const flush = () => {
+    if (!phrase.length) return;
+    phrase.forEach((e, j) => {
+      const pos = phrase.length > 1 ? j / (phrase.length - 1) : 0.5;
+      e.vel *= 0.88 + 0.24 * Math.sin(Math.PI * pos);
+      if (j === phrase.length - 1) e.vel *= 0.85;
+      if (j === 0) e.vel = Math.min(1, e.vel + 0.04);
+    });
+    phrase = [];
+  };
+  for (const e of core) {
+    if (e.beat >= gs + GROUP_BEATS) { flush(); gs = Math.floor(e.beat / GROUP_BEATS) * GROUP_BEATS; }
+    phrase.push(e);
+  }
+  flush();
+  /* 3) 圆滑音：贴接且级进 → 后音标记 slur（演奏层轻奏，hammer-on 感） */
+  for (let i = 0; i + 1 < core.length; i++) {
+    const e = core[i], n = core[i + 1];
+    if (n.beat - (e.beat + e.dur) <= 0.06 && n.midi !== e.midi && Math.abs(n.midi - e.midi) <= 2) n.slur = true;
+  }
 }
 
 /* ================= v4 旋律后处理（M4 切分拖拍 / M5 装饰语汇 / M6 轮廓约束 / §2.2 连线标记） ================= */
@@ -726,13 +767,13 @@ function genSynthPad() {
 }
 
 /* ============ v4 鼓组声部系统（B1-B6）：实测鼓型 + 重音 + 互锁 + 配比 + 段落鼓型 ============ */
-const DRUM_PRESENCE = { /* v4.1 整体上调：鼓必须顶穿混音 */
-  afro:   { kick: 0,    snare: +2, perc: +3 }, /* Fela 打击乐群前置 */
-  hiphop: { kick: +3.5, snare: +1, perc: +1 },
-  rnb:    { kick: +2.5, snare: +1, perc: +1 },
-  rock:   { kick: +2,   snare: +2, perc: 0  },
-  jazz:   { kick: -1,   snare: +1, perc: +1 },
-  bossa:  { kick: +1,   snare: +1, perc: +2 },
+const DRUM_PRESENCE = { /* v4.2 再提一档 +1dB */
+  afro:   { kick: +1,   snare: +3, perc: +4 }, /* Fela 打击乐群前置 */
+  hiphop: { kick: +4.5, snare: +2, perc: +2 },
+  rnb:    { kick: +3.5, snare: +2, perc: +2 },
+  rock:   { kick: +3,   snare: +3, perc: +1 },
+  jazz:   { kick: 0,    snare: +2, perc: +2 },
+  bossa:  { kick: +2,   snare: +2, perc: +3 },
 };
 function genDrums() {
   const rng = mulberry32((curSeed ^ 0xD00D) >>> 0);
@@ -958,8 +999,8 @@ function buildAudio() {
   AE.drumsVol = new Tone.Volume(-5); /* 路由在音色链创建后建立；v4.1 前置一档 */
   AE.drumsComp = new Tone.Compressor(-16, 3.5); /* v2：全鼓挤进同一动态包络，一起呼吸 */
   /* v4.1 NY 并行压缩：重压缩副本 0.4 混入——kick/snare 永远顶穿混音 */
-  AE.drumsPar = new Tone.Compressor(-28, 8);
-  AE.drumsParGain = new Tone.Gain(0.4);
+  AE.drumsPar = new Tone.Compressor(-32, 10); /* v4.2 更重：底鼓军鼓压平混音 */
+  AE.drumsParGain = new Tone.Gain(0.55);
   AE.kick = new Tone.MembraneSynth({
     pitchDecay: 0.045, octaves: 6,
     envelope: { attack: 0.001, decay: 0.38, sustain: 0, release: 0.1 },
@@ -1106,7 +1147,7 @@ const GUITAR_SETS = {
 const GUITAR_PATCH_MAP = { clean:'electric', crunch:'electric', dist:'electric', jazz:'electric', muted:'electric', harmonics:'electric', delay:'electric', steel:'acoustic', nylon:'acoustic' };
 /* v4 吉他双源（§2.1）：rnb/jazz/bossa = SoundFont 连音乐句（滑音/长音可控）；
    rock/hiphop/afro = 真实单音采样（颗粒/riff 质感优先），SoundFont 兜底 */
-const GUITAR_SRC_BY_STYLE = { rnb: 'sf', jazz: 'sf', bossa: 'sf', rock: 'samp', hiphop: 'samp', afro: 'samp' };
+const GUITAR_SRC_BY_STYLE = { rnb: 'samp', jazz: 'sf', bossa: 'sf', rock: 'samp', hiphop: 'samp', afro: 'samp' }; /* v4.2 rnb 走采样：滑音/揉弦/前音闪避才谈得上流动性 */
 /* 按 patch 的音色塑造：真实采样只有两套库，风格差异靠效果链分家。
    drive→线路失真量, lpf→低通, gate→音门（闷音）, vol→音量补偿 */
 const GUITAR_PATCH_FX = {
@@ -1699,7 +1740,7 @@ function applyMix() {
   AE.guitarVol.volume.value = Tone.gainToDb(state.layers.guitar.vol * state.layers.guitar.vol) - 4; /* v4.1 让位鼓组 */
   AE.keysVol.volume.value = Tone.gainToDb(state.layers.keys.vol * state.layers.keys.vol) - 7;
   AE.bassVol.volume.value = Tone.gainToDb(state.layers.bass.vol * state.layers.bass.vol) - 4;
-  AE.drumsVol.volume.value = Tone.gainToDb(state.layers.drums.vol * state.layers.drums.vol) - 1; /* 鼓要穿透垫底，推子抬高 */
+  AE.drumsVol.volume.value = Tone.gainToDb(state.layers.drums.vol * state.layers.drums.vol) + 0; /* v4.2 鼓组默认最高位 */
   AE.synthVol.volume.value = Tone.gainToDb(state.layers.synth.vol * state.layers.synth.vol) - 6;
   applyGuitarPatch();
 }
@@ -1750,14 +1791,14 @@ function scheduleAll() {
       const src = GUITAR_SRC_BY_STYLE[melStyle] || 'samp';
       Tone.Transport.schedule(tt => {
         const pgt = tt + toff;
-        const gduck = duckMulAt(e.beat, 0.9); /* v4.1 吉他随 kick/snare 闪避，让鼓 */
+        const gduck = duckMulAt(e.beat, 0.85); /* v4.2 吉他随 kick/snare 闪避，让鼓 */
         if (src === 'sf') {
           const inst = instName && sampOf(instName, 'guitar');
-          if (inst) { inst.play(e.midi, pgt, { duration: dur, gain: e.vel * 1.1 * gduck }); return; }
-          if (playGuitarReal(state.layers.guitar.patch, e.midi, pgt, dur, e.vel * 1.05 * gduck, slideFrom, e.tie, melStyle)) return;
-          AE.guitar.triggerAttackRelease(midiName(e.midi), dur, pgt, e.vel * gduck);
+          if (inst) { inst.play(e.midi, pgt, { duration: dur, gain: e.vel * 1.1 * gduck * (e.slur ? 0.82 : 1) }); return; }
+          if (playGuitarReal(state.layers.guitar.patch, e.midi, pgt, dur, e.vel * 1.05 * gduck, slideFrom, e.tie || e.slur, melStyle)) return;
+          AE.guitar.triggerAttackRelease(midiName(e.midi), dur, pgt, e.vel * gduck * (e.slur ? 0.82 : 1));
         } else {
-          if (playGuitarReal(state.layers.guitar.patch, e.midi, pgt, dur, e.vel * 1.05 * gduck, slideFrom, e.tie, melStyle)) return;
+          if (playGuitarReal(state.layers.guitar.patch, e.midi, pgt, dur, e.vel * 1.05 * gduck, slideFrom, e.tie || e.slur, melStyle)) return;
           const inst = instName && sampOf(instName, 'guitar');
           if (inst) inst.play(e.midi, pgt, { duration: dur, gain: e.vel * 1.1 * gduck });
           else AE.guitar.triggerAttackRelease(midiName(e.midi), dur, pgt, e.vel * gduck);
@@ -1773,7 +1814,7 @@ function scheduleAll() {
       const names = e.notes.map(midiName);
       const koff = voiceOff(styleOfBar(e.beat), 'keys', e.beat) + baseSwingSec(e.beat * 4);
       const ks = SAMP_KEYS_BY_STYLE[styleOfBar(e.beat)] || SAMP_KEYS;
-      const kduck = duckMulAt(e.beat, 0.84); /* B6：kick/snare 后和声闪避 */
+      const kduck = duckMulAt(e.beat, 0.78); /* B6：kick/snare 后和声闪避（v4.2 加深，泵感=鼓的力量感） */
       Tone.Transport.schedule(tt2 => { const tt = tt2 + koff;
         const gi = e.inst && e.inst.startsWith('guitar:') ? e.inst.slice(7) : null;
         const gInst = gi && sampOf(SAMP_GUITAR[gi], 'guitar');
@@ -1798,7 +1839,7 @@ function scheduleAll() {
       const pcfg = PAD_BY_STYLE[styleOfBar(e.beat)] || PAD_BY_STYLE.rnb;
       const padName = SAMP_PAD[pcfg.bank];
       const inst = (padName && sampOf(padName, 'pad')) || null;
-      const pduck = duckMulAt(e.beat, 0.79); /* B6：kick 后 pad 闪避更深 */
+      const pduck = duckMulAt(e.beat, 0.74); /* B6：kick 后 pad 闪避更深 */
       Tone.Transport.schedule(tt => {
         if (inst) for (const n of e.notes) inst.play(n, tt + poff + lag, { duration: dur, gain: e.vel * 1.4 * pduck });
         else AE.synthPad.triggerAttackRelease(names, dur, tt + poff + lag, e.vel * pduck);
