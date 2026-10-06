@@ -173,6 +173,10 @@ function genMelody() {
     const energy = sectionAt(bar0).energy;
     const params = mergeDna(styleKey, baseParams);
     const isAfro = styleKey === 'afro';
+    /* v4 M1/M2 问答句结构：偶数组=问（上扬悬停 2/6 级），奇数组=答（尾反转落解决音） */
+    const isQuestion = g % 2 === 0;
+    /* M3 副歌加密：副歌/高能量段密度 +0.15 */
+    const effDensity = clamp(params.density + (energy > 0.7 ? 0.15 : 0), 0, 1);
 
     /* 选细胞：复用(重复/呼应)或新选 */
     let cell;
@@ -180,7 +184,7 @@ function genMelody() {
     if (reuse && lastCell) {
       cell = { r: lastCell.r.slice(), iv: lastCell.iv.slice() };
       const rv = rng();
-      if (isAfro && g % 2 === 1) cell.iv = cell.iv.map(v => -v);       /* 呼应：反向 */
+      if ((isAfro || (!isQuestion && cellRng() < 0.5)) && g % 2 === 1) cell.iv = cell.iv.map(v => -v); /* 呼应/答句：反向 */
       else if (rv < 0.35) cell.iv[cell.iv.length - 1] += (cellRng() < 0.5 ? 2 : -2); /* 变尾 */
       else if (rv < 0.6) cell.iv = cell.iv.map(v => v + (cellRng() < 0.5 ? 2 : -2)); /* 模进：整体平移 */
       else if (rv < 0.75) cell.r = cell.r.map((r2, i) => i === cell.r.length - 1 ? Math.max(0, r2 - 1) : r2); /* 尾音提前一个16分 */
@@ -193,8 +197,8 @@ function genMelody() {
           : baseParams.stepP < 0.45 ? pool.filter(c => avg(c) >= 3) : pool;
         if (wanted.length) pool = wanted;
       }
-      /* 密度限制 onset 数 */
-      const maxOn = params.density > 0.6 ? 6 : params.density < 0.3 ? 2 : 4;
+      /* 密度限制 onset 数（用组级 effDensity） */
+      const maxOn = effDensity > 0.6 ? 6 : effDensity < 0.3 ? 2 : 4;
       const fit = pool.filter(c => c.r.length <= maxOn + 1);
       if (fit.length) pool = fit;
       /* 走向偏好 */
@@ -204,6 +208,9 @@ function genMelody() {
         const s = c.iv[c.iv.length - 1];
         if (dirUp > 0) w *= s >= 0 ? 1.8 : 0.6;
         if (dirUp < 0) w *= s <= 0 ? 1.8 : 0.6;
+        /* M1/M2：问句偏上扬尾音、答句偏回落尾音 */
+        if (isQuestion) w *= s >= 0 ? 1.9 : 0.55;
+        else w *= s <= 0 ? 1.9 : 0.55;
         return { c, w };
       });
       let sum = tw.reduce((a, b) => a + b.w, 0), pickV = cellRng() * sum;
@@ -274,7 +281,7 @@ function genMelody() {
     }
 
     /* 高密度：组内二次陈述（整体+1小节，变化尾音），达成 4±0.5 音/小节 */
-    if (params.density > 0.6 && placed.length) {
+    if (effDensity > 0.6 && placed.length) {
       cell.r.forEach((on16b, i) => {
         const bar = bar0 + Math.floor((on16b + 16) / 16);
         if (bar >= bars) return;
@@ -298,6 +305,24 @@ function genMelody() {
     placed.forEach((p, idx) => {
       const strong = p.on16 % 4 === 0;
       const lastOfCell = idx === placed.length - 1;
+      /* M1/M2 句尾处理：问句悬停在和弦 2/6 级（不解决），答句大概率回和弦音 */
+      if (lastOfCell && !isLastGroup) {
+        const chF = chordAtBar(Math.floor(p.beat / 4));
+        if (isQuestion) {
+          const susp = [((chF.rootPC + 2) % 12 + 12) % 12, ((chF.rootPC + 9) % 12 + 12) % 12];
+          let best2 = null, bd4 = 99;
+          for (let mm = p.midi - 5; mm <= p.midi + 5; mm++) {
+            if (susp.includes(((mm % 12) + 12) % 12) && Math.abs(mm - p.midi) < bd4) { bd4 = Math.abs(mm - p.midi); best2 = mm; }
+          }
+          if (best2 !== null && bd4 <= 4) p.midi = best2;
+        } else if (cellRng() < 0.7) {
+          let best2 = null, bd4 = 99;
+          for (let mm = p.midi - 5; mm <= p.midi + 5; mm++) {
+            if (chF.pcs.includes(((mm % 12) + 12) % 12) && Math.abs(mm - p.midi) < bd4) { bd4 = Math.abs(mm - p.midi); best2 = mm; }
+          }
+          if (best2 !== null) p.midi = best2;
+        }
+      }
       let dur16 = 2;
       if (lastOfCell) dur16 = isLastGroup ? Math.max(6, 16 - p.on16 - 4) : (params.durBias > 0.55 ? 6 : 4);
       if (params.durBias < 0.3) dur16 = Math.min(dur16, 2);
@@ -311,6 +336,8 @@ function genMelody() {
     });
   }
 
+  /* v4 M4-M6 + 连线标记：切分拖拍 / 装饰语汇 / 轮廓约束 / tie-breath */
+  postMelodyCraft(events, rng, firstParams);
   /* 排序 + 终止：尾音落最后和弦根/三/五 */
   events.sort((a, b) => a.beat - b.beat);
   if (events.length) {
@@ -326,6 +353,112 @@ function genMelody() {
   }
   melodyEvents = events;
   state._params = firstParams;
+}
+
+/* ================= v4 旋律后处理（M4 切分拖拍 / M5 装饰语汇 / M6 轮廓约束 / §2.2 连线标记） ================= */
+const M5_TABLE = {
+  rnb:   { neighbor: 0.20, approach: 0.10, run: 0.20, double: 0    },
+  jazz:  { neighbor: 0.10, approach: 0.20, run: 0.15, double: 0    },
+  rock:  { neighbor: 0,    approach: 0,    run: 0.25, double: 0.15 },
+  bossa: { neighbor: 0.15, approach: 0.10, run: 0.15, double: 0    },
+  afro:  { neighbor: 0.10, approach: 0,    run: 0.20, double: 0.15 },
+  hiphop:{ neighbor: 0,    approach: 0.15, run: 0.15, double: 0.10 },
+};
+function postMelodyCraft(events, rng, params) {
+  if (!events.length) return;
+  const styleKey = state.styles[0];
+  const m5 = M5_TABLE[styleKey] || M5_TABLE.rnb;
+  const scalePCs = MODES[state.mode].offsets.map(o => (state.keyRoot + o) % 12);
+  const syncoP = (styleKey === 'rnb' || styleKey === 'jazz') ? 0.3 : (styleKey === 'hiphop' || styleKey === 'afro') ? 0.15 : 0;
+  const added = [];
+  const freeBefore = (e, i, need) => {
+    const prev = events[i - 1];
+    return !prev || e.beat - (prev.beat + prev.dur) >= need;
+  };
+  /* 调内下行第 k 级（尾 run 用） */
+  const scaleDown = (midi, k) => {
+    let m = midi;
+    for (let j = 0; j < k; j++) {
+      let best = null;
+      for (const pc of scalePCs) {
+        for (let mm = m - 1; mm >= m - 4; mm--) {
+          if (((mm % 12) + 12) % 12 === pc) { best = mm; break; }
+        }
+        if (best !== null) break;
+      }
+      if (best === null) return null;
+      m = best;
+    }
+    return m;
+  };
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+    const on16 = Math.round(e.beat * 4) % 16;
+    const nx = events[i + 1];
+    /* M4：弱拍 onset 向后拖 1/16（不顶撞下一音、不拖幽灵音） */
+    if (syncoP && on16 % 4 !== 0 && !e.ghost && rng() < syncoP) {
+      if (!nx || nx.beat - e.beat > 0.35) e.beat += 0.25;
+    }
+    /* M5 趋近音：强拍长音前插半音趋近 */
+    if (m5.approach && on16 % 4 === 0 && e.dur >= 0.75 && rng() < m5.approach && freeBefore(e, i, 0.3)) {
+      const dir = rng() < 0.5 ? -1 : 1;
+      added.push({ beat: e.beat - 0.25, midi: e.midi + dir, dur: 0.2, vel: e.vel * 0.65, ghost: true });
+    }
+    /* M5 邻音摇曳：长音前上邻音装饰 */
+    if (m5.neighbor && e.dur >= 1.25 && rng() < m5.neighbor && freeBefore(e, i, 0.3)) {
+      let nb = null;
+      for (const pc of scalePCs) {
+        const d = ((pc - (e.midi % 12)) % 12 + 12) % 12;
+        if (d >= 1 && d <= 3) { nb = e.midi + d; break; }
+      }
+      if (nb !== null && nb <= params.regHi + 2) added.push({ beat: e.beat - 0.25, midi: nb, dur: 0.2, vel: e.vel * 0.6, ghost: true });
+    }
+    /* M5 尾 run：乐句尾长音前插 3 音下行十六分 */
+    if (m5.run && on16 >= 12 && e.dur >= 1 && rng() < m5.run && freeBefore(e, i, 0.8)) {
+      for (let k = 3; k >= 1; k--) {
+        const mk = scaleDown(e.midi, k);
+        if (mk !== null && mk >= params.regLo - 2) added.push({ beat: e.beat - 0.25 * k, midi: mk, dur: 0.2, vel: e.vel * (0.42 + 0.08 * k), ghost: true });
+      }
+    }
+    /* M5 双音：强拍叠和弦音（rock/afro/hiphop 和声厚度） */
+    if (m5.double && on16 % 8 === 0 && rng() < m5.double) {
+      const ch = chordAtBar(Math.floor(e.beat / 4));
+      for (const pc of ch.pcs) {
+        const d = ((pc - (e.midi % 12)) % 12 + 12) % 12;
+        if (d === 3 || d === 4 || d === 7) {
+          added.push({ beat: e.beat, midi: e.midi + d, dur: Math.min(e.dur, 1), vel: e.vel * 0.7, ghost: true, dbl: true });
+          break;
+        }
+      }
+    }
+  }
+  events.push(...added);
+  events.sort((a, b) => a.beat - b.beat);
+  /* M6 轮廓约束：大跳后必须反向；同向三次强制转折（八度置换，保持调内） */
+  for (let i = 1; i + 1 < events.length; i++) {
+    const d1 = events[i].midi - events[i - 1].midi;
+    const d2 = events[i + 1].midi - events[i].midi;
+    if (d1 !== 0 && Math.abs(d1) > 5 && Math.sign(d2) === Math.sign(d1) && d2 !== 0) {
+      const cand = events[i + 1].midi - Math.sign(d1) * 12;
+      const ch = chordAtBar(Math.floor(events[i + 1].beat / 4));
+      if (cand >= params.regLo - 2 && cand <= params.regHi + 2 && ch.scalePCs.includes(((cand % 12) + 12) % 12)) events[i + 1].midi = cand;
+    }
+    if (i >= 2) {
+      const d0 = events[i - 1].midi - events[i - 2].midi;
+      if (d0 !== 0 && d1 !== 0 && d2 !== 0 && Math.sign(d0) === Math.sign(d1) && Math.sign(d1) === Math.sign(d2)) {
+        const cand = events[i].midi + (Math.sign(d1) > 0 ? -12 : 12);
+        const ch = chordAtBar(Math.floor(events[i].beat / 4));
+        if (cand >= params.regLo - 2 && cand <= params.regHi + 2 && ch.scalePCs.includes(((cand % 12) + 12) % 12)) events[i].midi = cand;
+      }
+    }
+  }
+  /* §2.2 连线标记：缝隙 ≤0.5 拍且级进 → tie（连奏不重新起音）；缝隙 ≥1 拍 → 换气点 */
+  for (let i = 0; i + 1 < events.length; i++) {
+    const e = events[i], nx2 = events[i + 1];
+    const gap = nx2.beat - (e.beat + e.dur);
+    if (gap <= 0.5 && gap >= -0.01 && Math.abs(nx2.midi - e.midi) <= 2 && !nx2.ghost && !nx2.dbl) e.tie = true;
+    if (gap >= 1) nx2.breath = true;
+  }
 }
 
 /* ================= 贝斯生成 ================= */
@@ -362,7 +495,9 @@ function genBass() {
       push(0, r, 0.9, 0.9);
       push(1.5, r, 0.4, 0.7);
       push(2.25, oct, 0.3, 0.65);
-      push(3, fifth, 0.4, 0.7);
+      /* N3 rnb 贝斯旋律化：50% 把第 3 拍五音换成趋向下一和弦根的趋近音（D'Angelo 式歌唱性） */
+      if (styleKey === 'rnb' && rng() < 0.5) push(3, approach, 0.4, 0.7);
+      else push(3, fifth, 0.4, 0.7);
       push(3.75, r, 0.2, 0.5);
     } else if (pat === 'bossa') {
       push(0, r, 1.4, 0.85);
@@ -455,6 +590,14 @@ function genKeys() {
     [[2, 4], [3.5, 1]], [[0.5, 2], [2.5, 2]], [[1, 1.5], [2.5, 2], [3.5, 1]],
   ];
   const BOSSA_KEYS = [[0, 2], [1.5, 2], [2.5, 2], [3, 2], [3.75, 1]];
+  /* A2 答句生成器：旋律在前半句收住（留出 ≥1 拍）→ 键盘在后半句作答（力度 ×0.55） */
+  const melodyGapAnswer = (bar, hits) => {
+    const mInBar = melodyEvents.filter(m => Math.floor(m.beat / 4) === bar);
+    if (!mInBar.length) return hits;
+    const lastOn = Math.max(...mInBar.map(m => m.beat % 4));
+    if (lastOn < 2) return hits.concat([[2.5, 0.6], [3.5, 0.5]]);
+    return hits;
+  };
   for (let bar = 0; bar < bars; bar++) {
     const chord = chordAtBar(bar);
     const keyForVoicing = state.styles.length > 1 ? state.styles[bar % state.styles.length] : state.styles[0];
@@ -473,10 +616,24 @@ function genKeys() {
       } else if (styleKey === 'bossa') {
         for (const [b, d] of BOSSA_KEYS) ev.push({ beat: bar * 4 + b, notes: voicing, dur: Math.min(d, 4 - b), vel: 0.5 + rng() * 0.1, inst: 'guitar:nylon' });
       } else if (styleKey === 'afro') {
-        const stabs = [[2, 1.5], [6, 1.5], [10, 1.5], [13, 1], [14, 2]];
+        /* A4 一疏一密（Fela 双吉他互锁）：偶数小节全 chop，奇数小节只留抢拍 stub */
+        const stabs = bar % 2 === 0 ? [[2, 1.5], [6, 1.5], [10, 1.5], [13, 1], [14, 2]] : [[13, 1], [14, 2]];
         for (const [b, d] of stabs) ev.push({ beat: bar * 4 + b / 4, notes: voicing, dur: d / 4, vel: 0.42 + rng() * 0.14, inst: 'guitar:clean' });
+      } else if (styleKey === 'hiphop') {
+        /* S6：暗黑 stab 顿奏，把空间留给 808 */
+        for (const s of [0, 7, 8, 15]) ev.push({ beat: bar * 4 + s / 4, notes: voicing, dur: 0.3, vel: 0.42 + rng() * 0.1, inst: 'keys' });
       } else {
-        for (const [b, d] of pick(rng, COMP_PATTERNS)) ev.push({ beat: bar * 4 + b, notes: voicing, dur: Math.min(d, 4 - b), vel: 0.5 + rng() * 0.15, inst: 'keys' });
+        /* rnb/jazz comping + 答句填空 */
+        let hits = pick(rng, COMP_PATTERNS).slice();
+        if (styleKey === 'rnb' || styleKey === 'jazz') hits = melodyGapAnswer(bar, hits);
+        for (const [b, d] of hits) {
+          const vel = 0.5 + rng() * 0.15;
+          ev.push({ beat: bar * 4 + b, notes: voicing, dur: Math.min(d, 4 - b), vel, inst: 'keys' });
+          /* N2 双层键盘：Rhodes 高八度轻叠层（rnb 60%，沙滩弦乐式厚度） */
+          if (styleKey === 'rnb' && rng() < 0.6) {
+            ev.push({ beat: bar * 4 + b, notes: voicing.map(n => Math.min(n + 12, 96)), dur: Math.min(d, 4 - b) * 0.6, vel: vel * 0.55, inst: 'keys', layer: 2 });
+          }
+        }
       }
     } else if (patch === 'afro') {
       /* Fela 式交错 chop：反拍十六分 + 第4拍&的抢拍 */
@@ -493,53 +650,83 @@ function genKeys() {
   keysEvents = ev;
 }
 
-/* ================= 合成器 Pad 生成 ================= */
+/* ============ v4 合成器氛围引擎（S1-S6）：存在度按风格，换挡换色，三模式 ============
+ * 合成器在每种风格都存在，但角色不同：
+ *   rnb   choir  胶感和声垫（verse 稀 → chorus 密）
+ *   jazz  strings 气息式 2+2 短铺（给 walking bass 让位）
+ *   rock  sweep  副歌门控低音铺（主歌退场，失真吉他是主角）
+ *   bossa strings 空气感点缀（Jobim 式小编制）
+ *   afro  warm   warm organ 反拍 stab（与吉他 chop 互锁）
+ *   hiphop polysynth 暗黑长铺主角（trap 氛围核心）
+ */
+const PAD_BY_STYLE = {
+  rnb:   { bank: 'choir',     presence: 0.50, attack: 'slow', lpf: 5200, mode: 'pad',  vol: 0.90 },
+  jazz:  { bank: 'strings',   presence: 0.12, attack: 'slow', lpf: 6200, mode: 'air',  vol: 0.60 },
+  rock:  { bank: 'sweep',     presence: 0.18, attack: 'gate', lpf: 3800, mode: 'gate', vol: 0.70 },
+  bossa: { bank: 'strings',   presence: 0.10, attack: 'slow', lpf: 6200, mode: 'air',  vol: 0.55 },
+  afro:  { bank: 'warm',      presence: 0.35, attack: 'stab', lpf: 4200, mode: 'stab', vol: 0.85 },
+  hiphop:{ bank: 'polysynth', presence: 0.65, attack: 'slow', lpf: 3400, mode: 'pad',  vol: 1.00 },
+};
 function genSynthPad() {
   const rng = mulberry32(curSeed ^ 0x5EED);
   const bars = totalBars();
   const ev = [];
   let prevVoicing = null;
-  const patch = state.layers.synth.patch;
   for (let bar = 0; bar < bars; bar++) {
     const chord = chordAtBar(bar);
-    const keyForVoicing = state.styles.length > 1 ? state.styles[bar % state.styles.length] : state.styles[0];
-    const voicing = chooseVoicing(styleVoicingPcs(chord.pcs, keyForVoicing), prevVoicing);
+    const styleKey = state.styles.length > 1 ? state.styles[bar % state.styles.length] : state.styles[0];
+    const cfg = PAD_BY_STYLE[styleKey] || PAD_BY_STYLE.rnb;
+    let voicing = chooseVoicing(styleVoicingPcs(chord.pcs, styleKey), prevVoicing);
     prevVoicing = voicing;
-    const energy = sectionAt(bar).energy;
-    /* 呼吸：弱段多休止，不再每小节必响（收束句保留） */
-    const restP = energy < 0.4 ? 0.5 : energy < 0.7 ? 0.28 : 0.12;
-    if (rng() < restP && bar % 4 !== 3) continue;
-    /* 变化进入点：不再永远第 1 拍 */
-    const entryR = rng();
-    const entry = entryR < 0.58 ? 0 : entryR < 0.78 ? 1 : entryR < 0.92 ? 1.5 : 2.5;
-    if (patch === 'sweep') {
-      /* Rock：隔小节低音铺底，给失真吉他让位 */
-      if (bar % 2 === 0) ev.push({ beat: bar * 4, notes: voicing.slice(0, 2), dur: 7.6, vel: 0.32 + rng() * 0.06 });
-    } else if (patch === 'warm') {
-      /* Jazz/Bossa：2+2 呼吸式短铺，留出 walking bass 的空间 */
-      ev.push({ beat: bar * 4 + entry, notes: voicing, dur: 1.85, vel: 0.28 + rng() * 0.06 });
-      if (rng() < 0.6) ev.push({ beat: bar * 4 + 2, notes: voicing, dur: 1.7, vel: 0.24 + rng() * 0.05 });
-    } else if (patch === 'halo') {
-      /* Afro/Hip-Hop：长铺但减力减花，黑暗空间感 */
-      ev.push({ beat: bar * 4 + entry, notes: voicing, dur: Math.max(1.2, 3.9 - entry), vel: 0.22 + rng() * 0.05 });
-      if (rng() < 0.12) ev.push({ beat: bar * 4 + 2, notes: voicing.map(n => Math.min(n + 12, 96)), dur: 0.5, vel: 0.12 });
-    } else {
-      /* choir 等：长音铺底，八度点缀降为 20% */
-      ev.push({ beat: bar * 4 + entry, notes: voicing, dur: Math.max(1.2, 3.9 - entry), vel: 0.3 + rng() * 0.08 });
-      if (rng() < 0.2) ev.push({ beat: bar * 4 + 2, notes: voicing.map(n => Math.min(n + 12, 96)), dur: 0.5, vel: 0.15 });
+    /* N1 RnB pad 跨八度 spread：3 音拉开（沙滩多层弦乐式厚度） */
+    if (styleKey === 'rnb' && voicing.length >= 3) {
+      voicing = [voicing[0], voicing[1], Math.min(voicing[voicing.length - 1] + 12, 96)];
     }
-    /* 抢拍预示：18% 概率在前一小节末 16 分提前涌入（swell） */
-    if (bar > 0 && rng() < 0.18) ev.push({ beat: bar * 4 - 0.25, notes: voicing, dur: 0.4, vel: 0.12 });
-    /* 高音色彩声部：25% 在第 3 拍后半拍点最高音 → pad 有自己的"旋律线" */
-    if (rng() < 0.25) {
+    const energy = sectionAt(bar).energy;
+    /* S1 存在度：verse→chorus 递增；段首小节必出现（和声锚点） */
+    let pEff = cfg.presence * (0.55 + energy * 0.9);
+    if (cfg.mode === 'gate') pEff *= energy > 0.7 ? 1 : 0.25;
+    const secStart = state.structure === 'song' && (bar === 0 || sectionAt(bar).name !== sectionAt(bar - 1).name);
+    if (!secStart && rng() > pEff) continue;
+    const vel0 = cfg.vol;
+    if (cfg.mode === 'stab') {
+      /* S3 Afro：warm organ 式反拍 stab，与吉他 chop 错开 */
+      for (const s of [2, 6, 10, 13, 14]) {
+        ev.push({ beat: bar * 4 + s / 4, notes: voicing.slice(0, 3), dur: 0.22, vel: (0.30 + rng() * 0.08) * vel0 });
+      }
+    } else if (cfg.mode === 'air') {
+      /* S3 Jazz/Bossa：2+2 呼吸短铺，留出 walking bass 的空间 */
+      ev.push({ beat: bar * 4, notes: voicing, dur: 1.85, vel: (0.26 + rng() * 0.05) * vel0 });
+      if (rng() < 0.6) ev.push({ beat: bar * 4 + 2, notes: voicing, dur: 1.7, vel: (0.22 + rng() * 0.05) * vel0 });
+    } else if (cfg.mode === 'gate') {
+      /* S3 Rock：隔小节低音铺底，只在高能量段进场 */
+      if (bar % 2 === 0) ev.push({ beat: bar * 4, notes: voicing.slice(0, 2), dur: 7.6, vel: (0.30 + rng() * 0.05) * vel0 });
+    } else {
+      /* 长音 pad：进入点变化，段首必在正拍 */
+      const entry = secStart ? 0 : (rng() < 0.58 ? 0 : rng() < 0.5 ? 1 : 2);
+      ev.push({ beat: bar * 4 + entry, notes: voicing, dur: Math.max(1.2, 3.9 - entry), vel: (0.28 + rng() * 0.07) * vel0 });
+      if (rng() < 0.2) ev.push({ beat: bar * 4 + 2, notes: voicing.map(n => Math.min(n + 12, 96)), dur: 0.5, vel: 0.13 * vel0 });
+    }
+    /* 抢拍预示：rnb 25% / 其余 12% 在前一小节末 16 分提前涌入（swell） */
+    if (bar > 0 && rng() < (styleKey === 'rnb' ? 0.25 : 0.12)) ev.push({ beat: bar * 4 - 0.25, notes: voicing, dur: 0.4, vel: 0.11 });
+    /* rnb 高音色彩声部：30% 在第 3 拍后半拍点最高音 → pad 有自己的"旋律线" */
+    if (styleKey === 'rnb' && rng() < 0.3) {
       const top = voicing[voicing.length - 1];
-      ev.push({ beat: bar * 4 + 2.5, notes: [Math.min(top + 12, 96)], dur: 0.6, vel: 0.14 + rng() * 0.06 });
+      ev.push({ beat: bar * 4 + 2.5, notes: [Math.min(top + 12, 96)], dur: 0.6, vel: 0.13 + rng() * 0.05 });
     }
   }
   synthEvents = ev;
 }
 
-/* ================= 鼓生成 ================= */
+/* ============ v4 鼓组声部系统（B1-B6）：实测鼓型 + 重音 + 互锁 + 配比 + 段落鼓型 ============ */
+const DRUM_PRESENCE = {
+  afro:   { kick: -2,   perc: +2   }, /* Femi Kuti：kick 混得低于贝斯，打击乐群前置 */
+  hiphop: { kick: +2.5, perc: +1   },
+  rnb:    { kick: +1.5, perc: 0    },
+  rock:   { kick: +1,   perc: 0    },
+  jazz:   { kick: -2,   perc: 0    },
+  bossa:  { kick: -3,   perc: 0    },
+};
 function genDrums() {
   const rng = mulberry32((curSeed ^ 0xD00D) >>> 0);
   const bars = totalBars();
@@ -550,37 +737,76 @@ function genDrums() {
     const energy = sectionAt(bar).energy;
     let patName = state.layers.drums.patch;
     if (patName === 'auto' || patName === '808') patName = STYLES[styleKey].drums;
-    const P = DRUM_PATTERNS[patName] || DRUM_PATTERNS.rnb;
+    /* B5 减法过渡：verse 最后一小节抽掉非正拍 kick（把能量推进副歌） */
+    const subtract = state.structure === 'song' && sectionAt(bar + 1).energy - energy > 0.3;
+    const isThinSec = energy < 0.4; /* 前奏/尾奏剥壳：只留律动轴 */
+    let P = DRUM_PATTERNS[patName] || DRUM_PATTERNS.rnb;
+    const rockChorus = patName === 'rock' && energy > 0.7;
+    if (rockChorus) P = DRUM_PATTERNS.rockChorus;
     const density = state.layers.drums.patch;
     const kit = DRUM_KITS[state.layers.drums.patch === '808' ? 's808' : state.layers.drums.patch === 'beach' ? 'beach' : styleKey] || DRUM_KITS.rnb;
+    /* B4 声部配比（dB→倍数） */
+    const pres = DRUM_PRESENCE[styleKey] || {};
+    const presMul = (inst) => {
+      const db = inst === 'kick' ? pres.kick : (inst === 'snare' || inst === 'hat' || inst === 'ohat') ? 0 : pres.perc;
+      return db ? Math.pow(10, db / 20) : 1;
+    };
+    const kickRow = (patName === 'afro' && bar % 2 === 1 && P.kickB) ? P.kickB : P.kick; /* afro 第二小节变体 */
     for (let s = 0; s < 16; s++) {
-      const arc = [0.92, 0.97, 1.0, 1.06]; /* v2 四小节呼吸弧：第 4 小节冲刺进下一段 */
+      const arc = [0.92, 0.97, 1.0, 1.06]; /* 四小节呼吸弧：第 4 小节冲刺进下一段 */
       const push = (inst, vel) => {
         const essential = inst === 'kick' || inst === 'snare';
         if (!essential && rng() > energy + 0.35) return; /* 低能量段裁掉装饰音 */
-        ev.push({ step16: bar * 16 + s, inst, vel: vel * (0.65 + energy * 0.45) * arc[bar % 4], kit });
+        ev.push({ step16: bar * 16 + s, inst, vel: vel * (0.65 + energy * 0.45) * arc[bar % 4] * presMul(inst), kit });
       };
-      if (P.kick && P.kick[s]) push('kick', (patName === 'jazz' ? 0.3 : (patName === 'bossa' ? 0.55 : (patName === 'afro' ? 0.7 : 1))) * (s % 4 === 0 ? 1.0 : 0.85)); /* v2 kick 重音弹跳 */
+      /* A3 剥壳：前奏/尾奏只留 hat 轴 + 第 1 拍 kick */
+      if (isThinSec && !(P.hat && P.hat[s]) && s % 4 !== 0 && !(s === 0 && P.kick && P.kick[s])) continue;
+      if (P.kick && kickRow[s]) {
+        if (subtract && s % 4 !== 0) { /* B5 减法：正拍 kick 保留，其余抽掉 */ }
+        else {
+          push('kick', (patName === 'jazz' ? 0.3 : (patName === 'bossa' ? 0.55 : (patName === 'afro' ? 0.7 : 1))) * (s % 4 === 0 ? 1.0 : 0.85));
+          /* B2 强 kick 叠 808 次低音层（rnb/hiphop） */
+          if ((styleKey === 'rnb' || styleKey === 'hiphop') && s % 8 === 0) ev[ev.length - 1].sub = true;
+        }
+      }
       if (patName === 'jazz') {
         /* 爵士军鼓 = 反拍应答 comping，不是摇滚式 backbeat */
-        if (P.snare && P.snare[s] && rng() < 0.35) push('snare', 0.5);
-        if ((s === 3 || s === 7 || s === 11 || s === 14) && rng() < 0.22) push('snare', 0.32);
+        if (P.snare && P.snare[s] && !isThinSec && rng() < 0.35) push('snare', 0.5);
+        if ((s === 3 || s === 7 || s === 11 || s === 14) && !isThinSec && rng() < 0.22) push('snare', 0.32);
       } else if (P.snare && P.snare[s]) {
-        push('snare', patName === 'bossa' ? 0.45 : 0.9);
+        if (!isThinSec) {
+          if (patName === 'bossa') {
+            /* 实测 Ipanema：rim 只在 B 段/高能量段出现 */
+            if (energy > 0.65 || bar % 2 === 1) push('snare', 0.45);
+          } else {
+            push('snare', patName === 'afro' ? 0.55 : 0.9);
+            /* B2 rnb 军鼓叠 rimshot（Questlove flam 感） */
+            if (styleKey === 'rnb' && s % 8 === 4) ev[ev.length - 1].rimLayer = true;
+          }
+        }
       }
-      if (P.ghost && P.ghost[s] && rng() < 0.5) push('snare', 0.38);
+      if (P.ghost && P.ghost[s] && !isThinSec && rng() < 0.5) push('snare', 0.38);
       if (P.hat && P.hat[s]) {
         if (density === 'lite' && s % 4 !== 0) continue;
         if (density === 'drive' && rng() < 0.3) { push('hat', 0.5); continue; }
-        const hatBase = patName === 'beach' ? (s % 4 === 0 ? 0.62 : 0.4 + rng() * 0.18) : (s % 4 === 0 ? 0.85 : 0.6); /* 律动载体站出来 */
+        let hatBase = patName === 'beach' ? (s % 4 === 0 ? 0.62 : 0.4 + rng() * 0.18) : (s % 4 === 0 ? 0.85 : 0.6); /* 律动载体站出来 */
+        /* B2 重音系统：rnb/jazz 四分 hat 突出、反拍收轻（摇摆对比） */
+        if (styleKey === 'rnb' || styleKey === 'jazz') {
+          if (s % 4 === 0) hatBase *= 1.35;
+          else if (s % 4 === 2) hatBase *= 0.6;
+        }
         push('hat', hatBase);
       }
       if (P.ohat && P.ohat[s] && density !== 'lite') push('ohat', 0.6);
+      /* N5 rock verse 开镲：15% 概率在反拍点开镲（GNR 式动态） */
+      if (patName === 'rock' && !rockChorus && s % 4 === 2 && rng() < 0.15) push('ohat', 0.5);
       if (P.ride && P.ride[s]) push('ride', s % 4 === 0 ? 0.8 : 0.5);
-      if (P.crash && P.crash[s] && (bar % 4 === 0 || (styleKey === 'rock' && energy > 0.55))) push('crash', styleKey === 'rock' ? 0.5 : 0.7);
+      if (P.crash && P.crash[s] && (bar % 4 === 0 || rockChorus)) push('crash', styleKey === 'rock' ? 0.5 : 0.7);
       if (P.congaH && P.congaH[s]) push('congaH', 0.7);
       if (P.congaL && P.congaL[s]) push('congaL', 0.65);
       if (P.bell && P.bell[s]) push('bell', s % 4 === 0 ? 0.55 : 0.4);
+      /* rnb 现代变体（Frank Ocean 式）：第二小节军鼓上 3 */
+      if (patName === 'rnb' && bar % 2 === 1 && s === 8 && !isThinSec) push('snare', 0.55);
       /* Fela 式 break：每 16 小节最后一拍全停 */
       if (styleKey === 'afro' && bar % 16 === 15 && s >= 12) {
         ev.filter(x => x.step16 === bar * 16 + s).forEach(x => { x._drop = true; });
@@ -588,36 +814,37 @@ function genDrums() {
     }
     /* Rock：每 4 小节末加花进下一段（Nirvana/GNR 式） */
     if (styleKey === 'rock' && bar % 4 === 3 && bar !== bars - 1 && energy > 0.45) {
-      for (let s = 12; s < 16; s++) ev.push({ step16: bar * 16 + s, inst: 'snare', vel: 0.45 + (s - 12) * 0.15, kit });
+      for (let s = 12; s < 16; s++) ev.push({ step16: bar * 16 + s, inst: 'snare', vel: (0.45 + (s - 12) * 0.15) * presMul('snare'), kit });
     }
     /* 结尾加花（Afro break 小节不加） */
     if (bar === bars - 1 && !(styleKey === 'afro' && bar % 16 === 15)) {
-      for (let s = 12; s < 16; s++) ev.push({ step16: bar * 16 + s, inst: s % 2 ? 'snare' : 'hat', vel: 0.5 + (s - 12) * 0.12, kit });
+      for (let s = 12; s < 16; s++) ev.push({ step16: bar * 16 + s, inst: s % 2 ? 'snare' : 'hat', vel: (0.5 + (s - 12) * 0.12) * presMul('snare'), kit });
     }
     /* Hip-Hop：32 分 hat 滚奏（每 2 小节随机一整拍）+ 偶发 16 分三连音顿奏 */
     if (styleKey === 'hiphop') {
       if (bar % 2 === 1) {
         const rollBeat = 4 * Math.floor(rng() * 4);
-        for (let k = 0; k < 8; k++) ev.push({ step16: bar * 16 + rollBeat + k * 0.5, inst: 'hat', vel: 0.45 + k * 0.045, kit });
+        for (let k = 0; k < 8; k++) ev.push({ step16: bar * 16 + rollBeat + k * 0.5, inst: 'hat', vel: (0.45 + k * 0.045) * presMul('hat'), kit });
       }
       if (bar % 8 === 7 && rng() < 0.6) {
-        for (let k = 0; k < 6; k++) ev.push({ step16: bar * 16 + 8 + k * (2 / 3), inst: 'hat', vel: 0.4 + k * 0.05, kit });
+        for (let k = 0; k < 6; k++) ev.push({ step16: bar * 16 + 8 + k * (2 / 3), inst: 'hat', vel: (0.4 + k * 0.05) * presMul('hat'), kit });
       }
     }
-    /* 风格打击乐层：Afro 全十六分 shekere + 反拍 clap（力量鼓点）；Bossa/RnB 沙锤八分 */
+    /* 风格打击乐层：Afro 全十六分 shekere（hat 轴）+ 反拍 clap（力量鼓点 ×1.3） */
     if (styleKey === 'afro') {
       for (let s = 0; s < 16; s++) {
         if (state.perf && s % 2 === 1) continue; /* 性能模式：shekere 减半 */
         if (bar % 16 === 15 && s >= 12) continue; /* Fela break：shekere 同停 */
-        ev.push({ step16: bar * 16 + s, inst: 'shekere', vel: s % 4 === 0 ? 0.7 : 0.45, kit });
+        ev.push({ step16: bar * 16 + s, inst: 'shekere', vel: (s % 4 === 0 ? 0.7 : 0.45) * presMul('shekere'), kit });
       }
       if (bar % 16 !== 15) {
-        ev.push({ step16: bar * 16 + 4,  inst: 'clap', vel: 0.8, kit });
-        ev.push({ step16: bar * 16 + 12, inst: 'clap', vel: 0.85, kit });
+        ev.push({ step16: bar * 16 + 4,  inst: 'clap', vel: 0.8 * 1.3 * presMul('clap'), kit });
+        ev.push({ step16: bar * 16 + 12, inst: 'clap', vel: 0.85 * 1.3 * presMul('clap'), kit });
       }
-    } else if (styleKey === 'bossa' || styleKey === 'rnb') {
-      for (let s = 0; s < 16; s += 2) ev.push({ step16: bar * 16 + s, inst: 'shaker', vel: s % 4 === 0 ? 0.5 : 0.38, kit });
+    } else if (styleKey === 'rnb') {
+      for (let s = 0; s < 16; s += 2) ev.push({ step16: bar * 16 + s, inst: 'shaker', vel: (s % 4 === 0 ? 0.5 : 0.38) * presMul('shaker'), kit });
     }
+    /* 实测 Ipanema：bossa 的 shaker 型已并入 P.hat（X.X...X.X.X...X.），不再叠层 */
   }
   drumEvents = ev.filter(x => !x._drop);
 }
@@ -649,23 +876,40 @@ function makeCabIR(dur = 0.22, decay = 5) {
 
 function buildAudio() {
   if (AE.ready) return;
-  AE.master = new Tone.Volume(-2).connect(new Tone.Limiter(-1).toDestination());
-  AE.masterMeter = new Tone.Meter({ normalRange: false, smoothing: 0.85 });
+  /* v4 Logic 级母带链：音量(AGC) → 三段EQ → 多段压缩 → 温和饱和 → 限制器 → 输出。
+     各层推子仍汇入 AE.master；导出音频从限制器后分流（与听到的一致） */
+  AE.master = new Tone.Volume(-2);
+  AE.masterEq = new Tone.EQ3({ low: 0, mid: 0, high: 0.5, lowFrequency: 120, highFrequency: 7500 });
+  AE.masterMB = new Tone.MultibandCompressor({
+    lowFrequency: 250, highFrequency: 2600,
+    low:  { threshold: -20, ratio: 3,   attack: 0.02,  release: 0.15 },
+    mid:  { threshold: -16, ratio: 2.5, attack: 0.015, release: 0.12 },
+    high: { threshold: -13, ratio: 3,   attack: 0.01,  release: 0.1  },
+  });
+  AE.masterSat = new Tone.Distortion(0.06);
   AE.limiterRef = new Tone.Limiter(-1);
-  /* master → meter 监听（并联，不影响信号链） */
-  setTimeout(() => { try { AE.master.connect(AE.masterMeter); } catch (e) {} }, 0);
-  /* 慢速 AGC：每 700ms 看一次均值，向 -14dB 靠拢，范围 ±6dB */
+  AE.master.connect(AE.masterEq);
+  AE.masterEq.connect(AE.masterMB);
+  AE.masterMB.connect(AE.masterSat);
+  AE.masterSat.connect(AE.limiterRef);
+  AE.limiterRef.toDestination();
+  AE.masterMeter = new Tone.Meter({ normalRange: false, smoothing: 0.85 });
+  AE.recDest = Tone.getContext().createMediaStreamDestination();
+  AE.limiterRef.connect(AE.recDest);
+  /* 限制器后 → 电平监听（并联，不影响信号链） */
+  setTimeout(() => { try { AE.limiterRef.connect(AE.masterMeter); } catch (e) {} }, 0);
+  /* v4 AGC：3.5s 一拍、±0.4dB 步进、±3dB 死区、目标 -12dB RMS（不泵动、不抢瞬态） */
   setInterval(() => {
     if (!state.playing || !AE.masterMeter) return;
     let db = -60;
     try { const v = AE.masterMeter.getValue(); db = typeof v === 'number' ? v : -60; } catch (e) { return; }
     if (db < -45 || db > -3) return;
-    const err = -11 - db; /* 瞬态音乐 RMS 目标抬高，鼓才剩得下头 */
-    if (Math.abs(err) < 2.5) return;
+    const err = -12 - db;
+    if (Math.abs(err) < 3) return;
     const cur = AE.master.volume.value;
-    const next = Math.max(-14, Math.min(8, cur + Math.sign(err) * 0.8));
+    const next = Math.max(-14, Math.min(8, cur + Math.sign(err) * 0.4));
     AE.master.volume.value = next;
-  }, 700);
+  }, 3500);
 
   /* --- 旋律吉他（效果器链路）：
      双锯齿声源 → 电子管波形塑形前级 → 三段 EQ → 箱体 IR 卷积 → 压缩 → 反馈延迟 --- */
@@ -752,9 +996,11 @@ function buildAudio() {
   AE.toneEqKeys = new Tone.EQ3({ low: 0, mid: 0, high: 2 }).connect(AE.master);
   AE.toneDistKeys = new Tone.Distortion(0).connect(AE.toneEqKeys);
   AE.toneFilterBass = new Tone.Filter(9000, 'lowpass').connect(AE.master);
-  /* Pad：移相→EQ→主总线 */
+  /* Pad：移相→风格低通→EQ→主总线（v4 S5：合成器音色链随风格开合） */
   AE.toneEqPad = new Tone.EQ3({ low: 0, mid: 0, high: 0 }).connect(AE.master);
-  AE.padPhaser.connect(AE.toneEqPad);
+  AE.padFilter = new Tone.Filter(8000, 'lowpass');
+  AE.padPhaser.connect(AE.padFilter);
+  AE.padFilter.connect(AE.toneEqPad);
   /* 鼓：失真(轻饱和)→EQ→主总线 */
   AE.toneEqDrums = new Tone.EQ3({ low: 0, mid: 0, high: 2 }).connect(AE.master);
   AE.toneDistDrums = new Tone.Distortion(0).connect(AE.toneEqDrums);
@@ -843,6 +1089,9 @@ const GUITAR_SETS = {
   acoustic: ['A2','As2','B2','C3','Cs3','D3','Ds3','E3','F3','Fs3','G3','Gs3','A3','As3','B3','C4','A4'],
 };
 const GUITAR_PATCH_MAP = { clean:'electric', crunch:'electric', dist:'electric', jazz:'electric', muted:'electric', harmonics:'electric', delay:'electric', steel:'acoustic', nylon:'acoustic' };
+/* v4 吉他双源（§2.1）：rnb/jazz/bossa = SoundFont 连音乐句（滑音/长音可控）；
+   rock/hiphop/afro = 真实单音采样（颗粒/riff 质感优先），SoundFont 兜底 */
+const GUITAR_SRC_BY_STYLE = { rnb: 'sf', jazz: 'sf', bossa: 'sf', rock: 'samp', hiphop: 'samp', afro: 'samp' };
 /* 按 patch 的音色塑造：真实采样只有两套库，风格差异靠效果链分家。
    drive→线路失真量, lpf→低通, gate→音门（闷音）, vol→音量补偿 */
 const GUITAR_PATCH_FX = {
@@ -893,7 +1142,7 @@ function loadGuitarSamples() {
     }
   }
 }
-function playGuitarReal(patch, midi, t, dur, vel, slideFrom) {
+function playGuitarReal(patch, midi, t, dur, vel, slideFrom, legato) {
   const set = GUITAR_PATCH_MAP[patch] || 'electric';
   const bank = GUITAR_SAMP.buffers[set] || {};
   const keys = Object.keys(bank).map(Number);
@@ -904,6 +1153,7 @@ function playGuitarReal(patch, midi, t, dur, vel, slideFrom) {
   const fx = GUITAR_PATCH_FX[patch] || GUITAR_PATCH_FX.clean;
   const out = guitarFxChain(patch, Tone.getContext().rawContext);
   if (fx.gate < 1) dur = Math.max(0.07, Math.min(dur, 0.08 + dur * fx.gate));
+  else dur = Math.min(dur, 2.5); /* v4：自然衰减上限，采样像真琴一样"散掉"而非锯住 */
   const raw = Tone.getContext().rawContext;
   const src = raw.createBufferSource();
   src.buffer = bank[best];
@@ -927,12 +1177,24 @@ function playGuitarReal(patch, midi, t, dur, vel, slideFrom) {
     vib.start(t); vib.stop(t + dur + 0.15);
   }
   const g = raw.createGain();
+  /* v4 §2.3：换气 attack 12ms / 连线 attack 30ms（音头不再一刀齐） */
+  const atk = legato ? 0.030 : 0.012;
   g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(Math.max(vel, 0.05), t + 0.012);
+  g.gain.exponentialRampToValueAtTime(Math.max(vel, 0.05), t + atk);
   g.gain.setValueAtTime(Math.max(vel, 0.05), t + Math.max(0.05, dur - 0.1));
   g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.3);
   src.connect(g); g.connect(out);
   src.start(t); src.stop(t + dur + 0.4);
+  /* v4 §2.3：前一音快速闪避到 0.45×——旋律"连成线"而不是一颗颗蹦 */
+  if (GUITAR_SAMP._lastG && t - GUITAR_SAMP._lastT < 0.6 && GUITAR_SAMP._lastG !== g) {
+    try {
+      GUITAR_SAMP._lastG.gain.cancelScheduledValues(t);
+      GUITAR_SAMP._lastG.gain.setTargetAtTime(GUITAR_SAMP._lastVel * 0.45, t, 0.015);
+    } catch (e) {}
+  }
+  GUITAR_SAMP._lastG = g;
+  GUITAR_SAMP._lastVel = Math.max(vel, 0.05);
+  GUITAR_SAMP._lastT = t + dur;
   /* 双轨录制：厚度>0.5 时叠第二轨（±声像/微延迟/微失谐） */
   const th = state.tone.guitar ? state.tone.guitar.t : 0.2;
   if (th > 0.08) { /* 默认双轨：t=0.15 的 RnB/Jazz 不再是单薄单轨 */
@@ -1070,6 +1332,50 @@ function silenceSampleBuses() {
 function restoreSampleBuses() {
   try { if (SAMP.bus) SAMP.bus.gain.value = 1; if (SAMP.padBus) SAMP.padBus.gain.value = 1; if (DRUM_SAMP.bus) DRUM_SAMP.bus.gain.value = 1; } catch (e) {}
 }
+/* ================= v4 律动引擎（GROOVE 表 + 排程层逐件 swing） =================
+ * 谱面实测/风格对标：hatSwing=摇摆对 hat 族的额外推拉，snareLag=军鼓习惯性拖后，
+ * kickP=kick 去摆（负=略提前）。Transport.swing 对 Transport.schedule 回调不生效，
+ * 且各声部律动不同 → swing 全部在排程层逐件计算（baseSwingSec / drumTimeShift）。
+ */
+const GROOVE = {
+  rnb:   { hatSwing: 0.62, snareLag: 0.012, kickP: -0.004 }, /* 重音在 3&，军鼓大拖后 */
+  jazz:  { hatSwing: 0.66, snareLag: 0.010, kickP: -0.003 }, /* behind-the-beat */
+  rock:  { hatSwing: 0.10, snareLag: 0.002, kickP: 0      }, /* 实测修正：几乎不摆 */
+  bossa: { hatSwing: 0.22, snareLag: 0.004, kickP: 0      },
+  hiphop:{ hatSwing: 0.55, snareLag: 0.006, kickP: -0.004 },
+  afro:  { hatSwing: 0.12, snareLag: 0.004, kickP: 0      },
+};
+const HAT_FAMILY = new Set(['hat', 'ohat', 'ride', 'shekere', 'shaker', 'bell', 'clave']);
+/* B3 互锁：Afro 打击乐错位时间（Tony Allen 式多层前后错开） */
+const AFRO_INTERLOCK = { shekere: -0.003, congaH: 0.008, congaL: 0.008, bell: 0.004, clap: -0.006 };
+function baseSwingSec(pos16) {
+  return (Math.round(pos16) % 2 === 1) ? state.swing * secPer16() : 0;
+}
+function drumTimeShift(styleKey, inst, step16) {
+  const s16 = ((Math.round(step16) % 16) + 16) % 16;
+  let sh = (Math.round(step16) % 2 === 1) ? state.swing * secPer16() : 0;
+  const grv = GROOVE[styleKey];
+  if (grv) {
+    if (HAT_FAMILY.has(inst)) {
+      const eff = grv.hatSwing * (0.5 + state.swing * 2);
+      if (s16 % 4 === 2) sh += eff * secPer16() * 0.9;       /* 八分 &：拉向摇摆 */
+      else if (s16 % 2 === 1) sh += eff * secPer16() * 0.45;  /* 奇数 16 分 */
+    }
+    if (inst === 'snare' || inst === 'clap') sh += grv.snareLag;
+    if (inst === 'kick') sh += grv.kickP;
+    if (styleKey === 'afro' && AFRO_INTERLOCK[inst]) sh += AFRO_INTERLOCK[inst];
+  }
+  return sh;
+}
+/* B6 pad/keys 侧链：kick/snare/clap 后 ~80ms 内和声自动闪避 */
+let _ksStepsCache = null;
+function duckMulAt(beat, mul) {
+  if (!_ksStepsCache) _ksStepsCache = drumEvents.filter(d => d.inst === 'kick' || d.inst === 'snare' || d.inst === 'clap').map(d => d.step16);
+  const win = Math.max(1, Math.round(0.08 / secPer16()));
+  const s = Math.round(beat * 4);
+  for (const k of _ksStepsCache) { const d = s - k; if (d > 0 && d <= win) return mul; }
+  return 1;
+}
 /* 微时值引擎：每轨独立的 timing profile（真实演奏各声部前后不一）+ 乐句内 rubato */
 const TIMING_PROFILE = {
   rnb:   { drums: 0.010, hat: -0.006, bass: 0.012, keys: 0.020, melody: 0.018, pad: 0.008 }, /* 推-拉：鼓抢拍/和声躺（D'Angelo 系） */
@@ -1119,10 +1425,11 @@ const SAMP_GUITAR = {
   steel: 'acoustic_guitar_steel', nylon: 'acoustic_guitar_nylon',
 };
 const SAMP_KEYS = 'electric_piano_1';
-/* 键盘按风格分音色：jazz=FM 颤音琴合成器(@vibes)，hiphop=暗黑 polysynth 长铺，其余 Rhodes */
+/* v4 S6 键盘按风格分音色：rnb=Rhodes(双层)/jazz=FM 颤音琴/rock=无(吉他chug 为主)
+   bossa=原钢(Jobim)/afro=原钢稀疏顿奏/hiphop=暗黑 polysynth stab */
 const SAMP_KEYS_BY_STYLE = {
-  rnb: SAMP_KEYS, jazz: '@vibes', rock: SAMP_KEYS,
-  bossa: SAMP_KEYS, afro: SAMP_KEYS, hiphop: 'pad_3_polysynth',
+  rnb: SAMP_KEYS, jazz: '@vibes', rock: null,
+  bossa: 'acoustic_grand_piano', afro: 'acoustic_grand_piano', hiphop: 'pad_3_polysynth',
 };
 const SAMP_BASS = 'electric_bass_finger';
 const SAMP_PAD = {
@@ -1307,6 +1614,16 @@ function loadInstruments() {
   Object.values(SAMP_GUITAR).forEach((n, i) => {
     if (!core.includes(n)) setTimeout(() => { if (!state.playing) ensureSample(n); }, 15000 + i * 6000);
   });
+  /* v4 预载：所有启用风格的 pad bank 与键盘音色（换挡换色不卡解码） */
+  const actStyles = state.styles.length ? state.styles : ['rnb'];
+  const extra = new Set();
+  actStyles.forEach(k => {
+    const pc = PAD_BY_STYLE[k];
+    if (pc && SAMP_PAD[pc.bank]) extra.add(SAMP_PAD[pc.bank]);
+    const kn = SAMP_KEYS_BY_STYLE[k];
+    if (kn && kn !== '@vibes') extra.add(kn);
+  });
+  extra.forEach(n => { if (!core.includes(n)) ensureSample(n); });
 }
 
 function applyGuitarPatch() {
@@ -1371,27 +1688,47 @@ const secPer16 = () => 60 / state.bpm / 4;
 function scheduleAll() {
   Tone.Transport.cancel(0);
   Tone.Transport.bpm.value = state.bpm;
-  Tone.Transport.swing = state.swing;
+  /* v4：swing 由排程层逐件计算（baseSwingSec/drumTimeShift）。
+     Transport.swing 只对 Sequence/Part 迭代生效，对 Transport.schedule 回调无效——
+     旧代码里 swing 滑条对实时播放完全不生效，MIDI 导出却生效（两套时间），此处统一 */
+  Tone.Transport.swing = 0;
   Tone.Transport.swingSubdivision = '16n';
+  _ksStepsCache = null; /* pad/keys 侧链缓存随鼓重算 */
   const bars = state.slots.length;
 
-  /* 吉他旋律（优先真实采样，未就绪时回退合成音色） */
+  /* 吉他旋律（v4 双源：rnb/jazz/bossa=SF 连音乐句优先；rock/hiphop/afro=真实采样优先） */
   if (state.layers.guitar.on) {
     const instName = SAMP_GUITAR[state.layers.guitar.patch] || null;
     let prevMel = null;
-    for (const e of melodyEvents) {
+    for (let i = 0; i < melodyEvents.length; i++) {
+      const e = melodyEvents[i];
+      const nx = melodyEvents[i + 1];
       const t = t16(Math.round(e.beat * 4));
-      const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.95;
-      const toff = voiceOff(styleOfBar(e.beat), 'melody', e.beat);
-      /* 紧邻且级进的两个音 → 滑音连接（真人吉他手的第一习惯） */
-      const slideFrom = prevMel && e.beat - prevMel.end <= 0.16 && e.midi !== prevMel.midi
-        && Math.abs(e.midi - prevMel.midi) <= 7 ? prevMel.midi : null;
+      /* v4 §2.2 tie：标记了连线的音，时值延长到下一音起音（不断开） */
+      let durSteps = Math.max(1, Math.round(e.dur * 4));
+      if (e.tie && nx && nx.beat - e.beat <= 2 && !nx.ghost) durSteps = Math.max(durSteps, Math.round((nx.beat - e.beat) * 4));
+      const dur = durSteps * secPer16() * 0.95;
+      const toff = voiceOff(styleOfBar(e.beat), 'melody', e.beat) + baseSwingSec(e.beat * 4);
+      /* v4 §2.3 滑音放宽：tie 级进必滑（|Δ|≤2）；|Δ|≤5 且缝隙 ≤0.25 拍也滑；大跳干净分离 */
+      const gapBeats = prevMel ? e.beat - prevMel.end : 99;
+      const dMidi = prevMel ? e.midi - prevMel.midi : 0;
+      const slideFrom = prevMel && dMidi !== 0 && gapBeats <= 0.5
+        && (Math.abs(dMidi) <= 2 || (Math.abs(dMidi) <= 5 && gapBeats <= 0.25)) ? prevMel.midi : null;
       prevMel = { midi: e.midi, end: e.beat + e.dur };
+      const src = GUITAR_SRC_BY_STYLE[styleOfBar(e.beat)] || 'samp';
       Tone.Transport.schedule(tt => {
-        if (playGuitarReal(state.layers.guitar.patch, e.midi, tt + toff, dur, e.vel * 1.05, slideFrom)) return;
-        const inst = instName && sampOf(instName, 'guitar');
-        if (inst) inst.play(e.midi, tt + toff, { duration: dur, gain: e.vel * 1.1 });
-        else AE.guitar.triggerAttackRelease(midiName(e.midi), dur, tt + toff, e.vel);
+        const pgt = tt + toff;
+        if (src === 'sf') {
+          const inst = instName && sampOf(instName, 'guitar');
+          if (inst) { inst.play(e.midi, pgt, { duration: dur, gain: e.vel * 1.1 }); return; }
+          if (playGuitarReal(state.layers.guitar.patch, e.midi, pgt, dur, e.vel * 1.05, slideFrom, e.tie)) return;
+          AE.guitar.triggerAttackRelease(midiName(e.midi), dur, pgt, e.vel);
+        } else {
+          if (playGuitarReal(state.layers.guitar.patch, e.midi, pgt, dur, e.vel * 1.05, slideFrom, e.tie)) return;
+          const inst = instName && sampOf(instName, 'guitar');
+          if (inst) inst.play(e.midi, pgt, { duration: dur, gain: e.vel * 1.1 });
+          else AE.guitar.triggerAttackRelease(midiName(e.midi), dur, pgt, e.vel);
+        }
       }, t);
     }
   }
@@ -1401,34 +1738,37 @@ function scheduleAll() {
       const t = t16(Math.round(e.beat * 4));
       const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.95;
       const names = e.notes.map(midiName);
-      const koff = voiceOff(styleOfBar(e.beat), 'keys', e.beat);
+      const koff = voiceOff(styleOfBar(e.beat), 'keys', e.beat) + baseSwingSec(e.beat * 4);
       const ks = SAMP_KEYS_BY_STYLE[styleOfBar(e.beat)] || SAMP_KEYS;
+      const kduck = duckMulAt(e.beat, 0.84); /* B6：kick/snare 后和声闪避 */
       Tone.Transport.schedule(tt2 => { const tt = tt2 + koff;
         const gi = e.inst && e.inst.startsWith('guitar:') ? e.inst.slice(7) : null;
         const gInst = gi && sampOf(SAMP_GUITAR[gi], 'guitar');
-        if (gInst) for (const n of e.notes) gInst.play(n, tt, { duration: dur, gain: e.vel * 1.1 });
-        else if (ks === '@vibes') AE.keysVibes.triggerAttackRelease(names, dur, tt, e.vel * 0.85);
+        if (gInst) for (const n of e.notes) gInst.play(n, tt, { duration: dur, gain: e.vel * 1.1 * kduck });
+        else if (ks === '@vibes') AE.keysVibes.triggerAttackRelease(names, dur, tt, e.vel * 0.85 * kduck);
         else {
           const inst = ks && sampOf(ks, 'keys');
-          if (inst) for (const n of e.notes) inst.play(n, tt, { duration: dur, gain: e.vel });
-          else AE.keys.triggerAttackRelease(names, dur, tt, e.vel);
+          if (inst) for (const n of e.notes) inst.play(n, tt, { duration: dur, gain: e.vel * kduck });
+          else AE.keys.triggerAttackRelease(names, dur, tt, e.vel * kduck);
         }
       }, t);
     }
   }
-  /* 合成器 Pad（采样优先，兜底合成链） */
+  /* 合成器 Pad（v4 S2 换挡换色：音色按小节风格解析，不再整曲一个音色） */
   if (state.layers.synth.on) {
-    const padName = SAMP_PAD[state.layers.synth.patch];
-    const inst = (padName && sampOf(padName, 'pad')) || null;
     for (const e of synthEvents) {
       const t = t16(Math.round(e.beat * 4));
       const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.98;
       const names = e.notes.map(midiName);
-      const poff = voiceOff(styleOfBar(e.beat), 'pad', e.beat);
+      const poff = voiceOff(styleOfBar(e.beat), 'pad', e.beat) + baseSwingSec(e.beat * 4);
       const lag = e.padLag || 0;
+      const pcfg = PAD_BY_STYLE[styleOfBar(e.beat)] || PAD_BY_STYLE.rnb;
+      const padName = SAMP_PAD[pcfg.bank];
+      const inst = (padName && sampOf(padName, 'pad')) || null;
+      const pduck = duckMulAt(e.beat, 0.79); /* B6：kick 后 pad 闪避更深 */
       Tone.Transport.schedule(tt => {
-        if (inst) for (const n of e.notes) inst.play(n, tt + poff + lag, { duration: dur, gain: e.vel * 1.4 });
-        else AE.synthPad.triggerAttackRelease(names, dur, tt + poff + lag, e.vel);
+        if (inst) for (const n of e.notes) inst.play(n, tt + poff + lag, { duration: dur, gain: e.vel * 1.4 * pduck });
+        else AE.synthPad.triggerAttackRelease(names, dur, tt + poff + lag, e.vel * pduck);
       }, t);
     }
   }
@@ -1442,7 +1782,7 @@ function scheduleAll() {
       const duckMul = ducked ? 0.7 : 1;
       const t = t16(Math.round(e.beat * 4));
       const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.95;
-      const boff = voiceOff(styleOfBar(e.beat), 'bass', e.beat);
+      const boff = voiceOff(styleOfBar(e.beat), 'bass', e.beat) + baseSwingSec(e.beat * 4);
       Tone.Transport.schedule(tt => {
         if (e.b808) {
           if (!play808(e.midi, tt, dur * 1.6, e.vel, e.slideTo)) {
@@ -1455,15 +1795,22 @@ function scheduleAll() {
       }, t);
     }
   }
-  /* 鼓（真实采样优先，按事件自带的风格鼓件映射，未加载回退合成） */
+  /* 鼓（真实采样优先；v4 律动引擎：每件按 GROOVE 表单独位移 + 叠层触发） */
   if (state.layers.drums.on) {
     for (const e of drumEvents) {
       const t = t16(e.step16);
-      const doff = voiceOff(styleOfBar(e.step16 / 4), (e.inst === 'hat' || e.inst === 'ohat' || e.inst === 'ride' || e.inst === 'shekere' || e.inst === 'shaker') ? 'hat' : 'drums', e.step16 / 4);
+      const dStyle = styleOfBar(e.step16 / 4);
+      const doff = voiceOff(dStyle, (e.inst === 'hat' || e.inst === 'ohat' || e.inst === 'ride' || e.inst === 'shekere' || e.inst === 'shaker') ? 'hat' : 'drums', e.step16 / 4)
+        + drumTimeShift(dStyle, e.inst, e.step16);
       Tone.Transport.schedule(tt0 => { const tt = tt0 + doff;
         const kit = e.kit || DRUM_KITS.rnb;
         const smp = (inst) => { const n = kit[inst]; return n ? playDrumSample(n, tt, e.vel) : false; };
-        if (smp(e.inst)) return;
+        if (smp(e.inst)) {
+          /* B2 叠层：强 kick 叠 808 次低音 / rnb 军鼓叠 rimshot（采样命中时也叠） */
+          if (e.sub) trig808kick(tt + 0.002, e.vel * 0.5);
+          if (e.rimLayer) AE.rim808.triggerAttackRelease('A5', '16n', tt + 0.004, e.vel * 0.5);
+          return;
+        }
         if (e.inst === 'shekere' || e.inst === 'shaker') { AE.hat.triggerAttackRelease('G6', '32n', tt, e.vel * 0.5); return; }
         if (e.inst === 'snap') { AE.clap808.triggerAttackRelease('16n', tt, e.vel * 0.8); return; }
         if (e.inst === 'clap') { AE.clap808.triggerAttackRelease('8n', tt, e.vel); return; }
@@ -1481,9 +1828,9 @@ function scheduleAll() {
           return;
         }
         switch (e.inst) {
-          case 'kick': AE.kick.triggerAttackRelease('C1', '8n', tt, e.vel); break;
+          case 'kick': AE.kick.triggerAttackRelease('C1', '8n', tt, e.vel); if (e.sub) trig808kick(tt + 0.002, e.vel * 0.5); break;
           case 'clave': AE.conga.triggerAttackRelease('G3', '16n', tt, e.vel); break;
-          case 'snare': AE.snare.triggerAttackRelease('16n', tt, e.vel); AE.snareBody.triggerAttackRelease('G2', '16n', tt, e.vel * 0.5); break;
+          case 'snare': AE.snare.triggerAttackRelease('16n', tt, e.vel); AE.snareBody.triggerAttackRelease('G2', '16n', tt, e.vel * 0.5); if (e.rimLayer) AE.rim808.triggerAttackRelease('A5', '16n', tt + 0.004, e.vel * 0.5); break;
           case 'hat': AE.hat.triggerAttackRelease('G6', '32n', tt, e.vel); break;
           case 'ohat': AE.ride.triggerAttackRelease('G5', '8n', tt, e.vel); break;
           case 'ride': AE.ride.triggerAttackRelease('A5', '8n', tt, e.vel); break;
@@ -1652,7 +1999,8 @@ function buildMidi() {
   }
   /* 合成器 Pad → ch3（GM 音色号按 Pad 类型） */
   const PAD_PROGRAM = { halo: 95, sweep: 96, warm: 90, choir: 92, strings: 51, polysynth: 91 };
-  ev.push({ tick: 0, order: 0, bytes: [0xC3, PAD_PROGRAM[state.layers.synth.patch] || 90] });
+  const domStyle = state.styles.length === 1 ? state.styles[0] : 'rnb';
+  ev.push({ tick: 0, order: 0, bytes: [0xC3, PAD_PROGRAM[(PAD_BY_STYLE[domStyle] || PAD_BY_STYLE.rnb).bank] || 90] });
   for (const e of synthEvents) {
     const t = Math.round(e.beat * tpb) + swingAdd(e.beat * 4);
     const dur = Math.round(e.dur * tpb);
@@ -1690,6 +2038,50 @@ function exportMidi() {
   a.download = `motif_${pcName(state.keyRoot)}${state.mode}_${state.bpm}bpm.mid`;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+/* ============================================================
+ * 音频导出（v4）：实时录一遍全曲 → WebM，与听到的完全一致（含 Logic 级母带链）
+ * ============================================================ */
+let _audioRec = null;
+async function exportAudio() {
+  if (typeof Tone === 'undefined') { alert('音频引擎加载失败，请检查网络后刷新页面'); return; }
+  if (!(await ensureAudio())) return;
+  if (_audioRec) return; /* 录制中防重入 */
+  const btn = document.getElementById('btn-audio');
+  const wasPlaying = state.playing;
+  applyMix();
+  Tone.Transport.stop();
+  restoreSampleBuses();
+  scheduleAll();
+  Tone.Transport.position = 0;
+  const stream = AE.recDest.stream;
+  const mime = (window.MediaRecorder && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) ? 'audio/webm;codecs=opus' : 'audio/webm';
+  const rec = new MediaRecorder(stream, { mimeType: mime });
+  const chunks = [];
+  rec.ondataavailable = ev => { if (ev.data.size) chunks.push(ev.data); };
+  const durMs = totalBars() * 4 * (60000 / state.bpm) + 800; /* 全曲 + 尾音余量 */
+  rec.onstop = () => {
+    _audioRec = null;
+    Tone.Transport.stop();
+    if (wasPlaying) { Tone.Transport.start(); }
+    else { state.playing = false; silenceSampleBuses(); }
+    updatePlayBtn();
+    const blob = new Blob(chunks, { type: 'audio/webm' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `motif_${pcName(state.keyRoot)}${state.mode}_${state.bpm}bpm.webm`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    if (btn) btn.textContent = '⬇ 导出音频（WebM）';
+  };
+  _audioRec = rec;
+  if (btn) btn.textContent = '⏺ 录制中…';
+  rec.start();
+  state.playing = true;
+  updatePlayBtn();
+  Tone.Transport.start();
+  setTimeout(() => { try { rec.stop(); } catch (e) {} }, durMs);
 }
 
 /* ============================================================
@@ -1735,6 +2127,11 @@ function applyTone(layer) {
 function applyStyleTone(styleKey) {
   const tbl = STYLE_TONE[styleKey];
   if (!tbl) return;
+  /* v4 S5：pad 低通随风格（rnb 胶感 5.2k / rock 门控 3.8k / hiphop 暗黑 3.4k …） */
+  if (AE.padFilter) {
+    const pc = PAD_BY_STYLE[styleKey];
+    if (pc) AE.padFilter.frequency.value = pc.lpf;
+  }
   for (const layer of Object.keys(tbl)) {
     if (state.toneCustom[layer]) continue; /* 用户手动调过则保留 */
     state.tone[layer] = Object.assign({}, tbl[layer]);
@@ -2293,6 +2690,8 @@ function bindEvents() {
 
   /* 导出 */
   $('#btn-midi').onclick = exportMidi;
+  const btnAudio = document.getElementById('btn-audio');
+  if (btnAudio) btnAudio.onclick = exportAudio;
   $('#btn-copy-prog').onclick = () => {
     const text = chordTimeline.map(c => `${c.name}（${c.roman}${c.ext}）`).join(' → ');
     navigator.clipboard.writeText(`${pcName(state.keyRoot)} ${MODES[state.mode].name} ${state.bpm}BPM：${text}`).then(() => {
