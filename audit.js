@@ -30,7 +30,7 @@ const STATIC = [
   ['音色·连线不掐音',         SRC.includes('!legato &&'),            '前音闪避必须跳过 legato，否则"一蹦一蹦"'],
   ['音色·attack 随机化',      /atk = \(legato \? 0\.024 \+ Math\.random/.test(SRC), '固定 attack=机器感；需 6~38ms 随机+jazz 柔音'],
   ['音色·变调阈值 ≤5 半音',   SRC.includes('bd > 5'),                'playbackRate 移 >5 半音共振峰漂移=塑料味'],
-  ['音色·SF 音放尾巴',        SRC.includes('duration: dur + (e.dur >= 1'), 'SF 旋律硬截在 dur 处=ping-pong'],
+  ['音色·SF 音放尾巴',        SRC.includes('duration: dur + (e.dur >= 1') || SRC.includes('v5.3 SF 尾巴按演奏法'), 'SF 旋律硬截在 dur 处=ping-pong'],
   ['音色·中频琴体归位',       SRC.includes('mid.value = 0.5 + t.t * 2.5'), '吉他 mid 必须为正（EQ3 250-2500Hz 是琴体）'],
   ['音色·移相器低速',         SRC.includes('Phaser(0.08, 0.5, 320)'),  'octaves=4 全频扫描是合成器"老问题"根因'],
   ['鼓·NY 并行压缩',          SRC.includes('drumsPar'),              '鼓力量链的核心'],

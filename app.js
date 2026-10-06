@@ -357,6 +357,7 @@ function genMelody() {
   /* v4 M4-M6 + 连线标记：切分拖拍 / 装饰语汇 / 轮廓约束 / tie-breath */
   postMelodyCraft(events, rng, firstParams);
   melodyFlowPass(events, rng, firstStyle); /* v4.2 流动性整形 */
+  melodyRhythmPass(events, rng, firstStyle); /* v5.2 节奏塑形：articulation 对比 + 休止 + 抢拍 */
   /* 排序 + 终止：尾音落最后和弦根/三/五 */
   events.sort((a, b) => a.beat - b.beat);
   if (events.length) {
@@ -412,6 +413,90 @@ function melodyFlowPass(events, rng, styleKey) {
     const e = core[i], n = core[i + 1];
     if (n.beat - (e.beat + e.dur) <= 0.06 && n.midi !== e.midi && Math.abs(n.midi - e.midi) <= 2) n.slur = true;
   }
+}
+
+/* ================= v5.2 节奏塑形通道：articulation 对比 + 休止呼吸 + 抢拍 =================
+ * v4.1/v4.2 为治"断"把每个音都延到下一 onset—— pendulum 过头，旋律成"一个音连续"，
+ * 没有 articulation 对比、没有休止、没有切分骨架。本通道把"演奏法"写回旋律：
+ *   断奏(staccato)= 时值砍到 45%，音与音之间留出空气 → 律动的"点"
+ *   半断(portato) = 80%，常规演奏
+ *   延音(sustain)= 保持连线，只给乐句尾/旋律峰 → 长音有目的地出现
+ *   休止：每乐句按 rest 概率抽掉一个非骨干音 → 乐句会"呼吸"
+ *   抢拍(anticipation)：强拍音提前到前一拍& → 流行/rnb/hiphop 的招牌切分 */
+const ARTIC = {
+  rnb:   { sus: 0.28, port: 0.42, stacc: 0.30, rest: 0.5, antici: 0.32, accOff: 0.07 },
+  jazz:  { sus: 0.30, port: 0.42, stacc: 0.28, rest: 0.55, antici: 0.38, accOff: 0.06 },
+  rock:  { sus: 0.16, port: 0.34, stacc: 0.50, rest: 0.35, antici: 0.12, accOff: 0.09 },
+  bossa: { sus: 0.24, port: 0.52, stacc: 0.24, rest: 0.55, antici: 0.28, accOff: 0.05 },
+  afro:  { sus: 0.16, port: 0.38, stacc: 0.46, rest: 0.45, antici: 0.20, accOff: 0.08 },
+  hiphop:{ sus: 0.16, port: 0.34, stacc: 0.50, rest: 0.70, antici: 0.42, accOff: 0.09 },
+};
+function melodyRhythmPass(events, rng, styleKey) {
+  const A = ARTIC[styleKey] || ARTIC.rnb;
+  const core = events.filter(e => !e.ghost).sort((a, b) => a.beat - b.beat);
+  if (!core.length) return;
+  const spb = SPB(), bpb = BPB();
+  /* 1) articulation 分配：乐句尾/旋律峰 → 延音；其余按风格配比断/半断 */
+  const GROUP_BEATS = 2 * bpb;
+  for (let gi = 0; gi < core.length; gi++) {
+    const e = core[gi];
+    const nxt = gi + 1 < core.length ? core[gi + 1] : null;
+    const gap = nxt ? nxt.beat - e.beat : 2;
+    const isPhraseEnd = !nxt || Math.floor(nxt.beat / GROUP_BEATS) !== Math.floor(e.beat / GROUP_BEATS);
+    /* 旋律峰：比前后音都高的音给延音（长音出现在高点才有方向感） */
+    const prv = gi > 0 ? core[gi - 1] : null;
+    const isPeak = (!prv || e.midi >= prv.midi) && (!nxt || e.midi >= nxt.midi) && gap >= 1.0; /* v5.3：峰判定收紧，别把普通音都送延音 */
+    let kind;
+    if (gap <= 0.05) kind = 'stacc'; /* v5.2b 重述/M4 撞车产生的同音齐奏 → 双音 stab，时值不能归零 */
+    else if (isPhraseEnd || isPeak || e.tie) kind = 'sus';
+    else {
+      const r = rng();
+      kind = r < A.stacc ? 'stacc' : r < A.stacc + A.port ? 'port' : 'sus';
+    }
+    if (kind === 'stacc') e.dur = gap <= 0.05 ? 0.18 : clamp(gap * 0.35, 0.12, 0.35); /* 真断奏：+尾音后可闻 <0.5 拍 */
+    else if (kind === 'port') e.dur = clamp(gap * 0.8, 0.2, Math.max(0.4, gap - 0.06));
+    else e.dur = Math.min(gap, e.dur); /* 延音保持 flow pass 的连线 */
+    e.artic = kind;
+  }
+  /* 2) 休止呼吸：每 2 小节乐句按 rest 概率抽掉一个非骨干音，制造 ≥0.5 拍的洞 */
+  let gs = Math.floor(core[0].beat / GROUP_BEATS) * GROUP_BEATS;
+  let phrase = [];
+  const doRest = () => {
+    if (phrase.length < 3 || rng() > A.rest) { phrase = []; return; }
+    const cand = phrase.filter(e => e.artic !== 'sus' && e !== phrase[0] && e !== phrase[phrase.length - 1]);
+    if (cand.length) {
+      const victim = cand[Math.floor(rng() * cand.length)];
+      events.splice(events.indexOf(victim), 1);
+    }
+    phrase = [];
+  };
+  for (const e of core) {
+    if (e.beat >= gs + GROUP_BEATS) { doRest(); gs = Math.floor(e.beat / GROUP_BEATS) * GROUP_BEATS; }
+    phrase.push(e);
+  }
+  doRest();
+  /* 3) 抢拍切分：强拍 onset 提前 0.25~0.5 拍（前一音让位收缩），rnb/hiphop 招牌 */
+  const survivors = events.filter(e => !e.ghost).sort((a, b) => a.beat - b.beat);
+  for (let i = 0; i < survivors.length; i++) {
+    const e = survivors[i];
+    const on16 = Math.round(e.beat * spb) % SBAR();
+    if (on16 % 4 !== 0 || e.artic === 'sus') continue;
+    if (rng() >= A.antici) continue;
+    const shift = rng() < 0.6 ? 0.25 : 0.5;
+    const newOn = e.beat - shift;
+    if (newOn < 0) continue;
+    const prv = i > 0 ? survivors[i - 1] : null;
+    if (prv && prv.beat + prv.dur > newOn - 0.04) prv.dur = Math.max(0.15, newOn - prv.beat - 0.05); /* 前音让位 */
+    e.beat = newOn;
+    e.antic = true;
+  }
+  /* 4) 切分重音：落在弱拍/&的音给力度加成——律动的"提线" */
+  for (const e of events) {
+    if (e.ghost) continue;
+    const on16 = Math.round(e.beat * spb);
+    if (on16 % 4 !== 0) e.vel = Math.min(1, e.vel + A.accOff);
+  }
+  events.sort((a, b) => a.beat - b.beat);
 }
 
 /* ================= v4 旋律后处理（M4 切分拖拍 / M5 装饰语汇 / M6 轮廓约束 / §2.2 连线标记） ================= */
@@ -688,11 +773,12 @@ function genKeys() {
         let hits = pick(rng, COMP_PATTERNS).slice();
         if (styleKey === 'rnb' || styleKey === 'jazz') hits = melodyGapAnswer(bar, hits);
         for (const [b, d] of hits) {
-          const vel = 0.5 + rng() * 0.15;
-          ev.push({ beat: bar * BPB() + b, notes: voicing, dur: Math.min(d, BPB() - b), vel, inst: 'keys' });
-          /* N2 双层键盘：Rhodes 高八度轻叠层（rnb 60%，沙滩弦乐式厚度） */
-          if (styleKey === 'rnb' && rng() < 0.6) {
-            ev.push({ beat: bar * BPB() + b, notes: voicing.map(n => Math.min(n + 12, 96)), dur: Math.min(d, BPB() - b) * 0.6, vel: vel * 0.55, inst: 'keys', layer: 2 });
+          const vel = 0.46 + rng() * 0.13;
+          /* v5.2 comping 断奏化：最长 1 拍，Rhodes 变 stab 才会"弹"而不是"糊一片" */
+          ev.push({ beat: bar * BPB() + b, notes: voicing, dur: Math.min(d, 1, BPB() - b), vel, inst: 'keys' });
+          /* N2 双层键盘：Rhodes 高八度轻叠层（rnb 45%） */
+          if (styleKey === 'rnb' && rng() < 0.45) {
+            ev.push({ beat: bar * BPB() + b, notes: voicing.map(n => Math.min(n + 12, 96)), dur: Math.min(d, 1, BPB() - b) * 0.5, vel: vel * 0.45, inst: 'keys', layer: 2 });
           }
         }
       }
@@ -1255,7 +1341,7 @@ function loadGuitarSamples() {
     }
   }
 }
-function playGuitarReal(patch, midi, t, dur, vel, slideFrom, legato, styleKey) {
+function playGuitarReal(patch, midi, t, dur, vel, slideFrom, legato, styleKey, artic) {
   const set = GUITAR_PATCH_MAP[patch] || 'electric';
   const bank = GUITAR_SAMP.buffers[set] || {};
   const keys = Object.keys(bank).map(Number);
@@ -1293,10 +1379,14 @@ function playGuitarReal(patch, midi, t, dur, vel, slideFrom, legato, styleKey) {
   /* v5.1：attack 随机化（6~20ms/24~38ms）+ jazz 拇指柔音 ×1.6 + 轻音软起 ×1.3——消灭"每音一个模子"的机器感 */
   const atk = (legato ? 0.024 + Math.random() * 0.014 : 0.008 + Math.random() * 0.012)
     * (styleKey === 'jazz' ? 1.6 : 1) * (vel < 0.5 ? 1.3 : 1);
+  /* v5.3 可闻时值：尾音按演奏法缩放。0.45 拍断奏 + 固定 0.4s 尾 = 实际 1 拍长（旧版断奏听不见的根因） */
+  const tail = artic === 'stacc' ? 0.04 + Math.random() * 0.05
+    : artic === 'port' ? 0.12 + Math.random() * 0.1
+    : 0.25 + Math.random() * 0.25;
   g.gain.setValueAtTime(0.0001, t);
   g.gain.exponentialRampToValueAtTime(Math.max(vel, 0.05), t + atk);
   g.gain.setValueAtTime(Math.max(vel, 0.05), t + Math.max(0.05, dur - 0.1));
-  g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.25 + Math.random() * 0.25);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur + tail);
   src.connect(g); g.connect(out);
   src.start(t); src.stop(t + dur + 0.4);
   /* v4 §2.3：前一音快速闪避到 0.45×——旋律"连成线"而不是一颗颗蹦 */
@@ -1321,7 +1411,7 @@ function playGuitarReal(patch, midi, t, dur, vel, slideFrom, legato, styleKey) {
     g2.gain.setValueAtTime(0.0001, t + 0.012);
     g2.gain.exponentialRampToValueAtTime(Math.max(v2, 0.03), t + 0.024);
     g2.gain.setValueAtTime(Math.max(v2, 0.03), t + Math.max(0.05, dur - 0.1));
-    g2.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.25 + Math.random() * 0.25);
+    g2.gain.exponentialRampToValueAtTime(0.0001, t + dur + tail * 0.9); /* v5.3：双轨同演奏法尾音 */
     const pan = raw2.createStereoPanner ? raw2.createStereoPanner() : null;
     if (pan) { pan.pan.value = 0.45; g2.connect(pan); pan.connect(out); }
     else g2.connect(out);
@@ -1839,13 +1929,13 @@ function scheduleAll() {
         const gduck = duckMulAt(e.beat, 0.85); /* v4.2 吉他随 kick/snare 闪避，让鼓 */
         if (src === 'sf') {
           const inst = instName && sampOf(instName, 'guitar');
-          if (inst) { inst.play(e.midi, pgt, { duration: dur + (e.dur >= 1 ? 0.15 : 0.07), gain: e.vel * 1.05 * gduck * (e.slur ? 0.82 : 1) }); return; } /* v5.1 SF 音放尾巴，不再硬截 */
-          if (playGuitarReal(state.layers.guitar.patch, e.midi, pgt, dur, e.vel * 1.05 * gduck, slideFrom, e.tie || e.slur, melStyle)) return;
+          if (inst) { inst.play(e.midi, pgt, { duration: dur + (e.artic === "stacc" ? 0.03 : e.artic === "port" ? 0.08 : e.dur >= 1 ? 0.2 : 0.1), gain: e.vel * 1.05 * gduck * (e.slur ? 0.82 : 1) }); return; } /* v5.3 SF 尾巴按演奏法 */
+          if (playGuitarReal(state.layers.guitar.patch, e.midi, pgt, dur, e.vel * 1.05 * gduck, slideFrom, e.tie || e.slur, melStyle, e.artic)) return;
           AE.guitar.triggerAttackRelease(midiName(e.midi), dur, pgt, e.vel * gduck * (e.slur ? 0.82 : 1));
         } else {
-          if (playGuitarReal(state.layers.guitar.patch, e.midi, pgt, dur, e.vel * 1.05 * gduck, slideFrom, e.tie || e.slur, melStyle)) return;
+          if (playGuitarReal(state.layers.guitar.patch, e.midi, pgt, dur, e.vel * 1.05 * gduck, slideFrom, e.tie || e.slur, melStyle, e.artic)) return;
           const inst = instName && sampOf(instName, 'guitar');
-          if (inst) inst.play(e.midi, pgt, { duration: dur + (e.dur >= 1 ? 0.15 : 0.07), gain: e.vel * 1.05 * gduck });
+          if (inst) inst.play(e.midi, pgt, { duration: dur + (e.artic === "stacc" ? 0.03 : e.artic === "port" ? 0.08 : e.dur >= 1 ? 0.2 : 0.1), gain: e.vel * 1.05 * gduck });
           else AE.guitar.triggerAttackRelease(midiName(e.midi), dur, pgt, e.vel * gduck);
         }
       }, t);
@@ -1863,7 +1953,7 @@ function scheduleAll() {
       Tone.Transport.schedule(tt2 => { const tt = tt2 + koff;
         const gi = e.inst && e.inst.startsWith('guitar:') ? e.inst.slice(7) : null;
         const gInst = gi && sampOf(SAMP_GUITAR[gi], 'guitar');
-        if (gInst) for (const n of e.notes) gInst.play(n, tt, { duration: dur, gain: e.vel * 1.1 * kduck });
+        if (gInst) for (const n of e.notes) gInst.play(n, tt, { duration: dur, gain: e.vel * 1.0 * kduck });
         else if (ks === '@vibes') AE.keysVibes.triggerAttackRelease(names, dur, tt, e.vel * 0.85 * kduck);
         else {
           const inst = ks && sampOf(ks, 'keys');
@@ -2241,8 +2331,10 @@ function applyTone(layer) {
     AE.sendGuitar.gain.value = t.s * 0.65 * perfMul; /* v4.3 混响发送收敛 */
   } else if (layer === 'keys' && AE.toneEqKeys) {
     AE.toneEqKeys.high.value = brightDb;
+    AE.toneEqKeys.low.value = -3.5 + t.b * 3; /* v5.2 Rhodes 低中收掉：250-500Hz 和吉他/贝斯抢 = 难听根源 */
+    AE.toneEqKeys.mid.value = -1 + t.b * 2;
     AE.toneDistKeys.distortion = t.t * 0.25;
-    AE.sendKeys.gain.value = t.s * 0.9 * perfMul;
+    AE.sendKeys.gain.value = t.s * 0.55 * perfMul; /* v5.2 0.9→0.55：电钢琴不再泡在大混响里 */
   } else if (layer === 'bass' && AE.toneFilterBass) {
     AE.toneFilterBass.frequency.value = 400 + t.b * 9000; /* 200Hz(闷)~9.4kHz(亮)，默认不再闷 */
     AE.sendBass.gain.value = t.s * 0.25;
