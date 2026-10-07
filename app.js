@@ -1170,16 +1170,23 @@ function buildAudio() {
 
   /* --- 引擎 v2：全链仅 1 个混响 + 廉价双二阶滤波；卷积从 4 降到 1 --- */
   AE.masterVerb = new Tone.Reverb({ decay: 2.2, wet: 0.3 }).connect(AE.master);
-  /* 吉他/键盘：失真→EQ→主总线 */
-  AE.toneEqGuitar = new Tone.EQ3({ low: 0, mid: 0, high: 3 }).connect(AE.master);
-  AE.toneDistGuitar = new Tone.Distortion(0).connect(AE.toneEqGuitar);
-  AE.toneEqKeys = new Tone.EQ3({ low: 0, mid: 0, high: 2 }).connect(AE.master);
-  AE.toneDistKeys = new Tone.Distortion(0).connect(AE.toneEqKeys);
+  /* v5.4 粘合总线：和声层共用一个温和总线压缩——吉他/键盘/pad 被"压进"同一空间，
+     不再各自直连主总线当"叠加的独奏"（吉他游离在歌外的根因之一） */
+  AE.musicBus = new Tone.Compressor(-18, 2, 0.03, 0.25).connect(AE.master); /* v5.5 Suno 式 glue：慢attack放鼓瞬态、2:1只粘sustain */
+  /* 吉他/键盘：失真→高通(v5.5 低频单声道化)→EQ→粘合总线 */
+  AE.toneEqGuitar = new Tone.EQ3({ low: 0, mid: 0, high: 3 }).connect(AE.musicBus);
+  AE.hpGuitar = new Tone.Filter(70, 'highpass').connect(AE.toneEqGuitar); /* 70Hz 以下让给贝斯 */
+  AE.toneDistGuitar = new Tone.Distortion(0).connect(AE.hpGuitar);
+  AE.toneEqKeys = new Tone.EQ3({ low: 0, mid: 0, high: 2 }).connect(AE.musicBus);
+  AE.hpKeys = new Tone.Filter(100, 'highpass').connect(AE.toneEqKeys); /* Rhodes 低频浑浊重灾区 */
+  AE.toneDistKeys = new Tone.Distortion(0).connect(AE.hpKeys);
   AE.toneFilterBass = new Tone.Filter(9000, 'lowpass').connect(AE.master);
-  /* Pad：移相→风格低通→EQ→主总线（v4 S5：合成器音色链随风格开合） */
-  AE.toneEqPad = new Tone.EQ3({ low: 0, mid: 0, high: 0 }).connect(AE.master);
+  /* Pad：移相→风格低通→EQ→粘合总线（v4 S5：合成器音色链随风格开合） */
+  AE.toneEqPad = new Tone.EQ3({ low: 0, mid: 0, high: 0 }).connect(AE.musicBus);
   AE.padFilter = new Tone.Filter(8000, 'lowpass');
-  AE.padPhaser.connect(AE.padFilter);
+  AE.hpPad = new Tone.Filter(80, 'highpass'); /* v5.5 pad 低频不抢贝斯 */
+  AE.padPhaser.connect(AE.hpPad);
+  AE.hpPad.connect(AE.padFilter);
   AE.padFilter.connect(AE.toneEqPad);
   /* 鼓：失真(轻饱和)→EQ→主总线 */
   AE.toneEqDrums = new Tone.EQ3({ low: 0, mid: 0, high: 2 }).connect(AE.master);
@@ -1341,6 +1348,17 @@ function loadGuitarSamples() {
     }
   }
 }
+/* v5.6：共享拨片噪声缓冲（60ms 指数衰减白噪，经 bandpass 塑成拨片刷弦瞬态） */
+function guitarPickNoise(raw) {
+  if (GUITAR_SAMP._pickNoise) return GUITAR_SAMP._pickNoise;
+  const n = Math.floor(raw.sampleRate * 0.06);
+  const b = raw.createBuffer(1, n, raw.sampleRate);
+  const d = b.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-(i / n) * 9);
+  GUITAR_SAMP._pickNoise = b;
+  return b;
+}
+
 function playGuitarReal(patch, midi, t, dur, vel, slideFrom, legato, styleKey, artic) {
   const set = GUITAR_PATCH_MAP[patch] || 'electric';
   const bank = GUITAR_SAMP.buffers[set] || {};
@@ -1349,6 +1367,12 @@ function playGuitarReal(patch, midi, t, dur, vel, slideFrom, legato, styleKey, a
   let best = keys[0], bd = 99;
   for (const k of keys) { const d = Math.abs(k - midi); if (d < bd) { bd = d; best = k; } }
   if (bd > 5) return false; /* v5.1：>5 半音 playbackRate 共振峰漂移=塑料味，交还 SoundFont */
+  /* v5.6 轮播微差：同音高 0.6s 内连击时换邻近采样位（真人两连音不可能完全同音色） */
+  if (keys.length > 1 && midi === GUITAR_SAMP._rrMidi && t - GUITAR_SAMP._rrT < 0.6) {
+    const alts = keys.filter(k => k !== best && Math.abs(k - midi) <= Math.min(5, Math.max(bd + 2, 2)));
+    if (alts.length) best = alts.reduce((a, b) => Math.abs(a - midi) <= Math.abs(b - midi) ? a : b);
+  }
+  GUITAR_SAMP._rrMidi = midi; GUITAR_SAMP._rrT = t;
   const fx = Object.assign({}, GUITAR_PATCH_FX[patch] || GUITAR_PATCH_FX.clean, GUITAR_STYLE_FX[styleKey] || {});
   const out = guitarFxChain(patch, Tone.getContext().rawContext, styleKey);
   if (fx.gate < 1) dur = Math.max(0.07, Math.min(dur, 0.08 + dur * fx.gate));
@@ -1356,7 +1380,7 @@ function playGuitarReal(patch, midi, t, dur, vel, slideFrom, legato, styleKey, a
   const raw = Tone.getContext().rawContext;
   const src = raw.createBufferSource();
   src.buffer = bank[best];
-  src.playbackRate.value = Math.pow(2, (midi - best) / 12) * (1 + (Math.random() * 0.01 - 0.005));
+  src.playbackRate.value = Math.pow(2, (midi - best) / 12) * (1 + (Math.random() * 0.016 - 0.008)); /* v5.6 ±0.8%：真人手指压力差 */
   if (slideFrom && slideFrom !== midi && Math.abs(midi - slideFrom) <= 7) {
     /* 滑音：从前一音高滑到目标（≤7 半音才滑，大跳保持干净分离） */
     src.playbackRate.setValueAtTime(Math.pow(2, (slideFrom - best) / 12), t);
@@ -1387,13 +1411,24 @@ function playGuitarReal(patch, midi, t, dur, vel, slideFrom, legato, styleKey, a
   g.gain.exponentialRampToValueAtTime(Math.max(vel, 0.05), t + atk);
   g.gain.setValueAtTime(Math.max(vel, 0.05), t + Math.max(0.05, dur - 0.1));
   g.gain.exponentialRampToValueAtTime(0.0001, t + dur + tail);
-  src.connect(g); g.connect(out);
+  /* v5.6 力度联动音色：轻拨暗、重拨亮——固定音色是"塑料感"的频谱根源 */
+  const tp = raw.createBiquadFilter(); tp.type = 'lowpass'; tp.frequency.value = 1800 + Math.min(1, vel) * 6200; tp.Q.value = 0.5;
+  src.connect(tp); tp.connect(g); g.connect(out);
+  /* v5.6 拨弦瞬态：吉他的身份在前 15ms 拨片噪声里；attack 包络把它磨没了，单独补一发 */
+  const pk = raw.createBiquadFilter(); pk.type = 'bandpass'; pk.frequency.value = 2600 + Math.random() * 1600; pk.Q.value = 1.1;
+  const pg = raw.createGain();
+  const pgv = Math.min(0.9, vel * 0.65) * (artic === 'stacc' ? 1.15 : 1) * (styleKey === 'jazz' ? 0.55 : 1);
+  pg.gain.setValueAtTime(pgv, t);
+  pg.gain.exponentialRampToValueAtTime(0.0001, t + 0.012 + Math.random() * 0.01);
+  const pkSrc = raw.createBufferSource(); pkSrc.buffer = guitarPickNoise(raw);
+  pkSrc.connect(pk); pk.connect(pg); pg.connect(out);
+  pkSrc.start(t); pkSrc.stop(t + 0.04);
   src.start(t); src.stop(t + dur + 0.4);
   /* v4 §2.3：前一音快速闪避到 0.45×——旋律"连成线"而不是一颗颗蹦 */
   if (GUITAR_SAMP._lastG && !legato && t - GUITAR_SAMP._lastT < 0.9 && GUITAR_SAMP._lastG !== g) { /* v5.1：连线时前音保持，断奏才闪避 */
     try {
       GUITAR_SAMP._lastG.gain.cancelScheduledValues(t);
-      GUITAR_SAMP._lastG.gain.setTargetAtTime(GUITAR_SAMP._lastVel * 0.35, t, 0.012); /* v4.3 叠音残响更少 */
+      GUITAR_SAMP._lastG.gain.setTargetAtTime(GUITAR_SAMP._lastVel * 0.35, t, 0.035); /* v5.4 慢释放：泵感变坐感，吉他不再每拍被抽离 */
     } catch (e) {}
   }
   GUITAR_SAMP._lastG = g;
@@ -1407,16 +1442,18 @@ function playGuitarReal(patch, midi, t, dur, vel, slideFrom, legato, styleKey, a
     src2.buffer = bank[best];
     src2.playbackRate.value = Math.pow(2, (midi - best) / 12) * 1.006;
     const g2 = raw2.createGain();
-    const v2 = vel * (0.25 + th * 0.6); /* t=0.5 时与旧版 0.55 一致 */
-    g2.gain.setValueAtTime(0.0001, t + 0.012);
-    g2.gain.exponentialRampToValueAtTime(Math.max(v2, 0.03), t + 0.024);
+    const v2 = vel * (0.2 + th * 0.5); /* v5.4 副轨轻一点：宽度让位给融合 */
+    const h2 = 0.006 + Math.random() * 0.01; /* v5.4 Haas 随机 6~16ms，不再固定 12ms 梳状感 */
+    g2.gain.setValueAtTime(0.0001, t + h2);
+    g2.gain.exponentialRampToValueAtTime(Math.max(v2, 0.03), t + h2 + 0.012);
     g2.gain.setValueAtTime(Math.max(v2, 0.03), t + Math.max(0.05, dur - 0.1));
     g2.gain.exponentialRampToValueAtTime(0.0001, t + dur + tail * 0.9); /* v5.3：双轨同演奏法尾音 */
     const pan = raw2.createStereoPanner ? raw2.createStereoPanner() : null;
-    if (pan) { pan.pan.value = 0.45; g2.connect(pan); pan.connect(out); }
+    if (pan) { pan.pan.value = 0.28; g2.connect(pan); pan.connect(out); } /* v5.4 0.45→0.28：宽吉他=游离感 */
     else g2.connect(out);
-    src2.connect(g2);
-    src2.start(t + 0.012); src2.stop(t + dur + 0.45);
+    const tp2 = raw2.createBiquadFilter(); tp2.type = 'lowpass'; tp2.frequency.value = (1800 + Math.min(1, vel) * 6200) * 0.92; tp2.Q.value = 0.5;
+    src2.connect(tp2); tp2.connect(g2);
+    src2.start(t + h2); src2.stop(t + dur + 0.45);
   }
   return true;
 }
@@ -1930,10 +1967,10 @@ function scheduleAll() {
         if (src === 'sf') {
           const inst = instName && sampOf(instName, 'guitar');
           if (inst) { inst.play(e.midi, pgt, { duration: dur + (e.artic === "stacc" ? 0.03 : e.artic === "port" ? 0.08 : e.dur >= 1 ? 0.2 : 0.1), gain: e.vel * 1.05 * gduck * (e.slur ? 0.82 : 1) }); return; } /* v5.3 SF 尾巴按演奏法 */
-          if (playGuitarReal(state.layers.guitar.patch, e.midi, pgt, dur, e.vel * 1.05 * gduck, slideFrom, e.tie || e.slur, melStyle, e.artic)) return;
+          if (playGuitarReal(state.layers.guitar.patch, e.midi, pgt, dur, e.vel * 1.0 * gduck, slideFrom, e.tie || e.slur, melStyle, e.artic)) return;
           AE.guitar.triggerAttackRelease(midiName(e.midi), dur, pgt, e.vel * gduck * (e.slur ? 0.82 : 1));
         } else {
-          if (playGuitarReal(state.layers.guitar.patch, e.midi, pgt, dur, e.vel * 1.05 * gduck, slideFrom, e.tie || e.slur, melStyle, e.artic)) return;
+          if (playGuitarReal(state.layers.guitar.patch, e.midi, pgt, dur, e.vel * 1.0 * gduck, slideFrom, e.tie || e.slur, melStyle, e.artic)) return;
           const inst = instName && sampOf(instName, 'guitar');
           if (inst) inst.play(e.midi, pgt, { duration: dur + (e.artic === "stacc" ? 0.03 : e.artic === "port" ? 0.08 : e.dur >= 1 ? 0.2 : 0.1), gain: e.vel * 1.05 * gduck });
           else AE.guitar.triggerAttackRelease(midiName(e.midi), dur, pgt, e.vel * gduck);
