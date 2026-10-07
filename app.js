@@ -3094,6 +3094,18 @@ function bindEvents() {
   const tokEl = document.getElementById('replicate-token');
   try { tokEl.value = localStorage.getItem('motif_replicate') || ''; } catch (e) {}
   document.getElementById('btn-studio').onclick = studioRender;
+  document.getElementById('btn-melody-wav').onclick = async () => {
+    const st = document.getElementById('studio-status');
+    st.textContent = '正在渲染旋律 WAV…';
+    try {
+      const wav = await renderMelodyToWav();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(wav);
+      a.download = 'melody_' + state.styles[0] + '_' + state.bpm + 'bpm.wav';
+      a.click();
+      st.textContent = '✓ 已下载。免费生成：打开 huggingface.co/spaces/facebook/MusicGen → Melody 条件 → 上传此 WAV → 提示词粘这段：' + buildStudioPrompt();
+    } catch (e) { st.textContent = '出错：' + (e && e.message); }
+  };
   $('#btn-rematch').onclick = rematchMelody;
   $('#btn-reset-melody').onclick = () => { state.melodyEdited = false; regenerate('motive'); };
 
