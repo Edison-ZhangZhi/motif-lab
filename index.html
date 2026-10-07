@@ -255,6 +255,15 @@
           <button id="btn-audio" class="btn">⬇ 导出音频（WebM）</button>
           <button id="btn-copy-prog" class="btn">📋 复制和弦走向</button>
         </div>
+        <div class="studio-row">
+          <input type="password" id="replicate-token" placeholder="Replicate API Token（仅存本机浏览器）" autocomplete="off">
+          <button id="btn-studio" class="btn btn-primary">🎙 渲染成唱片</button>
+        </div>
+        <p class="studio-status" id="studio-status"></p>
+        <div class="studio-result" id="studio-result" hidden>
+          <audio id="studio-audio" controls style="width:100%"></audio>
+          <a id="studio-dl" class="btn small" download="motif-lab-studio.wav">⬇ 下载音频</a>
+        </div>
       </div>
     </section>
 

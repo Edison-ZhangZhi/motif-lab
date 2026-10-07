@@ -2202,6 +2202,110 @@ async function auditionLayer(layer) {
   }
 }
 
+/* ================= AI 录音棚：旋律离屏渲染 → MusicGen melody 条件生成 ================= */
+function encodeWav(buffers, sampleRate) {
+  const ch0 = buffers[0]; const numCh = buffers.length; const len = ch0.length;
+  const buf = new ArrayBuffer(44 + len * numCh * 2); const v = new DataView(buf);
+  const wstr = (o, s2) => { for (let i = 0; i < s2.length; i++) v.setUint8(o + i, s2.charCodeAt(i)); };
+  wstr(0, 'RIFF'); v.setUint32(4, 36 + len * numCh * 2, true); wstr(8, 'WAVE');
+  wstr(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, numCh, true); v.setUint32(24, sampleRate, true);
+  v.setUint32(28, sampleRate * numCh * 2, true); v.setUint16(32, numCh * 2, true);
+  v.setUint16(34, 16, true); wstr(36, 'data'); v.setUint32(40, len * numCh * 2, true);
+  let off = 44;
+  for (let i = 0; i < len; i++) for (let c = 0; c < numCh; c++) {
+    const s2 = Math.max(-1, Math.min(1, buffers[c][i]));
+    v.setInt16(off, s2 < 0 ? s2 * 0x8000 : s2 * 0x7FFF, true); off += 2;
+  }
+  return new Blob([buf], { type: 'audio/wav' });
+}
+function blobToDataURI(blob) {
+  return new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(blob); });
+}
+async function renderMelodyToWav() {
+  const SR = 22050;
+  const beatsPerBar = state.meter === 'm34' ? 3 : state.meter === 'm68' ? 6 : 4;
+  const loopSec = totalBars() * beatsPerBar * 60 / state.bpm;
+  const dur = Math.min(30, Math.max(10, loopSec));
+  const ctx = new OfflineAudioContext(1, Math.ceil(dur * SR), SR);
+  const master = ctx.createGain(); master.gain.value = 0.8; master.connect(ctx.destination);
+  const secPerBeat = 60 / state.bpm;
+  for (const e of melodyEvents) {
+    const t = e.beat * secPerBeat;
+    if (t >= dur - 0.1) continue;
+    const d = Math.min(e.dur * secPerBeat, dur - t);
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.value = 440 * Math.pow(2, (e.midi - 69) / 12);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(Math.max(e.vel, 0.1), t + 0.01);
+    g.gain.setValueAtTime(Math.max(e.vel, 0.1), t + Math.max(0.03, d - 0.08));
+    g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.1);
+    osc.connect(g); g.connect(master);
+    osc.start(t); osc.stop(t + d + 0.15);
+  }
+  const rendered = await ctx.startRendering();
+  return encodeWav([rendered.getChannelData(0)], SR);
+}
+function buildStudioPrompt() {
+  const st = state.styles[0];
+  const keyName = pcName(state.keyRoot) + ' ' + (state.mode === 'minor' || state.mode === 'dorian' ? 'minor' : 'major');
+  const preset = PRESETS.find(p => p.id === state.presetId);
+  const P = {
+    rnb: 'neo-soul R&B, smooth electric guitar lead, rhodes piano, warm 808 drums, laid-back groove, lush pads, professional studio recording',
+    jazz: 'swing jazz, hollow-body electric guitar lead, upright bass, brushed drums, soft piano comping, intimate club recording',
+    rock: 'classic rock, distorted electric guitar lead, driving drums, powerful bass, arena energy, vintage analog recording',
+    bossa: 'bossa nova, nylon string guitar lead, soft percussion, warm upright bass, gentle keys, beachside ambience, vintage recording',
+    afro: 'afrobeat, interlocking guitars, congas and shekere percussion, groovy electric bass, horn stabs, energetic live band recording',
+    hiphop: 'modern trap hip-hop, dark melodic hook, deep 808 sub bass, crisp hi-hats, atmospheric keys, punchy mix',
+  };
+  return (P[st] || P.rnb) + ', in ' + keyName + ', ' + state.bpm + ' bpm' + (preset ? ', ' + preset.name : '') + ', high quality, well mixed';
+}
+async function studioRender() {
+  const tokenEl = document.getElementById('replicate-token');
+  const status = document.getElementById('studio-status');
+  const token = (tokenEl.value || '').trim();
+  if (!token) { status.textContent = '请先填写 Replicate API Token（replicate.com → Account → API tokens）'; tokenEl.focus(); return; }
+  try { localStorage.setItem('motif_replicate', token); } catch (e) {}
+  status.textContent = '① 正在渲染旋律…';
+  try {
+    const wav = await renderMelodyToWav();
+    const melodyURI = await blobToDataURI(wav);
+    status.textContent = '② 正在呼叫 AI 录音棚（约 30-60 秒）…';
+    const pred = await fetch('https://api.replicate.com/v1/models/meta/musicgen/predictions', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: {
+        prompt: buildStudioPrompt(),
+        melody: melodyURI,
+        duration: 30,
+        model_version: 'melody',
+      } }),
+    });
+    if (!pred.ok) {
+      const err = await pred.text();
+      status.textContent = '请求失败(' + pred.status + ')：' + err.slice(0, 200) + (pred.status === 401 ? '（token 无效）' : '');
+      return;
+    }
+    let job = await pred.json();
+    while (job.status !== 'succeeded' && job.status !== 'failed' && job.status !== 'canceled') {
+      await new Promise(r => setTimeout(r, 2500));
+      const poll = await fetch('https://api.replicate.com/v1/predictions/' + job.id, { headers: { 'Authorization': 'Bearer ' + token } });
+      job = await poll.json();
+      status.textContent = '② AI 录音棚工作中…（' + job.status + '）';
+    }
+    if (job.status !== 'succeeded') { status.textContent = '生成失败：' + JSON.stringify(job.error || '').slice(0, 200); return; }
+    const audioUrl = Array.isArray(job.output) ? job.output[0] : job.output;
+    document.getElementById('studio-result').hidden = false;
+    document.getElementById('studio-audio').src = audioUrl;
+    document.getElementById('studio-dl').href = audioUrl;
+    status.textContent = '✓ 完成！这是 AI 按你的旋律与风格描述生成的唱片级渲染。';
+  } catch (e) {
+    status.textContent = '出错：' + (e && e.message);
+  }
+}
+
 /* ---------- 试听单和弦 ---------- */
 async function auditionChord(i) {
   if (!state.audioReady) { buildAudio(); state.audioReady = true; loadInstruments(); }
@@ -2987,6 +3091,9 @@ function bindEvents() {
   /* 卷帘编辑 */
   bindRollEditor();
   $('#btn-del-note').onclick = deleteSelNote;
+  const tokEl = document.getElementById('replicate-token');
+  try { tokEl.value = localStorage.getItem('motif_replicate') || ''; } catch (e) {}
+  document.getElementById('btn-studio').onclick = studioRender;
   $('#btn-rematch').onclick = rematchMelody;
   $('#btn-reset-melody').onclick = () => { state.melodyEdited = false; regenerate('motive'); };
 
