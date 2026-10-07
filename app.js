@@ -2306,6 +2306,57 @@ async function studioRender() {
   }
 }
 
+/* ================= 生成式渲染（本地神经网络，Suno 同技术路线） =================
+   采样拼接的混音天花板物理上够不着唱片级；这条路线换成神经音频生成：
+   模型直接从音频潜空间生成波形，乐器/空间/混音是"长"出来的而非拼出来的。
+   免费、不要 token、数据不出本机。代价：首次下载约 1.2GB 模型（之后走缓存）、
+   需要 Chrome/Edge 桌面版（WebGPU）、生成一次约 1-5 分钟（取决于显卡）。 */
+let NEURAL_PIPE = null, NEURAL_LOADING = null;
+async function neuralRender() {
+  const status = document.getElementById('studio-status');
+  if (!navigator.gpu) { status.textContent = '本浏览器不支持 WebGPU（需桌面版 Chrome/Edge）；可改用「渲染成唱片」或导出 WAV 到 HuggingFace 免费生成'; return; }
+  try {
+    if (!NEURAL_PIPE) {
+      if (!NEURAL_LOADING) {
+        NEURAL_LOADING = (async () => {
+          status.textContent = '正在加载神经网络（首次约 1.2GB，之后走缓存）…';
+          const t = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@3.3.1');
+          t.env.allowLocalModels = false;
+          t.env.progress_callback = p => {
+            if (p.status === 'progress') status.textContent = '下载模型 ' + (p.file || '') + ' ' + Math.round(p.progress || 0) + '%';
+          };
+          let pipe;
+          try {
+            pipe = await t.pipeline('text-to-audio', 'Xenova/musicgen-small', { dtype: 'q8' });
+          } catch (e) {
+            pipe = await t.pipeline('text-to-audio', 'Xenova/musicgen-small');
+          }
+          return pipe;
+        })();
+      }
+      NEURAL_PIPE = await NEURAL_LOADING;
+    }
+    status.textContent = '🧠 神经网络生成中（约 1-5 分钟，取决显卡）…';
+    const prompt = buildStudioPrompt();
+    const out2 = await NEURAL_PIPE(prompt, {
+      max_new_tokens: 512,
+      do_sample: true,
+      temperature: 1.0,
+      top_k: 50,
+      guidance_scale: null,
+    });
+    const audio = out2.audio, sr = out2.sampling_rate || 32000;
+    const wav = encodeWav([audio], sr);
+    const url = URL.createObjectURL(wav);
+    document.getElementById('studio-result').hidden = false;
+    document.getElementById('studio-audio').src = url;
+    document.getElementById('studio-dl').href = url;
+    status.textContent = '✓ 生成式渲染完成（' + Math.round(audio.length / sr) + 's）。声学/空间/混音由模型生成——注意：此为文本驱动，旋律走向为 AI 自由演绎，不严格遵循卷帘上的旋律；要旋律严格一致请用「渲染成唱片」。';
+  } catch (e) {
+    status.textContent = '生成式渲染出错：' + (e && e.message ? e.message.slice(0, 200) : e) + '（可改用「渲染成唱片」或导出 WAV 免费路径）';
+  }
+}
+
 /* ---------- 试听单和弦 ---------- */
 async function auditionChord(i) {
   if (!state.audioReady) { buildAudio(); state.audioReady = true; loadInstruments(); }
@@ -3094,6 +3145,7 @@ function bindEvents() {
   const tokEl = document.getElementById('replicate-token');
   try { tokEl.value = localStorage.getItem('motif_replicate') || ''; } catch (e) {}
   document.getElementById('btn-studio').onclick = studioRender;
+  document.getElementById('btn-neural').onclick = neuralRender;
   document.getElementById('btn-melody-wav').onclick = async () => {
     const st = document.getElementById('studio-status');
     st.textContent = '正在渲染旋律 WAV…';
