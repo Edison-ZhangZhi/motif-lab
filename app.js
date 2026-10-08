@@ -1952,7 +1952,7 @@ function applyMix() {
   AE.guitarVol.volume.value = Tone.gainToDb(state.layers.guitar.vol * state.layers.guitar.vol) - 4; /* v4.1 让位鼓组 */
   AE.keysVol.volume.value = Tone.gainToDb(state.layers.keys.vol * state.layers.keys.vol) - 7;
   AE.bassVol.volume.value = Tone.gainToDb(state.layers.bass.vol * state.layers.bass.vol) - 4;
-  AE.drumsVol.volume.value = Tone.gainToDb(state.layers.drums.vol * state.layers.drums.vol) + 0; /* v4.2 鼓组默认最高位 */
+  AE.drumsVol.volume.value = Tone.gainToDb(state.layers.drums.vol * state.layers.drums.vol) + 1; /* 鼓组挺前 +1dB */
   AE.synthVol.volume.value = Tone.gainToDb(state.layers.synth.vol * state.layers.synth.vol) - 7.5; /* v4.3 pad 再退半步 */
   applyGuitarPatch();
 }
