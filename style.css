@@ -269,3 +269,12 @@ footer {
 .studio-variants { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
 .variant-row { display: flex; align-items: center; gap: 10px; }
 .variant-label { font-size: 10.5px; color: var(--ink-2); min-width: 76px; letter-spacing: .03em; }
+
+/* ---------- 风格档案 SPEC 面板 ---------- */
+#spec-panel { margin-top: 12px; padding: 12px 14px; background: #FBF8F1; border: 1px solid var(--line-2); border-radius: 10px; font-size: 11px; line-height: 1.9; color: var(--ink-2); }
+.spec-title { font-family: var(--serif); font-size: 13px; color: var(--ink); margin-bottom: 4px; }
+.spec-title em { font-size: 10px; color: var(--acc); font-style: normal; margin-left: 8px; font-family: var(--sans); }
+.spec-row b { color: var(--ink); font-weight: 500; margin-right: 6px; }
+.spec-row i { font-style: normal; color: var(--ink-2); }
+.spec-row { margin-top: 2px; }
+.spec-multi { font-size: 11px; color: var(--ink-2); }

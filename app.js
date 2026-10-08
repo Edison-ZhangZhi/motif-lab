@@ -2722,12 +2722,30 @@ function syncPresetSelect() {
   else if (match.length) loadPreset(match[0].id); /* 当前走向与风格不符 → 自动换成本风格招牌走向 */
 }
 
+/* 风格档案面板：渲染当前 SPEC 卡 */
+function renderSpecPanel() {
+  const el = document.getElementById("spec-panel");
+  if (!el) return;
+  if (state.styles.length !== 1) { el.innerHTML = "<span class='spec-multi'>融合模式：" + state.styles.map(k => SPEC_META[k] ? SPEC_META[k].name : k).join(" + ") + "（档案需单风格查看）</span>"; return; }
+  const sp = getSpec(state.styles[0]);
+  if (!sp) { el.innerHTML = ""; return; }
+  const chk = specCompleteness(sp.key);
+  el.innerHTML =
+    "<div class=spec-title>风格档案 · " + sp.name + (chk.ok ? " <em>规格完整 ✓</em>" : " <em style=color:#c2452d>缺:" + chk.missing.join(",") + "</em>") + "</div>" +
+    "<div class=spec-row><b>参考曲</b>" + sp.referenceSongs.map(x => "<i>" + x + "</i>").join("、") + "</div>" +
+    "<div class=spec-row><b>BPM</b>" + sp.bpmRange[0] + "-" + sp.bpmRange[1] + " <b>律动</b>" + sp.groove + "</div>" +
+    "<div class=spec-row><b>和声语法</b>" + sp.harmony + "</div>" +
+    "<div class=spec-row><b>声音目标</b>" + sp.soundTarget + "</div>" +
+    "<div class=spec-row><b>引擎件</b>细胞" + sp.cellCount + " · 鼓预算" + sp.budget + "/小节 · 预设[" + sp.presets.length + "] · DNA密度" + sp.dnaDensity + "</div>";
+}
+
 function setStyles(list) {
   state.styles = list.slice();
   document.querySelectorAll('#style-chips .chip').forEach(chip => {
     chip.classList.toggle('active', state.styles.includes(chip.dataset.style));
   });
   syncPresetSelect(); /* v4.1：预设列表随风格过滤 */
+  renderSpecPanel();
   $('#fusion-hint').textContent = state.styles.length > 1
     ? `已选：${state.styles.map(k => STYLES[k].name).join(' + ')} · 节奏/音阶/律动按小节交替融合，编曲配置保持你的设置`
     : `已选：${STYLES[state.styles[0]].name} · 已自动配置该风格的吉他采样/鼓组/速度/Swing，可再微调`;

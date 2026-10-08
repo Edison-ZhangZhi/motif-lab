@@ -21,7 +21,7 @@ const mocks = { console, setInterval: () => 0, setTimeout: () => 0, clearTimeout
   document: { addEventListener: () => {}, querySelector: () => null, querySelectorAll: () => [], getElementById: () => null, createElement: () => ({ click: () => {} }) },
   URL: { createObjectURL: () => '', revokeObjectURL: () => {} }, Blob: class {}, Promise };
 const ctx = vm.createContext(mocks);
-for (const f of ['theory.js', 'cells.js', 'rules.js', 'app.js'])
+for (const f of ['theory.js', 'cells.js', 'specs.js', 'rules.js', 'app.js'])
   vm.runInContext(fs.readFileSync(path.join(DIR, f), 'utf8'), ctx, { filename: f });
 
 /* ---------- A. 静态链审计（源码级，13 项硬指标） ---------- */
@@ -39,6 +39,14 @@ const STATIC = [
   ['拍号·UI 接线',           SRC.includes('ctl-meter'),              '拍号选择器必须接入 regenerate'],
   ['和声·九和弦扩展表',        SRC.includes('EXT_UP'),                '非 rock 风格扩展和弦升级路径'],
   ['结构·vamp 让位',          SRC.includes('secChange'),              '段落切换不硬切断和弦垫'],
+  ['体系·六风格规格卡完整', (() => {
+    try {
+      const res = vm.runInContext("['rnb','jazz','rock','bossa','afro','hiphop'].map(k => specCompleteness(k))", ctx);
+      const bad = res.filter(c => !c.ok).map((c, i) => ['rnb','jazz','rock','bossa','afro','hiphop'][i] + ':' + c.missing.join(','));
+      if (bad.length) console.log('    规格缺失 ' + bad.join(' | '));
+      return bad.length === 0;
+    } catch (e) { console.log('    规格检查异常: ' + e.message); return false; }
+  })(), 'SPEC 卡六件齐（参考曲/细胞/鼓/音色/律动/DNA/预设）'],
 ];
 const staticPass = STATIC.filter(s => s[1]).length;
 
