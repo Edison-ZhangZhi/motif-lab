@@ -34,7 +34,7 @@ const STATIC = [
   ['音色·中频琴体归位',       SRC.includes('mid.value = 0.5 + t.t * 2.5'), '吉他 mid 必须为正（EQ3 250-2500Hz 是琴体）'],
   ['音色·移相器低速',         SRC.includes('Phaser(0.08, 0.5, 320)'),  'octaves=4 全频扫描是合成器"老问题"根因'],
   ['鼓·NY 并行压缩',          SRC.includes('drumsPar'),              '鼓力量链的核心'],
-  ['混音·三声部闪避',         SRC.includes('0.78') && SRC.includes('0.74') && SRC.includes('0.85'), 'keys/pad/guitar 随 kick/snare 闪避'],
+  ['混音·三声部闪避',         (SRC.match(/duckMulAt\(e\.beat, 0\.\d+\)/g) || []).length >= 3, 'keys/pad/guitar 随 kick/snare 闪避'],
   ['边界·生成器过滤',         SRC.includes('beat < bars * BPB()'),    '各声部越界过滤必须存在'],
   ['拍号·UI 接线',           SRC.includes('ctl-meter'),              '拍号选择器必须接入 regenerate'],
   ['和声·九和弦扩展表',        SRC.includes('EXT_UP'),                '非 rock 风格扩展和弦升级路径'],

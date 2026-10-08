@@ -1172,7 +1172,9 @@ function buildAudio() {
   AE.masterVerb = new Tone.Reverb({ decay: 2.2, wet: 0.3 }).connect(AE.master);
   /* v5.4 粘合总线：和声层共用一个温和总线压缩——吉他/键盘/pad 被"压进"同一空间，
      不再各自直连主总线当"叠加的独奏"（吉他游离在歌外的根因之一） */
-  AE.musicBus = new Tone.Compressor(-18, 2, 0.03, 0.25).connect(AE.master); /* v5.5 Suno 式 glue：慢attack放鼓瞬态、2:1只粘sustain */
+  AE.musicBus = new Tone.Compressor(-18, 2, 0.03, 0.25); /* v5.5 Suno 式 glue */
+  AE.musicBus.connect(AE.masterEQ = new Tone.EQ3({ low: -2.5, mid: -1, high: 2, lowFrequency: 250, highFrequency: 4000 })); /* 频段手术：压糊提空气感 */
+  AE.masterEQ.connect(AE.master);
   /* 吉他/键盘：失真→高通(v5.5 低频单声道化)→EQ→粘合总线 */
   AE.toneEqGuitar = new Tone.EQ3({ low: 0, mid: 0, high: 3 }).connect(AE.musicBus);
   AE.hpGuitar = new Tone.Filter(70, 'highpass').connect(AE.toneEqGuitar); /* 70Hz 以下让给贝斯 */
@@ -1213,7 +1215,7 @@ function buildAudio() {
   AE.drumsComp.connect(AE.toneDistDrums);
   /* 鼓房间声：0.45s 短混响 send（kick/snare 的"房间麦"，鼓机→真鼓） */
   AE.drumRoom = new Tone.Reverb({ decay: 0.35, wet: 1 }).connect(AE.master); /* v4.3 短房间=力量而非大厅 */
-  AE.drumRoomSend = new Tone.Gain(0.16).connect(AE.drumRoom); /* v4.3 低云收敛 */
+  AE.drumRoomSend = new Tone.Gain(0.26).connect(AE.drumRoom); /* 房间胶：鼓件共享空间 */
   AE.drumsComp.connect(AE.drumRoomSend);
 
   /* --- 808 鼓组（经典 TR-808 合成复刻，808 本身就是合成鼓机） --- */
@@ -1733,10 +1735,10 @@ function ensureBuses() {
   SAMP.busByRole = {};
   const mk = (role) => { const g = raw.createGain(); g.gain.value = 1; SAMP.busByRole[role] = g; return g; };
   /* 吉他 → 失真→EQ→暖声链；keys → EQ→暖声链；贝斯 → 低通→主总线（不过合唱混响） */
-  mk('guitar').connect(nativeInputOf(AE.toneDistGuitar));
-  mk('keys').connect(nativeInputOf(AE.toneDistKeys));
+  mk('guitar').connect(nativeInputOf(AE.hpGuitar));
+  mk('keys').connect(nativeInputOf(AE.hpKeys));
   mk('bass').connect(nativeInputOf(AE.toneFilterBass));
-  mk('pad').connect(nativeInputOf(AE.padPhaser));
+  mk('pad').connect(nativeInputOf(AE.hpPad));
   /* 空间发送（原生 gain → Tone.Gain） */
   const mkSend = (role, send) => { const g = raw.createGain(); g.gain.value = 0.3; g.connect(nativeInputOf(send)); return g; };
   SAMP.sendByRole = {
@@ -2002,7 +2004,7 @@ function scheduleAll() {
       const src = GUITAR_SRC_BY_STYLE[melStyle] || 'samp';
       Tone.Transport.schedule(tt => {
         const pgt = tt + toff;
-        const gduck = duckMulAt(e.beat, 0.85); /* v4.2 吉他随 kick/snare 闪避，让鼓 */
+        const gduck = duckMulAt(e.beat, 0.80); /* v4.2 吉他随 kick/snare 闪避，让鼓 */
         if (src === 'sf') {
           const inst = instName && sampOf(instName, 'guitar');
           if (inst) { inst.play(e.midi, pgt, { duration: dur + (e.artic === "stacc" ? 0.03 : e.artic === "port" ? 0.08 : e.dur >= 1 ? 0.2 : 0.1), gain: e.vel * 1.05 * gduck * (e.slur ? 0.82 : 1) }); return; } /* v5.3 SF 尾巴按演奏法 */
@@ -2025,7 +2027,7 @@ function scheduleAll() {
       const names = e.notes.map(midiName);
       const koff = voiceOff(styleOfBar(e.beat), 'keys', e.beat) + baseSwingSec(e.beat * SPB());
       const ks = SAMP_KEYS_BY_STYLE[styleOfBar(e.beat)] || SAMP_KEYS;
-      const kduck = duckMulAt(e.beat, 0.78); /* B6：kick/snare 后和声闪避（v4.2 加深，泵感=鼓的力量感） */
+      const kduck = duckMulAt(e.beat, 0.68); /* B6：kick/snare 后和声闪避（v4.2 加深，泵感=鼓的力量感） */
       Tone.Transport.schedule(tt2 => { const tt = tt2 + koff;
         const gi = e.inst && e.inst.startsWith('guitar:') ? e.inst.slice(7) : null;
         const gInst = gi && sampOf(SAMP_GUITAR[gi], 'guitar');
@@ -2050,7 +2052,7 @@ function scheduleAll() {
       const pcfg = PAD_BY_STYLE[styleOfBar(e.beat)] || PAD_BY_STYLE.rnb;
       const padName = SAMP_PAD[pcfg.bank];
       const inst = (padName && sampOf(padName, 'pad')) || null;
-      const pduck = duckMulAt(e.beat, 0.74); /* B6：kick 后 pad 闪避更深 */
+      const pduck = duckMulAt(e.beat, 0.68); /* B6：kick 后 pad 闪避更深 */
       Tone.Transport.schedule(tt => {
         if (inst) for (const n of e.notes) inst.play(n, tt + poff + lag, { duration: dur, gain: e.vel * 1.4 * pduck });
         else AE.synthPad.triggerAttackRelease(names, dur, tt + poff + lag, e.vel * pduck);
