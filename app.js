@@ -1348,6 +1348,45 @@ function loadGuitarSamples() {
     }
   }
 }
+/* ================= v5.7 声部互锁：治"各播各的" =================
+   真实乐队的锁定关系：贝斯 onset 贴底鼓（pocket）、军鼓位留空、键盘避让旋律 onset（应答）。
+   各生成器彼此独立、节奏互不参照 = "各播各的"的根因；此 pass 在调度前统一对齐。 */
+function interlockPass() {
+  const spb = SPB();
+  const WIN = 0.06; /* ±60ms 内视为"撞车/该吸合" */
+  const kickBeats = drumEvents.filter(d => d.inst === 'kick' || d.inst === 'kick_808').map(d => d.step16 / spb);
+  const snareBeats = drumEvents.filter(d => /snare|clap/.test(d.inst)).map(d => d.step16 / spb);
+  const maxBeat = totalBars() * BPB();
+  /* 1) 贝斯锁底鼓：±60ms 内吸合到 kick 网格（pocket 感） */
+  for (const e of bassEvents) {
+    for (const k of kickBeats) {
+      const d = e.beat - k;
+      if (Math.abs(d) > 0.001 && Math.abs(d) <= WIN) { e.beat = k; e.vel = Math.min(1, e.vel * 1.05); break; }
+    }
+  }
+  /* 2) 军鼓位留空：贝斯 onset 撞军鼓 ±40ms → 后移 1/16（军鼓是锚点，贝斯让） */
+  for (const e of bassEvents) {
+    if (snareBeats.some(s => Math.abs(e.beat - s) <= 0.04)) e.beat += 0.25;
+  }
+  /* 3) 键盘避让旋律：comping 撞旋律 onset → 后移 1/16 成应答（撞=糊；让=call-response） */
+  for (const e of keysEvents) {
+    if (melodyEvents.some(m => Math.abs(m.beat - e.beat) <= WIN)) e.beat += 0.25;
+  }
+  /* 4) 吸合去重 + 边界回收 */
+  const bseen = {};
+  bassEvents = bassEvents.filter(e => {
+    if (e.beat >= maxBeat) return false;
+    const k = e.beat.toFixed(3) + '_' + e.midi;
+    if (bseen[k]) return false; bseen[k] = 1; return true;
+  });
+  const kseen = {};
+  keysEvents = keysEvents.filter(e => {
+    if (e.beat >= maxBeat) return false;
+    const k = e.beat.toFixed(3);
+    if (kseen[k]) return false; kseen[k] = 1; return true;
+  });
+}
+
 /* v5.6：共享拨片噪声缓冲（60ms 指数衰减白噪，经 bandpass 塑成拨片刷弦瞬态） */
 function guitarPickNoise(raw) {
   if (GUITAR_SAMP._pickNoise) return GUITAR_SAMP._pickNoise;
@@ -1415,9 +1454,9 @@ function playGuitarReal(patch, midi, t, dur, vel, slideFrom, legato, styleKey, a
   const tp = raw.createBiquadFilter(); tp.type = 'lowpass'; tp.frequency.value = 1800 + Math.min(1, vel) * 6200; tp.Q.value = 0.5;
   src.connect(tp); tp.connect(g); g.connect(out);
   /* v5.6 拨弦瞬态：吉他的身份在前 15ms 拨片噪声里；attack 包络把它磨没了，单独补一发 */
-  const pk = raw.createBiquadFilter(); pk.type = 'bandpass'; pk.frequency.value = 2600 + Math.random() * 1600; pk.Q.value = 1.1;
+  const pk = raw.createBiquadFilter(); pk.type = 'bandpass'; pk.frequency.value = 2200 + Math.random() * 1200; pk.Q.value = 1.0; /* v5.7 收敛：拨片太亮=粗糙感 */
   const pg = raw.createGain();
-  const pgv = Math.min(0.9, vel * 0.65) * (artic === 'stacc' ? 1.15 : 1) * (styleKey === 'jazz' ? 0.55 : 1);
+  const pgv = Math.min(0.85, vel * 0.55) * (artic === 'stacc' ? 1.1 : 1) * (styleKey === 'jazz' ? 0.5 : 1); /* v5.7 收敛 */
   pg.gain.setValueAtTime(pgv, t);
   pg.gain.exponentialRampToValueAtTime(0.0001, t + 0.012 + Math.random() * 0.01);
   const pkSrc = raw.createBufferSource(); pkSrc.buffer = guitarPickNoise(raw);
@@ -1440,7 +1479,7 @@ function playGuitarReal(patch, midi, t, dur, vel, slideFrom, legato, styleKey, a
     const raw2 = Tone.getContext().rawContext;
     const src2 = raw2.createBufferSource();
     src2.buffer = bank[best];
-    src2.playbackRate.value = Math.pow(2, (midi - best) / 12) * 1.006;
+    src2.playbackRate.value = Math.pow(2, (midi - best) / 12) * (1.003 + Math.random() * 0.006); /* v5.7 每音随机失谐：固定 0.6% 会产生可闻拍频 */
     const g2 = raw2.createGain();
     const v2 = vel * (0.2 + th * 0.5); /* v5.4 副轨轻一点：宽度让位给融合 */
     const h2 = 0.006 + Math.random() * 0.01; /* v5.4 Haas 随机 6~16ms，不再固定 12ms 梳状感 */
@@ -2222,7 +2261,7 @@ function encodeWav(buffers, sampleRate) {
 function blobToDataURI(blob) {
   return new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(blob); });
 }
-async function renderMelodyToWav() {
+async function renderMelodyToWav(guideOffsetBeats) {
   const SR = 22050;
   const beatsPerBar = state.meter === 'm34' ? 3 : state.meter === 'm68' ? 6 : 4;
   const loopSec = totalBars() * beatsPerBar * 60 / state.bpm;
@@ -2230,23 +2269,72 @@ async function renderMelodyToWav() {
   const ctx = new OfflineAudioContext(1, Math.ceil(dur * SR), SR);
   const master = ctx.createGain(); master.gain.value = 0.8; master.connect(ctx.destination);
   const secPerBeat = 60 / state.bpm;
-  for (const e of melodyEvents) {
-    const t = e.beat * secPerBeat;
-    if (t >= dur - 0.1) continue;
-    const d = Math.min(e.dur * secPerBeat, dur - t);
+  const off = guideOffsetBeats || 0; /* v6 分块：第 N 块从第 N×28 秒开始取事件 */
+  const note = (midi, t, d, vel, type) => {
+    if (t < -0.01 || t >= dur - 0.05) return;
+    const tt = Math.max(0, t);
+    const dd = Math.min(d, dur - tt);
     const osc = ctx.createOscillator();
-    osc.type = 'triangle';
-    osc.frequency.value = 440 * Math.pow(2, (e.midi - 69) / 12);
+    osc.type = type;
+    osc.frequency.value = 440 * Math.pow(2, (midi - 69) / 12);
     const g = ctx.createGain();
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(Math.max(e.vel, 0.1), t + 0.01);
-    g.gain.setValueAtTime(Math.max(e.vel, 0.1), t + Math.max(0.03, d - 0.08));
-    g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.1);
+    g.gain.setValueAtTime(0.0001, tt);
+    g.gain.exponentialRampToValueAtTime(Math.max(vel, 0.08), tt + 0.012);
+    g.gain.setValueAtTime(Math.max(vel, 0.08), tt + Math.max(0.03, dd - 0.08));
+    g.gain.exponentialRampToValueAtTime(0.0001, tt + dd + 0.1);
     osc.connect(g); g.connect(master);
-    osc.start(t); osc.stop(t + d + 0.15);
+    osc.start(tt); osc.stop(tt + dd + 0.15);
+  };
+  /* v6 引导带三件套：旋律(主角) + 和弦垫(0.30) + 贝斯(0.5)。
+     MusicGen 的 melody 条件提取的是色度(chroma)——混入轻量 pad/贝斯后，
+     引导带的色度携带完整和声走向，模型不再瞎猜和弦，只负责"演奏与录音"。 */
+  for (const e of synthEvents) {
+    const t = (e.beat - off) * secPerBeat;
+    for (const n of (e.notes || [])) note(n, t, e.dur * secPerBeat, 0.3 * e.vel, 'sine');
+  }
+  for (const e of bassEvents) {
+    note(e.midi, (e.beat - off) * secPerBeat, e.dur * secPerBeat, 0.5 * e.vel, 'sine');
+  }
+  for (const e of melodyEvents) {
+    note(e.midi, (e.beat - off) * secPerBeat, e.dur * secPerBeat, Math.max(e.vel, 0.1), 'triangle');
   }
   const rendered = await ctx.startRendering();
   return encodeWav([rendered.getChannelData(0)], SR);
+}
+/* v6 分块拼接：块长 30s、步进 28s（2s 等功率交叉淡化），整曲突破 30s 上限 */
+async function studioGenerateChunk(prompt, melodyURI, token) {
+  /* provider 1：本机 musicgen_server.py（medium 模型，免费且质量高于 small） */
+  try {
+    const h = await fetch('http://127.0.0.1:7860/health', { signal: AbortSignal.timeout(1500) });
+    if (h.ok) {
+      const r = await fetch('http://127.0.0.1:7860/generate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, melody: melodyURI, duration: 30 }),
+      });
+      if (r.ok) return await r.arrayBuffer();
+    }
+  } catch (e) { /* 本机服务未启动，走 Replicate */ }
+  /* provider 2：Replicate meta/musicgen（melody 版，需 token） */
+  const pred = await fetch('https://api.replicate.com/v1/models/meta/musicgen/predictions', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ input: { prompt, melody: melodyURI, duration: 30, model_version: 'melody' } }),
+  });
+  if (!pred.ok) {
+    const err = await pred.text();
+    throw new Error('Replicate 请求失败(' + pred.status + ')：' + err.slice(0, 160) + (pred.status === 401 ? '（token 无效）' : ''));
+  }
+  let job = await pred.json();
+  while (job.status !== 'succeeded' && job.status !== 'failed' && job.status !== 'canceled') {
+    await new Promise(r => setTimeout(r, 2500));
+    const poll = await fetch('https://api.replicate.com/v1/predictions/' + job.id, { headers: { 'Authorization': 'Bearer ' + token } });
+    job = await poll.json();
+  }
+  if (job.status !== 'succeeded') throw new Error('生成失败：' + JSON.stringify(job.error || '').slice(0, 160));
+  const audioUrl = Array.isArray(job.output) ? job.output[0] : job.output;
+  const ab = await fetch(audioUrl);
+  if (!ab.ok) throw new Error('下载生成结果失败(' + ab.status + ')');
+  return await ab.arrayBuffer();
 }
 function buildStudioPrompt() {
   const st = state.styles[0];
@@ -2266,43 +2354,52 @@ async function studioRender() {
   const tokenEl = document.getElementById('replicate-token');
   const status = document.getElementById('studio-status');
   const token = (tokenEl.value || '').trim();
-  if (!token) { status.textContent = '请先填写 Replicate API Token（replicate.com → Account → API tokens）'; tokenEl.focus(); return; }
   try { localStorage.setItem('motif_replicate', token); } catch (e) {}
-  status.textContent = '① 正在渲染旋律…';
+  const beatsPerBar = state.meter === 'm34' ? 3 : state.meter === 'm68' ? 6 : 4;
+  const secPerBeat = 60 / state.bpm;
+  const loopSec = totalBars() * beatsPerBar * secPerBeat;
+  const CHUNK = 28, FADE = 2; /* 30s 块、28s 步进、2s 交叉淡化 */
+  const nChunks = Math.max(1, Math.ceil(loopSec / CHUNK));
+  let localOK = false;
+  try { localOK = (await fetch('http://127.0.0.1:7860/health', { signal: AbortSignal.timeout(1500) })).ok; } catch (e) {}
+  if (!localOK && !token) { status.textContent = '请先填写 Replicate API Token（replicate.com → Account → API tokens），或启动本机服务（musicgen_server.py，免费且模型更大）'; tokenEl.focus(); return; }
+  status.textContent = '① 正在渲染引导带（旋律+和声+贝斯）…';
   try {
-    const wav = await renderMelodyToWav();
-    const melodyURI = await blobToDataURI(wav);
-    status.textContent = '② 正在呼叫 AI 录音棚（约 30-60 秒）…';
-    const pred = await fetch('https://api.replicate.com/v1/models/meta/musicgen/predictions', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input: {
-        prompt: buildStudioPrompt(),
-        melody: melodyURI,
-        duration: 30,
-        model_version: 'melody',
-      } }),
-    });
-    if (!pred.ok) {
-      const err = await pred.text();
-      status.textContent = '请求失败(' + pred.status + ')：' + err.slice(0, 200) + (pred.status === 401 ? '（token 无效）' : '');
-      return;
+    const prompt = buildStudioPrompt();
+    const chunkBufs = [];
+    for (let i = 0; i < nChunks; i++) {
+      const wav = await renderMelodyToWav(i * CHUNK / secPerBeat);
+      const melodyURI = await blobToDataURI(wav);
+      status.textContent = '② AI 录音棚 ' + (i + 1) + '/' + nChunks + '…' + (localOK ? '（本机 medium 模型）' : '（Replicate）');
+      const ab = await studioGenerateChunk(prompt, melodyURI, token);
+      const actx = new (window.AudioContext || window.webkitAudioContext)();
+      chunkBufs.push(await actx.decodeAudioData(ab));
+      await actx.close();
     }
-    let job = await pred.json();
-    while (job.status !== 'succeeded' && job.status !== 'failed' && job.status !== 'canceled') {
-      await new Promise(r => setTimeout(r, 2500));
-      const poll = await fetch('https://api.replicate.com/v1/predictions/' + job.id, { headers: { 'Authorization': 'Bearer ' + token } });
-      job = await poll.json();
-      status.textContent = '② AI 录音棚工作中…（' + job.status + '）';
+    /* 交叉淡化拼接：等功率 2s 淡化消除块间接缝 */
+    status.textContent = '③ 拼接 ' + nChunks + ' 个乐段…';
+    const sr = 44100;
+    const stride = chunkBufs[0].duration - FADE;
+    const total = stride * (nChunks - 1) + chunkBufs[0].duration;
+    const off = new OfflineAudioContext(2, Math.ceil(total * sr), sr);
+    let t = 0;
+    for (let i = 0; i < nChunks; i++) {
+      const srcN = off.createBufferSource(); srcN.buffer = chunkBufs[i];
+      const g = off.createGain();
+      if (i > 0) { g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(1, t + FADE); }
+      srcN.connect(g); g.connect(off.destination);
+      srcN.start(t);
+      t += stride;
     }
-    if (job.status !== 'succeeded') { status.textContent = '生成失败：' + JSON.stringify(job.error || '').slice(0, 200); return; }
-    const audioUrl = Array.isArray(job.output) ? job.output[0] : job.output;
+    const stitched = await off.startRendering();
+    const wav = encodeWav([stitched.getChannelData(0), stitched.getChannelData(1)], sr);
+    const url = URL.createObjectURL(wav);
     document.getElementById('studio-result').hidden = false;
-    document.getElementById('studio-audio').src = audioUrl;
-    document.getElementById('studio-dl').href = audioUrl;
-    status.textContent = '✓ 完成！这是 AI 按你的旋律与风格描述生成的唱片级渲染。';
+    document.getElementById('studio-audio').src = url;
+    document.getElementById('studio-dl').href = url;
+    status.textContent = '✓ 完成！AI 按你的旋律/和声/风格生成 ' + Math.round(total) + 's 唱片级渲染（引导带含完整和声，模型只负责演奏与录音）。';
   } catch (e) {
-    status.textContent = '出错：' + (e && e.message);
+    status.textContent = '出错：' + (e && e.message ? e.message.slice(0, 240) : e);
   }
 }
 
@@ -2990,6 +3087,7 @@ function regenerate(reason) {
   genSynthPad();
   genHorns(); /* v5 horn 层 */
   genDrums();
+  interlockPass(); /* v5.7：贝斯锁鼓/键盘避让旋律——调度前最后一道互锁对齐 */
   applyCompositionRules(); /* 作曲规则器：调度前检测修正 */
   renderSlots();
   renderRoll();
