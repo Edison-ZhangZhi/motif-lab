@@ -1543,6 +1543,10 @@ const DRUM_KITS = {
   s808:  { kick:'kick_808', snare:null, hat:'hat_808', ohat:'hat_808', ride:'hat_808', crash:'crash', congaH:null, congaL:null, ghost:null },
   hiphop:{ kick:'kick_808', snare:'clap', hat:'hat_808', ohat:'hat_808', ride:null, crash:'crash', congaH:null, congaL:null, ghost:null },
   beach: { kick:null, snare:'rim_click', hat:'shaker', ohat:'shaker', ride:null, crash:null, congaH:null, congaL:null, ghost:null },
+  funk:     { kick:'kick_room', snare:'snare_room', hat:'hat_closed', ohat:'hat_closed', ride:'hat_closed', crash:'crash', ghost:'snare_room' },
+  soul:     { kick:'kick_808', snare:'snap', hat:'shaker', ohat:'shaker', ride:'shaker', crash:'crash', congaH:null, congaL:null, ghost:'snap' },
+  reggae:   { kick:'kick_room', snare:'rim_click', hat:'hat_closed', ohat:'hat_closed', ride:'hat_closed', crash:'crash', congaH:null, congaL:null, ghost:'rim_click' },
+  afrobeats:{ kick:'kick_808', snare:'clap', hat:'shaker', ohat:'shaker', ride:'shaker', crash:'crash', congaH:null, congaL:null, ghost:null },
 };
 function loadDrumSamples(isRetry) {
   if ((!isRetry && DRUM_SAMP.started) || DRUM_SAMP.loading || !AE.ready) return;
@@ -1667,6 +1671,10 @@ const TIMING_PROFILE = {
   bossa: { drums: 0.004, hat: -0.003, bass: 0.006, keys: 0.003, melody: 0.006, pad: 0.002 },
   afro:  { drums: 0.006, hat: 0.002, bass: 0.0, keys: 0.0, melody: 0.004, pad: 0.002 }, /* 论文：Afrobeat 鼓略早于网格 */
   hiphop:{ drums: 0.004, hat: -0.005, bass: 0.0, keys: 0.003, melody: 0.012, pad: 0.003 },
+  funk:    { drums: 0.004, hat: -0.004, bass: 0.002, keys: 0.004, melody: 0.010, pad: 0.002 },
+  soul:    { drums: 0.008, hat: -0.002, bass: 0.006, keys: 0.010, melody: 0.014, pad: 0.004 },
+  reggae:  { drums: -0.002, hat: -0.004, bass: 0.004, keys: 0.002, melody: 0.008, pad: 0.002 },
+  afrobeats:{ drums: 0.004, hat: -0.004, bass: 0.0, keys: 0.002, melody: 0.008, pad: 0.002 },
 };
 function voiceOff(styleKey, voice, beat) {
   const p = TIMING_PROFILE[styleKey];
@@ -2338,6 +2346,19 @@ async function studioGenerateChunk(prompt, melodyURI, token, temperature) {
   if (!ab.ok) throw new Error('下载生成结果失败(' + ab.status + ')');
   return await ab.arrayBuffer();
 }
+/* 提示词 v2：按 SPEC 细粒度（鼓型/音阶/编配/空间），Motif Lab 对纯文本框的结构性优势 */
+const PROMPT_V2 = {
+  rnb: "neo-soul R&B slow jam, silky single-coil electric guitar lead with long legato phrases, warm rhodes electric piano chords with 9ths and 13ths, round subby bass, laid-back dragged drums with ghost notes and finger snaps, lush choir pads, wide plate reverb, D'Angelo style, professional studio recording",
+  jazz: "swing jazz trio plus guitar, warm hollow-body electric guitar lead played with thumb, soft vibraphone comping, walking upright bass, brushed drums with swing ride pattern, intimate small club recording with natural room ambience",
+  rock: "classic hard rock, thick double-tracked distorted electric guitar lead and power chord riffs, punchy live drum kit with strong backbeat and crash accents, driving bass guitar, arena energy with vintage analog tape warmth",
+  bossa: "bossa nova, bright nylon string guitar playing syncopated batida comping, soft brush and rim percussion with shaker, warm upright bass, gentle flute-like lead melody, beachside ambience, vintage 1960s recording",
+  afro: "afrobeat, interlocking highlife guitar chops, dense shekere and conga percussion layers, son clave, groovy round bass, brass section stabs on offbeats, long hypnotic groove, energetic live band recording",
+  hiphop: "modern trap hip-hop, dark spacious melodic hook guitar chopped and filtered, deep sliding 808 sub bass, crisp rolling hi-hats with triplet fills, sparse atmospheric pads, punchy loud mix, Metro Boomin style",
+  funk: "classic funk, percussive muted wah electric guitar chops, syncopated clavinet and horn stabs, slap-style groovy bass, tight drums with sixteenth note ghost notes, Meters and James Brown style, dry punchy recording",
+  soul: "slow soul gospel ballad, warm emotive electric guitar lead with long sustained notes, hammond-style organ and rhodes, big smooth drums with deep backbeat and tambourine, deep bass, large church hall reverb",
+  reggae: "roots reggae, offbeat skank guitar chops on the and-of-each-beat, deep dubby bassline, one-drop drums with kick and snare together on beat three, rim clicks and shaker, relaxed island groove, warm analog recording",
+  afrobeats: "modern afrobeats pop, bright plucked guitar arpeggios, log-drum style syncopated 808 kicks, crisp shakers and claps, smooth melodic lead, warm sub bass, sunny polished radio mix, Tyla and Wizkid style",
+};
 function buildStudioPrompt() {
   const st = state.styles[0];
   const keyName = pcName(state.keyRoot) + ' ' + (state.mode === 'minor' || state.mode === 'dorian' ? 'minor' : 'major');
@@ -2350,7 +2371,8 @@ function buildStudioPrompt() {
     afro: 'afrobeat, interlocking guitars, congas and shekere percussion, groovy electric bass, horn stabs, energetic live band recording',
     hiphop: 'modern trap hip-hop, dark melodic hook, deep 808 sub bass, crisp hi-hats, atmospheric keys, punchy mix',
   };
-  return (P[st] || P.rnb) + ', in ' + keyName + ', ' + state.bpm + ' bpm' + (preset ? ', ' + preset.name : '') + ', high quality, well mixed';
+  const v2 = PROMPT_V2[st] || (P[st] || P.rnb);
+  return v2 + ', in ' + keyName + ', ' + state.bpm + ' bpm' + (preset ? ', progression ' + preset.name : '') + ', high quality, well mixed';
 }
 async function studioRender(variantIdx, temperature, label) {
   const tokenEl = document.getElementById('replicate-token');
@@ -2393,8 +2415,10 @@ async function studioRender(variantIdx, temperature, label) {
       srcN.start(t);
       t += stride;
     }
-    const stitched = await off.startRendering();
-    const wav = encodeWav([stitched.getChannelData(0), stitched.getChannelData(1)], sr);
+    let stitched = await off.startRendering();
+    /* L3-lite 母带后制：AI 成品的"AI 味"在母带层能压掉大半 */
+    stitched = await studioMasterPass(stitched);
+    const wav = encodeWav([stitched.getChannelData(0), stitched.getChannelData(1)], stitched.sampleRate);
     const url = URL.createObjectURL(wav);
     if (variantIdx !== undefined) {
       const box = document.getElementById('studio-variants');
@@ -2411,6 +2435,7 @@ async function studioRender(variantIdx, temperature, label) {
     document.getElementById('studio-audio').src = url;
     document.getElementById('studio-dl').href = url;
     status.textContent = '✓ ' + (label ? label + ' 完成（' : '完成！AI 按你的旋律/和声/风格生成 ') + Math.round(total) + 's 唱片级渲染（引导带含完整和声，模型只负责演奏与录音）。';
+    try { studioHealthCheck(stitched); } catch (e) {}
   } catch (e) {
     status.textContent = '出错：' + (e && e.message ? e.message.slice(0, 240) : e);
   }
@@ -2467,6 +2492,21 @@ async function neuralRender() {
   }
 }
 
+/* L3-lite：母带后制（30Hz 高通 / 200 低架 -1.5 / 3k 存在感 +1.5 / 9k 空气 +1 / 轻压缩） */
+async function studioMasterPass(buf) {
+  const sr = buf.sampleRate, len = buf.length;
+  const ctx = new OfflineAudioContext(buf.numberOfChannels, len, sr);
+  const srcN = ctx.createBufferSource(); srcN.buffer = buf;
+  const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 30;
+  const ls = ctx.createBiquadFilter(); ls.type = 'lowshelf'; ls.frequency.value = 200; ls.gain.value = -1.5;
+  const pk = ctx.createBiquadFilter(); pk.type = 'peaking'; pk.frequency.value = 3000; pk.Q.value = 1; pk.gain.value = 1.5;
+  const hs = ctx.createBiquadFilter(); hs.type = 'highshelf'; hs.frequency.value = 9000; hs.gain.value = 1;
+  const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 2.5; comp.attack.value = 0.003; comp.release.value = 0.2;
+  srcN.connect(hp); hp.connect(ls); ls.connect(pk); pk.connect(hs); hs.connect(comp); comp.connect(ctx.destination);
+  srcN.start();
+  return ctx.startRendering();
+}
+
 /* 梯级2·变体挑选：同一引导带三种采样温度，逐版渲染供盲听挑选 */
 async function studioRenderVariants() {
   const status = document.getElementById('studio-status');
@@ -2480,6 +2520,60 @@ async function studioRenderVariants() {
     catch (e) { status.textContent = LABELS[i] + ' 失败：' + (e && e.message ? e.message.slice(0, 120) : e); }
   }
   status.textContent = '✓ 三个变体已就绪，盲听挑选你最喜欢的一版（可复制链接发给朋友一起选）。';
+}
+
+/* 阶段2·成品体检：直接测量渲染 WAV（亮度/低频比/动态/立体声），对照风格目标给分 */
+const AUDIO_TARGETS = {
+  rnb:{cent:[0.12,0.30],low:[0.30,0.55],dyn:[9,22]}, jazz:{cent:[0.10,0.25],low:[0.25,0.45],dyn:[8,18]},
+  rock:{cent:[0.22,0.42],low:[0.30,0.50],dyn:[7,16]}, bossa:{cent:[0.15,0.32],low:[0.25,0.45],dyn:[8,18]},
+  afro:{cent:[0.18,0.38],low:[0.35,0.60],dyn:[6,14]}, hiphop:{cent:[0.15,0.35],low:[0.40,0.65],dyn:[5,12]},
+  funk:{cent:[0.18,0.36],low:[0.30,0.50],dyn:[7,15]}, soul:{cent:[0.10,0.26],low:[0.30,0.50],dyn:[9,20]},
+  reggae:{cent:[0.12,0.28],low:[0.35,0.55],dyn:[7,15]}, afrobeats:{cent:[0.16,0.34],low:[0.35,0.58],dyn:[6,13]},
+};
+function studioHealthCheck(buf) {
+  const st = state.styles[0], tg = AUDIO_TARGETS[st] || AUDIO_TARGETS.rnb;
+  const L = buf.getChannelData(0), R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L;
+  const n = L.length;
+  /* 动态：100ms 窗 RMS 的 dB 跨度 */
+  const win = Math.floor(buf.sampleRate * 0.1);
+  let rmsMin = 1, rmsMax = 0.0001;
+  for (let i = 0; i < n; i += win) {
+    let s2 = 0, c = 0;
+    for (let j = i; j < Math.min(i + win, n); j++) { s2 += L[j] * L[j]; c++; }
+    const r = Math.sqrt(s2 / c);
+    if (r > 0.0001 && r < rmsMin) rmsMin = r;
+    if (r > rmsMax) rmsMax = r;
+  }
+  const dyn = 20 * Math.log10(rmsMax / Math.max(rmsMin, 0.0001));
+  /* 频谱：4096 点 FFT 算质心 + 低/中/高能量比 */
+  const N = 4096, off2 = Math.floor(n * 0.3);
+  const re = new Float32Array(N), im = new Float32Array(N);
+  for (let i = 0; i < N; i++) re[i] = (L[off2 + i] || 0) * (0.5 - 0.5 * Math.cos(2 * Math.PI * i / (N - 1)));
+  _fft(re, im);
+  let num = 0, den = 0, eLow = 0, eMid = 0, eHigh = 0;
+  for (let k = 1; k < N / 2; k++) {
+    const mag = Math.hypot(re[k], im[k]);
+    const f = k * buf.sampleRate / N;
+    num += mag * f; den += mag;
+    if (f < 250) eLow += mag; else if (f < 4000) eMid += mag; else eHigh += mag;
+  }
+  const cent = clamp((num / Math.max(den, 1)) / 5000, 0, 1);
+  const low = eLow / Math.max(eLow + eMid + eHigh, 0.0001);
+  /* 立体声相关度 */
+  let lr = 0, l2 = 0, r2 = 0;
+  for (let i = 0; i < n; i += 4) { lr += L[i] * R[i]; l2 += L[i] * L[i]; r2 += R[i] * R[i]; }
+  const corr = lr / Math.max(Math.sqrt(l2 * r2), 0.0001);
+  const inR = (v, r2b) => v >= r2b[0] && v <= r2b[1];
+  let score = 60;
+  if (inR(cent, tg.cent)) score += 15; else score -= 5;
+  if (inR(low, tg.low)) score += 15; else score -= 5;
+  if (inR(dyn, tg.dyn)) score += 10; else score -= 3;
+  score = clamp(score, 0, 100);
+  const el = document.getElementById('studio-status');
+  el.innerHTML = el.textContent + '<br><span style="color:#b08a3e">成品体检：' + score + ' 分 · 亮度 ' + cent.toFixed(2) +
+    (inR(cent, tg.cent) ? '✓' : '✗目标' + tg.cent[0] + '-' + tg.cent[1]) + ' · 低频比 ' + low.toFixed(2) +
+    (inR(low, tg.low) ? '✓' : '✗') + ' · 动态 ' + dyn.toFixed(1) + 'dB' +
+    (inR(dyn, tg.dyn) ? '✓' : '✗') + ' · 立体声 ' + corr.toFixed(2) + '</span>';
 }
 
 /* ---------- 试听单和弦 ---------- */
@@ -2634,6 +2728,10 @@ const STYLE_TONE = {
   bossa: { guitar:{b:0.58,s:0.30,t:0.05}, keys:{b:0.40,s:0.35,t:0.0}, bass:{b:0.35,s:0.10,t:0.0}, pad:{b:0.30,s:0.40,t:0.0}, drums:{b:0.50,s:0.20,t:0.1} },
   afro:  { guitar:{b:0.55,s:0.28,t:0.15}, keys:{b:0.50,s:0.25,t:0.1}, bass:{b:0.45,s:0.15,t:0.2}, pad:{b:0.40,s:0.30,t:0.1}, drums:{b:0.55,s:0.30,t:0.3} },
   hiphop:{ guitar:{b:0.42,s:0.24,t:0.20}, keys:{b:0.30,s:0.65,t:0.0}, bass:{b:0.25,s:0.10,t:0.3}, pad:{b:0.25,s:0.60,t:0.0}, drums:{b:0.50,s:0.40,t:0.4} },
+  funk:    { guitar:{b:0.50,s:0.25,t:0.25}, keys:{b:0.45,s:0.30,t:0.1}, bass:{b:0.45,s:0.20,t:0.15}, pad:{b:0.40,s:0.25,t:0.1}, drums:{b:0.50,s:0.25,t:0.25} },
+  soul:    { guitar:{b:0.35,s:0.45,t:0.10}, keys:{b:0.30,s:0.50,t:0.05}, bass:{b:0.30,s:0.25,t:0.0}, pad:{b:0.30,s:0.55,t:0.0}, drums:{b:0.45,s:0.30,t:0.15} },
+  reggae:  { guitar:{b:0.50,s:0.30,t:0.10}, keys:{b:0.40,s:0.30,t:0.0}, bass:{b:0.40,s:0.20,t:0.1}, pad:{b:0.35,s:0.30,t:0.1}, drums:{b:0.45,s:0.25,t:0.2} },
+  afrobeats:{ guitar:{b:0.50,s:0.30,t:0.15}, keys:{b:0.45,s:0.25,t:0.1}, bass:{b:0.40,s:0.20,t:0.2}, pad:{b:0.35,s:0.30,t:0.1}, drums:{b:0.50,s:0.30,t:0.3} },
 };
 function applyTone(layer) {
   if (!AE.ready) return;
@@ -2690,6 +2788,10 @@ const STYLE_FX = {
   bossa: { cw: 0.3,  rw: 0.28 },
   afro:  { cw: 0.12, rw: 0.18 },
   hiphop:{ cw: 0.2,  rw: 0.28 },
+  funk:    { cw: 0.15, rw: 0.20 },
+  soul:    { cw: 0.40, rw: 0.45 },
+  reggae:  { cw: 0.25, rw: 0.35 },
+  afrobeats:{ cw: 0.18, rw: 0.22 },
 };
 function applyStyleFx(styleKey) {
   const fx = STYLE_FX[styleKey];
@@ -2707,6 +2809,10 @@ const STYLE_SETUP = {
   bossa: { guitar: 'nylon',  keys: 'auto',  drums: 'auto',  swing: 2,  bpm: 78,  synth: 'warm',   preset: 'bossa-251' }, /* 138=Samba，78 才是 Bossa */
   afro:  { guitar: 'clean',  keys: 'auto',  drums: 'drive', swing: 4,  bpm: 104, synth: 'halo',   preset: 'afro-min' },
   hiphop:{ guitar: 'clean',  keys: 'pad',   drums: 'auto',  swing: 0,  bpm: 140, synth: 'halo',   preset: 'trap-min' }, /* trap 标准速度 */
+  funk:    { guitar: 'muted',  keys: 'comp',  drums: 'auto',  swing: 8,  bpm: 100, synth: 'sweep' },
+  soul:    { guitar: 'clean',  keys: 'comp',  drums: 'auto',  swing: 30, bpm: 72,  synth: 'choir' },
+  reggae:  { guitar: 'clean',  keys: 'comp',  drums: 'auto',  swing: 6,  bpm: 82,  synth: 'halo' },
+  afrobeats:{ guitar: 'clean', keys: 'comp',  drums: 'auto',  swing: 10, bpm: 105, synth: 'halo' },
 };
 
 /* v4.1 预设与风格匹配：下拉只列当前风格可用的走向，杜绝"布鲁斯走向配 rnb" */

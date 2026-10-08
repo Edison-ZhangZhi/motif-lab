@@ -58,8 +58,8 @@ function ruleTonality() {
 }
 
 /* ---- 2. 鼓密度预算 ---- */
-const DRUM_BUDGET = { rnb: 24, jazz: 16, rock: 22, bossa: 20, afro: 44, hiphop: 26 }; /* v4：afro 实测密度高（Fela busy kick+perc），trap hat 滚奏需要余量 */
-const SNARE_WHITELIST = { rnb: [4, 8, 12], jazz: [4, 12], rock: [4, 7, 12], bossa: [3, 4, 6, 8, 11, 12, 14], afro: null, hiphop: [8] }; /* v4：rnb 现代变体军鼓上 3；rock 副歌军鼓切分 */
+const DRUM_BUDGET = { rnb: 24, jazz: 16, rock: 22, bossa: 20, afro: 44, hiphop: 26, funk: 26, soul: 20, reggae: 16, afrobeats: 30 }; /* v4：afro 实测密度高（Fela busy kick+perc），trap hat 滚奏需要余量 */
+const SNARE_WHITELIST = { rnb: [4, 8, 12], jazz: [4, 12], rock: [4, 7, 12], bossa: [3, 4, 6, 8, 11, 12, 14], afro: null, hiphop: [8], funk: [4, 12], soul: [4, 12], reggae: [8], afrobeats: [4, 12] }; /* v4：rnb 现代变体军鼓上 3；rock 副歌军鼓切分 */
 function ruleDrumBudget() {
   const bars = totalBars();
   const minKickGapSteps = Math.max(1, Math.round(0.09 / secPer16())); /* kick ≥90ms 去连击 */

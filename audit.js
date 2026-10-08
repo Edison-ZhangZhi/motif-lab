@@ -41,7 +41,7 @@ const STATIC = [
   ['结构·vamp 让位',          SRC.includes('secChange'),              '段落切换不硬切断和弦垫'],
   ['体系·六风格规格卡完整', (() => {
     try {
-      const res = vm.runInContext("['rnb','jazz','rock','bossa','afro','hiphop'].map(k => specCompleteness(k))", ctx);
+      const res = vm.runInContext("Object.keys(SPEC_META).map(k => specCompleteness(k))", ctx);
       const bad = res.filter(c => !c.ok).map((c, i) => ['rnb','jazz','rock','bossa','afro','hiphop'][i] + ':' + c.missing.join(','));
       if (bad.length) console.log('    规格缺失 ' + bad.join(' | '));
       return bad.length === 0;
