@@ -2302,14 +2302,14 @@ async function renderMelodyToWav(guideOffsetBeats) {
   return encodeWav([rendered.getChannelData(0)], SR);
 }
 /* v6 分块拼接：块长 30s、步进 28s（2s 等功率交叉淡化），整曲突破 30s 上限 */
-async function studioGenerateChunk(prompt, melodyURI, token) {
+async function studioGenerateChunk(prompt, melodyURI, token, temperature) {
   /* provider 1：本机 musicgen_server.py（medium 模型，免费且质量高于 small） */
   try {
     const h = await fetch('http://127.0.0.1:7860/health', { signal: AbortSignal.timeout(1500) });
     if (h.ok) {
       const r = await fetch('http://127.0.0.1:7860/generate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, melody: melodyURI, duration: 30 }),
+        body: JSON.stringify({ prompt, melody: melodyURI, duration: 30, temperature: temperature || 1.0 }),
       });
       if (r.ok) return await r.arrayBuffer();
     }
@@ -2318,7 +2318,7 @@ async function studioGenerateChunk(prompt, melodyURI, token) {
   const pred = await fetch('https://api.replicate.com/v1/models/meta/musicgen/predictions', {
     method: 'POST',
     headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ input: { prompt, melody: melodyURI, duration: 30, model_version: 'melody' } }),
+    body: JSON.stringify({ input: { prompt, melody: melodyURI, duration: 30, model_version: 'melody', temperature: temperature || 1.0 } }),
   });
   if (!pred.ok) {
     const err = await pred.text();
@@ -2350,7 +2350,7 @@ function buildStudioPrompt() {
   };
   return (P[st] || P.rnb) + ', in ' + keyName + ', ' + state.bpm + ' bpm' + (preset ? ', ' + preset.name : '') + ', high quality, well mixed';
 }
-async function studioRender() {
+async function studioRender(variantIdx, temperature, label) {
   const tokenEl = document.getElementById('replicate-token');
   const status = document.getElementById('studio-status');
   const token = (tokenEl.value || '').trim();
@@ -2371,7 +2371,7 @@ async function studioRender() {
       const wav = await renderMelodyToWav(i * CHUNK / secPerBeat);
       const melodyURI = await blobToDataURI(wav);
       status.textContent = '② AI 录音棚 ' + (i + 1) + '/' + nChunks + '…' + (localOK ? '（本机 medium 模型）' : '（Replicate）');
-      const ab = await studioGenerateChunk(prompt, melodyURI, token);
+      const ab = await studioGenerateChunk(prompt, melodyURI, token, temperature);
       const actx = new (window.AudioContext || window.webkitAudioContext)();
       chunkBufs.push(await actx.decodeAudioData(ab));
       await actx.close();
@@ -2394,10 +2394,21 @@ async function studioRender() {
     const stitched = await off.startRendering();
     const wav = encodeWav([stitched.getChannelData(0), stitched.getChannelData(1)], sr);
     const url = URL.createObjectURL(wav);
+    if (variantIdx !== undefined) {
+      const box = document.getElementById('studio-variants');
+      box.hidden = false;
+      const row = document.createElement('div');
+      row.className = 'variant-row';
+      row.innerHTML = '<span class="variant-label">' + label + '</span><audio controls style="flex:1"></audio><a class="btn small" download="motif-variant.wav">⬇</a>';
+      row.querySelector('audio').src = url;
+      row.querySelector('a').href = url;
+      box.appendChild(row);
+      return;
+    }
     document.getElementById('studio-result').hidden = false;
     document.getElementById('studio-audio').src = url;
     document.getElementById('studio-dl').href = url;
-    status.textContent = '✓ 完成！AI 按你的旋律/和声/风格生成 ' + Math.round(total) + 's 唱片级渲染（引导带含完整和声，模型只负责演奏与录音）。';
+    status.textContent = '✓ ' + (label ? label + ' 完成（' : '完成！AI 按你的旋律/和声/风格生成 ') + Math.round(total) + 's 唱片级渲染（引导带含完整和声，模型只负责演奏与录音）。';
   } catch (e) {
     status.textContent = '出错：' + (e && e.message ? e.message.slice(0, 240) : e);
   }
@@ -2452,6 +2463,21 @@ async function neuralRender() {
   } catch (e) {
     status.textContent = '生成式渲染出错：' + (e && e.message ? e.message.slice(0, 200) : e) + '（可改用「渲染成唱片」或导出 WAV 免费路径）';
   }
+}
+
+/* 梯级2·变体挑选：同一引导带三种采样温度，逐版渲染供盲听挑选 */
+async function studioRenderVariants() {
+  const status = document.getElementById('studio-status');
+  const box = document.getElementById('studio-variants');
+  box.innerHTML = ''; box.hidden = true;
+  const TEMPS = [1.0, 1.15, 0.9];
+  const LABELS = ['变体A·标准', '变体B·奔放', '变体C·克制'];
+  for (let i = 0; i < 3; i++) {
+    status.textContent = '🎲 渲染变体 ' + (i + 1) + '/3（' + LABELS[i] + '）…';
+    try { await studioRender(i, TEMPS[i], LABELS[i]); }
+    catch (e) { status.textContent = LABELS[i] + ' 失败：' + (e && e.message ? e.message.slice(0, 120) : e); }
+  }
+  status.textContent = '✓ 三个变体已就绪，盲听挑选你最喜欢的一版（可复制链接发给朋友一起选）。';
 }
 
 /* ---------- 试听单和弦 ---------- */
@@ -3242,7 +3268,8 @@ function bindEvents() {
   $('#btn-del-note').onclick = deleteSelNote;
   const tokEl = document.getElementById('replicate-token');
   try { tokEl.value = localStorage.getItem('motif_replicate') || ''; } catch (e) {}
-  document.getElementById('btn-studio').onclick = studioRender;
+  document.getElementById('btn-studio').onclick = () => studioRender();
+  document.getElementById('btn-studio3').onclick = studioRenderVariants;
   document.getElementById('btn-neural').onclick = neuralRender;
   document.getElementById('btn-melody-wav').onclick = async () => {
     const st = document.getElementById('studio-status');

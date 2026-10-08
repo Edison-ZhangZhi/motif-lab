@@ -264,3 +264,8 @@ footer {
 }
 
 .perf-toggle { margin-left: auto; font-size: 10.5px; color: var(--ink-2); display: flex; align-items: center; gap: 5px; font-weight: 400; }
+
+/* ---------- 变体对比 ---------- */
+.studio-variants { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.variant-row { display: flex; align-items: center; gap: 10px; }
+.variant-label { font-size: 10.5px; color: var(--ink-2); min-width: 76px; letter-spacing: .03em; }

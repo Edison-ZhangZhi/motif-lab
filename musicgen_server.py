@@ -37,6 +37,7 @@ class GenReq(BaseModel):
     prompt: str
     melody: str  # data URI
     duration: int = 30
+    temperature: float = 1.0
 
 
 def decode_datauri(uri: str) -> str:
@@ -61,12 +62,21 @@ def generate(req: GenReq):
     melody, sr = _load(wav_path)
     dur = max(10, min(30, int(req.duration)))
     model.set_generation_params(duration=dur)
-    out = model.generate_with_chroma(
-        descriptions=[req.prompt],
-        melody_wavs=[melody.to(DEVICE)],
-        melody_sample_rate=[sr],
-        progress=False,
-    )
+    try:
+        out = model.generate_with_chroma(
+            descriptions=[req.prompt],
+            melody_wavs=[melody.to(DEVICE)],
+            melody_sample_rate=[sr],
+            progress=False,
+            temperature=req.temperature,
+        )
+    except TypeError:
+        out = model.generate_with_chroma(
+            descriptions=[req.prompt],
+            melody_wavs=[melody.to(DEVICE)],
+            melody_sample_rate=[sr],
+            progress=False,
+        )
     # 转 WAV 字节
     buf = io.BytesIO()
     audio = out[0].cpu()
