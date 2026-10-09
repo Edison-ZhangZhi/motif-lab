@@ -1184,7 +1184,10 @@ function buildAudio() {
   AE.lpKeys = new Tone.Filter(9500, 'lowpass'); /* 分工表：EP 上限 9.5k，金属毛刺让位镲片空气感 */
   AE.lpKeys.connect(AE.musicBus);
   AE.toneEqKeys = new Tone.EQ3({ low: 0, mid: 0, high: 2, lowFrequency: 350, highFrequency: 4000 }).connect(AE.lpKeys);
-  AE.hpKeys = new Tone.Filter(100, 'highpass').connect(AE.toneEqKeys); /* Rhodes 低频浑浊重灾区 */
+  AE.hpKeys = new Tone.Filter(100, 'highpass'); /* Rhodes 低频浑浊重灾区 */
+  AE.npKeys = new Tone.Filter(2800, 'peaking'); AE.npKeys.Q.value = 1.2; AE.npKeys.gain.value = -2.0; /* 角色层级：EP 在主角定义感区(2.8k)让位 */
+  AE.keysRoleGain = new Tone.Gain(0.85); /* EP 退后 ≈-1.4dB：不再喧宾夺主 */
+  AE.hpKeys.connect(AE.npKeys); AE.npKeys.connect(AE.keysRoleGain); AE.keysRoleGain.connect(AE.toneEqKeys);
   AE.toneDistKeys = new Tone.Distortion(0).connect(AE.hpKeys);
   /* 频率分工表（系统级频谱编排）：每件乐器一个工位，挖掉侵占别人工位的频段
      贝斯 30-700 · Pad 150-5k(400以下全权让给贝斯) · EP 100-9.5k(350挖泥) · 吉他 90-13.5k(300挖泥) · 鼓 28-11k(11k以上洗剪) */
@@ -1193,12 +1196,17 @@ function buildAudio() {
   AE.hpBass.connect(AE.toneFilterBass);
   AE.bassVol.connect(AE.hpBass); /* 合成贝斯并入同一条滤波链 */
   /* Pad：移相→风格低通→EQ→粘合总线（v4 S5：合成器音色链随风格开合） */
+  /* Pad：移相→风格低通→2.8k让位→退后增益→EQ→粘合总线（角色层级：pad 永不抢戏） */
   AE.toneEqPad = new Tone.EQ3({ low: 0, mid: 0, high: 0, lowFrequency: 400, highFrequency: 5000 }).connect(AE.musicBus);
   AE.padFilter = new Tone.Filter(8000, 'lowpass');
   AE.hpPad = new Tone.Filter(150, 'highpass'); /* v5.5 pad 低频不抢贝斯 → 分工表收紧到 150Hz */
+  AE.npPad = new Tone.Filter(2800, 'peaking'); AE.npPad.Q.value = 1.2; AE.npPad.gain.value = -2.5; /* 主角区(2.8k 定义感)让位 */
+  AE.padRoleGain = new Tone.Gain(0.72); /* 持续声部 RMS 天然碾压瞬态主角，整体退后 ≈-2.8dB */
   AE.padPhaser.connect(AE.hpPad);
   AE.hpPad.connect(AE.padFilter);
-  AE.padFilter.connect(AE.toneEqPad);
+  AE.padFilter.connect(AE.npPad);
+  AE.npPad.connect(AE.padRoleGain);
+  AE.padRoleGain.connect(AE.toneEqPad);
   /* 鼓：失真(轻饱和,2x过采样去数字毛刺)→11k洗剪(镲片糊根)→EQ→主总线 */
   AE.toneEqDrums = new Tone.EQ3({ low: 0, mid: 0, high: 2, lowFrequency: 200, highFrequency: 7000 }).connect(AE.master);
   AE.lpDrums = new Tone.Filter(11000, 'lowpass'); /* 分工表：11k 以上镲片"洗"剪除 = 鼓糊主要来源 */
@@ -1484,7 +1492,7 @@ function playGuitarReal(patch, midi, t, dur, vel, slideFrom, legato, styleKey, a
   if (GUITAR_SAMP._lastG && !legato && t - GUITAR_SAMP._lastT < 0.9 && GUITAR_SAMP._lastG !== g) { /* v5.1：连线时前音保持，断奏才闪避 */
     try {
       GUITAR_SAMP._lastG.gain.cancelScheduledValues(t);
-      GUITAR_SAMP._lastG.gain.setTargetAtTime(GUITAR_SAMP._lastVel * 0.35, t, 0.035); /* v5.4 慢释放：泵感变坐感，吉他不再每拍被抽离 */
+      GUITAR_SAMP._lastG.gain.setTargetAtTime(GUITAR_SAMP._lastVel * 0.45, t, 0.05); /* 角色层级：前音闪避收敛+放慢，旋律线不再被逐音掐断 */
     } catch (e) {}
   }
   GUITAR_SAMP._lastG = g;
@@ -2027,17 +2035,17 @@ function scheduleAll() {
       const src = GUITAR_SRC_BY_STYLE[melStyle] || 'samp';
       Tone.Transport.schedule(tt => {
         const pgt = tt + toff;
-        const gduck = duckMulAt(e.beat, 0.80); /* v4.2 吉他随 kick/snare 闪避，让鼓 */
+        const gduck = duckMulAt(e.beat, 0.93); /* 角色层级：主角只轻闪避——0.80 的逐音拽跳是"一颗颗蹦"的泵感根源 */
         if (src === 'sf') {
           const inst = instName && sampOf(instName, 'guitar');
-          if (inst) { inst.play(e.midi, pgt, { duration: dur + (e.artic === "stacc" ? 0.03 : e.artic === "port" ? 0.08 : e.dur >= 1 ? 0.2 : 0.1), gain: e.vel * 1.05 * gduck * (e.slur ? 0.82 : 1) }); return; } /* v5.3 SF 尾巴按演奏法 */
-          if (playGuitarReal(state.layers.guitar.patch, e.midi, pgt, dur, e.vel * 1.0 * gduck, slideFrom, e.tie || e.slur, melStyle, e.artic)) return;
-          AE.guitar.triggerAttackRelease(midiName(e.midi), dur, pgt, e.vel * gduck * (e.slur ? 0.82 : 1));
+          if (inst) { inst.play(e.midi, pgt, { duration: dur + (e.artic === "stacc" ? 0.03 : e.artic === "port" ? 0.08 : e.dur >= 1 ? 0.2 : 0.1), gain: e.vel * 1.2 * gduck * (e.slur ? 0.82 : 1) }); return; } /* v5.3 SF 尾巴按演奏法 */ /* 主角增益 1.2 */
+          if (playGuitarReal(state.layers.guitar.patch, e.midi, pgt, dur, e.vel * 1.2 * gduck, slideFrom, e.tie || e.slur, melStyle, e.artic)) return;
+          AE.guitar.triggerAttackRelease(midiName(e.midi), dur, pgt, e.vel * 1.2 * gduck * (e.slur ? 0.82 : 1));
         } else {
-          if (playGuitarReal(state.layers.guitar.patch, e.midi, pgt, dur, e.vel * 1.0 * gduck, slideFrom, e.tie || e.slur, melStyle, e.artic)) return;
+          if (playGuitarReal(state.layers.guitar.patch, e.midi, pgt, dur, e.vel * 1.2 * gduck, slideFrom, e.tie || e.slur, melStyle, e.artic)) return;
           const inst = instName && sampOf(instName, 'guitar');
-          if (inst) inst.play(e.midi, pgt, { duration: dur + (e.artic === "stacc" ? 0.03 : e.artic === "port" ? 0.08 : e.dur >= 1 ? 0.2 : 0.1), gain: e.vel * 1.05 * gduck });
-          else AE.guitar.triggerAttackRelease(midiName(e.midi), dur, pgt, e.vel * gduck);
+          if (inst) inst.play(e.midi, pgt, { duration: dur + (e.artic === "stacc" ? 0.03 : e.artic === "port" ? 0.08 : e.dur >= 1 ? 0.2 : 0.1), gain: e.vel * 1.2 * gduck });
+          else AE.guitar.triggerAttackRelease(midiName(e.midi), dur, pgt, e.vel * 1.2 * gduck);
         }
       }, t);
     }
