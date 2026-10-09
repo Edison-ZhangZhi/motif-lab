@@ -1129,6 +1129,19 @@ function buildAudio() {
     envelope: { attack: 0.01, decay: 0.35, sustain: 0.25, release: 1.1 },
   }).connect(AE.keysTremolo);
   AE.keys.volume.value = -4;
+  /* v12 DX7 式 FM 电钢（tine 物理建模）：carrier + harmonicity 1 调制器、调制快速衰减、低通 7.5k。
+     取代 GM SoundFont 电钢——塑料感主犯；tremolo+chorus 链 = Rhodes 经典调味 */
+  AE.keysEP = new Tone.PolySynth(Tone.FMSynth, {
+    harmonicity: 1,
+    modulationIndex: 9,
+    oscillator: { type: 'sine' },
+    modulation: { type: 'sine' },
+    envelope: { attack: 0.004, decay: 2.4, sustain: 0.32, release: 2.2 },
+    modulationEnvelope: { attack: 0.002, decay: 0.25, sustain: 0.1, release: 0.3 },
+  });
+  const epLP = new Tone.Filter(7500, 'lowpass');
+  AE.keysEP.connect(epLP); epLP.connect(AE.keysTremolo);
+  AE.keysEP.volume.value = -5;
 
   /* --- 贝斯：Mono 方波 + 低通 --- */
   AE.bassVol = new Tone.Volume(-4); /* 路由在 toneFilterBass 创建后接（采样/合成贝斯同链） */
@@ -1184,6 +1197,18 @@ function buildAudio() {
     oscillator: { type: 'fatsawtooth' }, /* v8 暖模拟化：双锯齿微失谐 = Juno 宽度，锯齿单波是塑料 pad 的根源 */
     envelope: { attack: 0.6, decay: 1.5, sustain: 0.5, release: 2.5 },
   }).connect(AE.padPhaser);
+  /* v12 模拟垫底：任何 pad（采样或合成）底下垫 -10/0/+10 音分三锯齿 supersaw。
+     MusyngKite choir/warm 采样的"塑料圣咏感"被模拟体温焐住——这层永远出声，与采样加载无关 */
+  AE.padUnder = [];
+  for (const det of [-10, 0, 10]) {
+    const p = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: 'sawtooth', detune: det },
+      envelope: { attack: 1.0, decay: 1.2, sustain: 0.55, release: 2.8 },
+    });
+    const ug = new Tone.Gain(0.11);
+    p.connect(ug); ug.connect(AE.padPhaser);
+    AE.padUnder.push(p);
+  }
 
   /* --- 引擎 v2：全链仅 1 个混响 + 廉价双二阶滤波；卷积从 4 降到 1 --- */
   AE.masterVerb = new Tone.Reverb({ decay: 2.2, wet: 0.3 }).connect(AE.master);
@@ -1792,9 +1817,10 @@ const SAMP_KEYS = 'electric_piano_1';
 /* v4 S6 键盘按风格分音色：rnb=Rhodes(双层)/jazz=FM 颤音琴/rock=无(吉他chug 为主)
    bossa=原钢(Jobim)/afro=原钢稀疏顿奏/hiphop=暗黑 polysynth stab */
 const SAMP_KEYS_BY_STYLE = {
-  rnb: SAMP_KEYS, jazz: '@vibes', rock: null,
-  bossa: 'acoustic_grand_piano', afro: 'acoustic_grand_piano', hiphop: 'pad_3_polysynth',
-};
+  rnb: '@fmrhodes', jazz: '@vibes', rock: null,
+  bossa: 'acoustic_grand_piano', afro: '@fmrhodes', hiphop: 'pad_3_polysynth',
+  funk: '@fmrhodes', soul: '@fmrhodes', reggae: '@fmrhodes', afrobeats: '@fmrhodes',
+}; /* v12: GM 电钢采样退出和声层——换 DX7 式 FM tine 合成（塑料感主犯） */
 const SAMP_BASS = 'electric_bass_finger';
 const SAMP_PAD = {
   halo: 'pad_7_halo', sweep: 'pad_8_sweep', warm: 'pad_2_warm',
@@ -2113,6 +2139,7 @@ function scheduleAll() {
         const gInst = gi && sampOf(SAMP_GUITAR[gi], 'guitar');
         if (gInst) for (const n of e.notes) gInst.play(n, tt, { duration: dur, gain: e.vel * 1.0 * kduck });
         else if (ks === '@vibes') AE.keysVibes.triggerAttackRelease(names, dur, tt, e.vel * 0.85 * kduck);
+        else if (ks === '@fmrhodes') AE.keysEP.triggerAttackRelease(names, dur, tt, e.vel * 0.9 * kduck); /* v12 FM tine 电钢 */
         else {
           const inst = ks && sampOf(ks, 'keys');
           if (inst) for (const n of e.notes) inst.play(n, tt, { duration: dur, gain: e.vel * kduck });
@@ -2136,6 +2163,8 @@ function scheduleAll() {
       Tone.Transport.schedule(tt => {
         if (inst) for (const n of e.notes) inst.play(n, tt + poff + lag, { duration: dur, gain: e.vel * 1.4 * pduck });
         else AE.synthPad.triggerAttackRelease(names, dur, tt + poff + lag, e.vel * pduck);
+        /* v12 模拟垫底永随：三锯齿微失谐在 pad 底下托着，choir 采样也变成"模拟合成器 + 人声"的混合体 */
+        for (const p of AE.padUnder) p.triggerAttackRelease(names, dur, tt + poff + lag, e.vel * 0.9 * pduck);
       }, t);
     }
     /* v5 horn 层：反拍铜管 stab（走 pad 采样库，短促 envelope） */
