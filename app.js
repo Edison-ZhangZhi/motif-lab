@@ -1164,7 +1164,7 @@ function buildAudio() {
   AE.synthVol = new Tone.Volume(-9).connect(AE.master);
   AE.padPhaser = new Tone.Phaser(0.08, 0.5, 320); /* v4.3 合成器老问题根因：octaves=4 全频扫描 → 几乎静止的模拟暖度 */
   AE.synthPad = new Tone.PolySynth(Tone.Synth, {
-    oscillator: { type: 'sawtooth' },
+    oscillator: { type: 'fatsawtooth' }, /* v8 暖模拟化：双锯齿微失谐 = Juno 宽度，锯齿单波是塑料 pad 的根源 */
     envelope: { attack: 0.6, decay: 1.5, sustain: 0.5, release: 2.5 },
   }).connect(AE.padPhaser);
 
@@ -1202,9 +1202,12 @@ function buildAudio() {
   AE.hpPad = new Tone.Filter(150, 'highpass'); /* v5.5 pad 低频不抢贝斯 → 分工表收紧到 150Hz */
   AE.npPad = new Tone.Filter(2800, 'peaking'); AE.npPad.Q.value = 1.2; AE.npPad.gain.value = -2.5; /* 主角区(2.8k 定义感)让位 */
   AE.padRoleGain = new Tone.Gain(0.72); /* 持续声部 RMS 天然碾压瞬态主角，整体退后 ≈-2.8dB */
+  AE.padChorus = new Tone.Chorus(0.9, 4, 0.35); /* v8 deca joins 暖模拟：Juno 式慢合唱在 pad 链 */
+  AE.padChorus.wet.value = 0; /* 风格门控（applyStyleFx），非目标风格零开销 */
   AE.padPhaser.connect(AE.hpPad);
   AE.hpPad.connect(AE.padFilter);
-  AE.padFilter.connect(AE.npPad);
+  AE.padFilter.connect(AE.padChorus);
+  AE.padChorus.connect(AE.npPad);
   AE.npPad.connect(AE.padRoleGain);
   AE.padRoleGain.connect(AE.toneEqPad);
   /* 鼓：失真(轻饱和,2x过采样去数字毛刺)→11k洗剪(镲片糊根)→EQ→主总线 */
@@ -1322,7 +1325,7 @@ const GUITAR_PATCH_FX = {
    rnb 圆润单线圈 / jazz 空心暖 / rock 中频哼声 crunch / bossa 尼龙指弹
    afro highlife 清亮 / hiphop 闷暗 sparse hook */
 const GUITAR_STYLE_FX = {
-  rnb:    { drive: 1.5, lpf: 11000, gate: 1.00, vol: 0.95 }, /* v4.3 提空气感 */
+  rnb:    { drive: 1.5, lpf: 9800,  gate: 1.00, vol: 0.95, chorus: 0.42 }, /* v8 deca joins 化：合唱泡透的干净底 + 圆角高频 */
   jazz:   { drive: 1.5, lpf: 7200,  gate: 1.00, vol: 0.95 }, /* v5.1 空心琴体：少推子失真、收敛高频 */
   rock:   { drive: 12,  lpf: 6800,  gate: 1.00, vol: 1.05 },
   bossa:  { drive: 0,   lpf: 12500, gate: 1.00, vol: 0.90 },
@@ -1340,13 +1343,25 @@ function guitarFxChain(patch, raw, styleKey) {
     lpf.type = 'lowpass'; lpf.frequency.value = fx.lpf; lpf.Q.value = 0.7;
     const vol = raw.createGain(); vol.gain.value = fx.vol;
     let tail = lpf;
+    lpf.connect(vol);
+    /* v8 风格合唱（deca joins 系氛围吉他）：18ms 短延迟 + 0.9Hz LFO 调制 + 反馈，干湿并联。
+       模拟 CE-2 类模拟合唱——湿声不经低通（数字合唱的"塑料感"正是湿声太干净） */
+    if (fx.chorus > 0) {
+      const dly = raw.createDelay(0.08); dly.delayTime.value = 0.018;
+      const lfo = raw.createOscillator(); lfo.frequency.value = 0.85 + Math.random() * 0.3;
+      const lfoG = raw.createGain(); lfoG.gain.value = 0.005;
+      lfo.connect(lfoG); lfoG.connect(dly.delayTime); lfo.start();
+      const fb = raw.createGain(); fb.gain.value = 0.18; dly.connect(fb); fb.connect(dly);
+      const wet = raw.createGain(); wet.gain.value = fx.chorus;
+      lpf.connect(dly); dly.connect(wet); wet.connect(vol);
+    }
     if (fx.drive > 0) {
       const shaper = raw.createWaveShaper();
       shaper.curve = driveCurve(fx.drive);
       shaper.oversample = '2x';
       shaper.connect(lpf); tail = shaper;
     }
-    lpf.connect(vol); vol.connect(SAMP.busByRole.guitar);
+    vol.connect(SAMP.busByRole.guitar);
     head = tail;
     GUITAR_FX_CHAINS[ck] = head;
   }
@@ -2772,7 +2787,7 @@ const $ = sel => document.querySelector(sel);
 
 /* 语义音色目标（方案2: 语义化EQ，MDPI 2016）：每层 亮度bright/空间space/厚度thick 0~1 */
 const STYLE_TONE = {
-  rnb:   { guitar:{b:0.46,s:0.30,t:0.10}, keys:{b:0.30,s:0.50,t:0.0}, bass:{b:0.30,s:0.15,t:0.0}, pad:{b:0.25,s:0.70,t:0.0}, drums:{b:0.45,s:0.15,t:0.2} }, /* v4.3 吉他提亮+收湿声 */
+  rnb:   { guitar:{b:0.46,s:0.48,t:0.10}, keys:{b:0.30,s:0.50,t:0.0}, bass:{b:0.30,s:0.15,t:0.0}, pad:{b:0.25,s:0.70,t:0.0}, drums:{b:0.45,s:0.15,t:0.2} }, /* v4.3 吉他提亮+收湿声 → v8: 吉他空间发送 0.30→0.48（deca joins 超大空间感） */
   jazz:  { guitar:{b:0.44,s:0.26,t:0.10}, keys:{b:0.35,s:0.40,t:0.0}, bass:{b:0.35,s:0.10,t:0.0}, pad:{b:0.30,s:0.50,t:0.0}, drums:{b:0.50,s:0.20,t:0.1} },
   rock:  { guitar:{b:0.70,s:0.20,t:0.50}, keys:{b:0.50,s:0.20,t:0.2}, bass:{b:0.55,s:0.10,t:0.3}, pad:{b:0.40,s:0.30,t:0.2}, drums:{b:0.60,s:0.25,t:0.35} },
   bossa: { guitar:{b:0.58,s:0.30,t:0.05}, keys:{b:0.40,s:0.35,t:0.0}, bass:{b:0.35,s:0.10,t:0.0}, pad:{b:0.30,s:0.40,t:0.0}, drums:{b:0.50,s:0.20,t:0.1} },
@@ -2849,6 +2864,9 @@ function applyStyleFx(styleKey) {
   /* fx.cw→混响湿度, fx.rw→衰减长度映射 */
   AE.masterVerb.wet.value = Math.min(0.5, fx.cw * 0.6); /* 收敛：wash 会埋掉鼓和律动 */
   AE.masterVerb.decay = 1 + fx.rw * 3.2;
+  /* v8 deca joins 空间/调制包：rnb = 超大空间感(3.4s) + Juno 合唱 pad */
+  if (AE.padChorus) AE.padChorus.wet.value = styleKey === 'rnb' ? 0.5 : styleKey === 'soul' ? 0.3 : 0;
+  if (styleKey === 'rnb') { AE.masterVerb.decay = 3.4; AE.masterVerb.wet.value = Math.min(0.55, fx.cw * 0.6 + 0.06); }
 }
 
 /* ---------- 风格整体配置：切换风格 = 整套编曲画面变换 ---------- */
