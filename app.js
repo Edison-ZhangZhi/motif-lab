@@ -2384,6 +2384,43 @@ async function renderMelodyToWav(guideOffsetBeats) {
   return encodeWav([rendered.getChannelData(0)], SR);
 }
 /* v6 分块拼接：块长 30s、步进 28s（2s 等功率交叉淡化），整曲突破 30s 上限 */
+/* v11 provider 3：浏览器内置 MusicGen（transformers.js）——零安装零 token 的唱片级渲染。
+   无 mel 条件时把完整和弦走向写进提示词（模型对和弦名跟随度好），风格描述沿用 PROMPT_V2 */
+let _browserGen = null;
+async function browserGenerateChunk(prompt, temperature, onStatus) {
+  if (!_browserGen) {
+    if (onStatus) onStatus('② 首次使用：加载浏览器 AI 模型（约 400MB，下载进度见下）…');
+    /* 双 CDN 兜底：jsdelivr 部分地区不可达时自动换 unpkg */
+    let trans = null;
+    try { trans = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.0'); }
+    catch (e1) {
+      if (onStatus) onStatus('② jsdelivr 不可达，切换 unpkg 镜像…');
+      trans = await import('https://unpkg.com/@xenova/transformers@2.17.0');
+    }
+    trans.env.allowLocalModels = false;
+    trans.env.useBrowserCache = true;
+    const progress = (p) => {
+      if (onStatus && p.status === 'progress' && p.total) onStatus('② 模型下载 ' + Math.round(p.progress / p.total * 100) + '%（仅首次）…');
+    };
+    _browserGen = await trans.pipeline('text-to-audio', 'Xenova/musicgen-small', { progress_callback: progress });
+  }
+  /* 和弦走向逐小节写进指令——浏览器路径没有旋律引导带，这是防"和声跑遍"的替身 */
+  if (!chordTimeline.length) buildChordTimeline();
+  const chords = chordTimeline.map(c => c.name).join(' - ');
+  const full = prompt + ', chord progression: ' + chords + ', stay in key, consistent harmony';
+  if (onStatus) onStatus('② 浏览器 AI 作曲中（CPU 约 1-3 分钟/段，请勿关页面）…');
+  const out = await _browserGen(full, {
+    max_new_tokens: 1400, /* musicgen 50 token/秒 ≈ 28s */
+    do_sample: true,
+    temperature: Math.min(1.5, (temperature || 1.0) + 0.1),
+    top_k: 50,
+  });
+  const audio = out.audio instanceof Float32Array ? out.audio : new Float32Array(out.audio);
+  const sr2 = out.sampling_rate || 32000;
+  const blob = encodeWav([audio], sr2);
+  return await blob.arrayBuffer();
+}
+
 async function studioGenerateChunk(prompt, melodyURI, token, temperature) {
   /* provider 1：本机 musicgen_server.py（medium 模型，免费且质量高于 small） */
   try {
@@ -2458,16 +2495,23 @@ async function studioRender(variantIdx, temperature, label) {
   const nChunks = Math.max(1, Math.ceil(loopSec / CHUNK));
   let localOK = false;
   try { localOK = (await fetch('http://127.0.0.1:7860/health', { signal: AbortSignal.timeout(1500) })).ok; } catch (e) {}
-  if (!localOK && !token) { status.textContent = '请先填写 Replicate API Token（replicate.com → Account → API tokens），或启动本机服务（musicgen_server.py，免费且模型更大）'; tokenEl.focus(); return; }
-  status.textContent = '① 正在渲染引导带（旋律+和声+贝斯）…';
+  /* v11 零安装底线：没本机服务也没 token → 浏览器内置 AI 渲染（模型约 400MB，之后离线可用） */
+  const useBrowser = !localOK && !token;
+  if (useBrowser) status.textContent = '未检测到本机服务/Replicate → 启用【浏览器内置 AI 渲染】（首次下载模型约 400MB，之后离线可用）…';
+  status.textContent = '① ' + (useBrowser ? '整理作曲指令（风格+和弦走向+编曲画面）…' : '正在渲染引导带（旋律+和声+贝斯）…');
   try {
     const prompt = buildStudioPrompt();
     const chunkBufs = [];
     for (let i = 0; i < nChunks; i++) {
-      const wav = await renderMelodyToWav(i * CHUNK / secPerBeat);
-      const melodyURI = await blobToDataURI(wav);
-      status.textContent = '② AI 录音棚 ' + (i + 1) + '/' + nChunks + '…' + (localOK ? '（本机 medium 模型）' : '（Replicate）');
-      const ab = await studioGenerateChunk(prompt, melodyURI, token, temperature);
+      let melodyURI = null;
+      if (!useBrowser) {
+        const wav = await renderMelodyToWav(i * CHUNK / secPerBeat);
+        melodyURI = await blobToDataURI(wav);
+      }
+      status.textContent = '② AI 录音棚 ' + (i + 1) + '/' + nChunks + '…' + (localOK ? '（本机 medium 模型）' : useBrowser ? '（浏览器内置·首次较慢）' : '（Replicate）');
+      const ab = useBrowser
+        ? await browserGenerateChunk(prompt, temperature, (t) => { status.textContent = t; })
+        : await studioGenerateChunk(prompt, melodyURI, token, temperature);
       const actx = new (window.AudioContext || window.webkitAudioContext)();
       chunkBufs.push(await actx.decodeAudioData(ab));
       await actx.close();
