@@ -430,6 +430,22 @@ function melodyFlowPass(events, rng, styleKey) {
       }
     } else parkRun = 1;
   }
+  /* 5) v13 乐句终止解决：乐句边界（换气口）的尾音必须落在和弦音上——
+     悬而未决的尾音是"旋律难听"的核心来源之一：snap 到最近和弦音（≤3 半音） */
+  for (let gi = 0; gi < core.length; gi++) {
+    const e = core[gi];
+    const nxt = gi + 1 < core.length ? core[gi + 1] : null;
+    if (!nxt || nxt.breath || nxt.beat - (e.beat + e.dur) >= 1) {
+      const ch = chordAtBar(Math.floor(e.beat / BPB()));
+      if (!ch.pcs.includes(((e.midi % 12) + 12) % 12)) {
+        let best = e.midi, bd = 4;
+        for (const pc of ch.pcs) for (let m = e.midi - 3; m <= e.midi + 3; m++) {
+          if (((m % 12) + 12) % 12 === pc && Math.abs(m - e.midi) < bd) { bd = Math.abs(m - e.midi); best = m; }
+        }
+        e.midi = best;
+      }
+    }
+  }
 }
 
 /* ================= v5.2 节奏塑形通道：articulation 对比 + 休止呼吸 + 抢拍 =================
@@ -2139,7 +2155,11 @@ function scheduleAll() {
         const gInst = gi && sampOf(SAMP_GUITAR[gi], 'guitar');
         if (gInst) for (const n of e.notes) gInst.play(n, tt, { duration: dur, gain: e.vel * 1.0 * kduck });
         else if (ks === '@vibes') AE.keysVibes.triggerAttackRelease(names, dur, tt, e.vel * 0.85 * kduck);
-        else if (ks === '@fmrhodes') AE.keysEP.triggerAttackRelease(names, dur, tt, e.vel * 0.9 * kduck); /* v12 FM tine 电钢 */
+        else if (ks === '@fmrhodes') {
+          /* v13 优先级：smplr Wurlitzer 采样 → v12 FM tine 兜底 */
+          if (_wurli) { for (const n of e.notes) _wurli.start({ note: n, time: tt, duration: dur, velocity: Math.max(20, Math.round(e.vel * 118 * kduck)) }); }
+          else AE.keysEP.triggerAttackRelease(names, dur, tt, e.vel * 0.9 * kduck);
+        }
         else {
           const inst = ks && sampOf(ks, 'keys');
           if (inst) for (const n of e.notes) inst.play(n, tt, { duration: dur, gain: e.vel * kduck });
@@ -2255,7 +2275,7 @@ function scheduleAll() {
 
 async function ensureAudio() {
   if (typeof Tone === 'undefined') return false;
-  if (!state.audioReady) { buildAudio(); state.audioReady = true; loadInstruments(); loadDrumSamples(); loadGuitarSamples(); }
+  if (!state.audioReady) { buildAudio(); state.audioReady = true; loadInstruments(); loadDrumSamples(); loadGuitarSamples(); loadWurli(); /* v13 后台预热 Wurli 采样电钢 */ }
   try {
     await Tone.start();
     if (Tone.context.state !== 'running') await Tone.context.resume();
@@ -2416,6 +2436,26 @@ async function renderMelodyToWav(guideOffsetBeats) {
 /* v11 provider 3：浏览器内置 MusicGen（transformers.js）——零安装零 token 的唱片级渲染。
    无 mel 条件时把完整和弦走向写进提示词（模型对和弦名跟随度好），风格描述沿用 PROMPT_V2 */
 let _browserGen = null;
+/* v13 smplr 采样电钢：WurlitzerEP200（GregSullivan E-Pianos 采样，带力度层）——RnB/Soul 的标志性键盘。
+   加载失败/超时自动回退 v12 的 FM tine；库走 jsdelivr/unpkg 双镜像 */
+let _wurli = null, _wurliFailed = false;
+async function loadWurli() {
+  if (_wurli || _wurliFailed) return _wurli;
+  try {
+    const raw = Tone.getContext().rawContext;
+    let mod = null;
+    try { mod = await import('https://cdn.jsdelivr.net/npm/smplr/+esm'); }
+    catch (e1) { mod = await import('https://unpkg.com/smplr/+esm'); }
+    const EP = mod.ElectricPiano;
+    if (!EP) throw new Error('no EP');
+    const inst = new EP(raw, { instrument: 'WurlitzerEP200' });
+    inst.connect(nativeInputOf(AE.hpKeys)); /* 进入分工表链：高通→2.8k让位→低通→musicBus */
+    if (inst.load) await Promise.race([inst.load(), new Promise((_, rj) => setTimeout(() => rj(new Error('timeout')), 45000))]);
+    _wurli = inst;
+  } catch (e) { _wurliFailed = true; _wurli = null; }
+  return _wurli;
+}
+
 async function browserGenerateChunk(prompt, temperature, onStatus) {
   if (!_browserGen) {
     if (onStatus) onStatus('② 首次使用：加载浏览器 AI 模型（约 400MB，下载进度见下）…');
