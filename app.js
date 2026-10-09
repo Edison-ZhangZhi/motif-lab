@@ -1114,7 +1114,7 @@ function buildAudio() {
   AE.keys.volume.value = -4;
 
   /* --- 贝斯：Mono 方波 + 低通 --- */
-  AE.bassVol = new Tone.Volume(-4).connect(AE.master);
+  AE.bassVol = new Tone.Volume(-4); /* 路由在 toneFilterBass 创建后接（采样/合成贝斯同链） */
   AE.bass = new Tone.MonoSynth({
     oscillator: { type: 'square' },
     filter: { Q: 2, type: 'lowpass', rolloff: -24 },
@@ -1176,23 +1176,38 @@ function buildAudio() {
   AE.musicBus.connect(AE.masterEQ = new Tone.EQ3({ low: -2.5, mid: -1, high: 2, lowFrequency: 250, highFrequency: 4000 })); /* 频段手术：压糊提空气感 */
   AE.masterEQ.connect(AE.master);
   /* 吉他/键盘：失真→高通(v5.5 低频单声道化)→EQ→粘合总线 */
-  AE.toneEqGuitar = new Tone.EQ3({ low: 0, mid: 0, high: 3 }).connect(AE.musicBus);
+  AE.lpGuitar = new Tone.Filter(13500, 'lowpass'); /* 分工表：吉他毛刺上限（风格链可再下压） */
+  AE.lpGuitar.connect(AE.musicBus);
+  AE.toneEqGuitar = new Tone.EQ3({ low: 0, mid: 0, high: 3, lowFrequency: 300, highFrequency: 3500 }).connect(AE.lpGuitar); /* 3.5k 以上=拨片定义感区，空气感从这出 */
   AE.hpGuitar = new Tone.Filter(70, 'highpass').connect(AE.toneEqGuitar); /* 70Hz 以下让给贝斯 */
   AE.toneDistGuitar = new Tone.Distortion(0).connect(AE.hpGuitar);
-  AE.toneEqKeys = new Tone.EQ3({ low: 0, mid: 0, high: 2 }).connect(AE.musicBus);
+  AE.lpKeys = new Tone.Filter(9500, 'lowpass'); /* 分工表：EP 上限 9.5k，金属毛刺让位镲片空气感 */
+  AE.lpKeys.connect(AE.musicBus);
+  AE.toneEqKeys = new Tone.EQ3({ low: 0, mid: 0, high: 2, lowFrequency: 350, highFrequency: 4000 }).connect(AE.lpKeys);
   AE.hpKeys = new Tone.Filter(100, 'highpass').connect(AE.toneEqKeys); /* Rhodes 低频浑浊重灾区 */
   AE.toneDistKeys = new Tone.Distortion(0).connect(AE.hpKeys);
+  /* 频率分工表（系统级频谱编排）：每件乐器一个工位，挖掉侵占别人工位的频段
+     贝斯 30-700 · Pad 150-5k(400以下全权让给贝斯) · EP 100-9.5k(350挖泥) · 吉他 90-13.5k(300挖泥) · 鼓 28-11k(11k以上洗剪) */
   AE.toneFilterBass = new Tone.Filter(9000, 'lowpass').connect(AE.master);
+  AE.hpBass = new Tone.Filter(30, 'highpass'); /* 30Hz 以下亚音切除：防轰头，房间感让给 kick */
+  AE.hpBass.connect(AE.toneFilterBass);
+  AE.bassVol.connect(AE.hpBass); /* 合成贝斯并入同一条滤波链 */
   /* Pad：移相→风格低通→EQ→粘合总线（v4 S5：合成器音色链随风格开合） */
-  AE.toneEqPad = new Tone.EQ3({ low: 0, mid: 0, high: 0 }).connect(AE.musicBus);
+  AE.toneEqPad = new Tone.EQ3({ low: 0, mid: 0, high: 0, lowFrequency: 400, highFrequency: 5000 }).connect(AE.musicBus);
   AE.padFilter = new Tone.Filter(8000, 'lowpass');
-  AE.hpPad = new Tone.Filter(80, 'highpass'); /* v5.5 pad 低频不抢贝斯 */
+  AE.hpPad = new Tone.Filter(150, 'highpass'); /* v5.5 pad 低频不抢贝斯 → 分工表收紧到 150Hz */
   AE.padPhaser.connect(AE.hpPad);
   AE.hpPad.connect(AE.padFilter);
   AE.padFilter.connect(AE.toneEqPad);
-  /* 鼓：失真(轻饱和)→EQ→主总线 */
-  AE.toneEqDrums = new Tone.EQ3({ low: 0, mid: 0, high: 2 }).connect(AE.master);
-  AE.toneDistDrums = new Tone.Distortion(0).connect(AE.toneEqDrums);
+  /* 鼓：失真(轻饱和,2x过采样去数字毛刺)→11k洗剪(镲片糊根)→EQ→主总线 */
+  AE.toneEqDrums = new Tone.EQ3({ low: 0, mid: 0, high: 2, lowFrequency: 200, highFrequency: 7000 }).connect(AE.master);
+  AE.lpDrums = new Tone.Filter(11000, 'lowpass'); /* 分工表：11k 以上镲片"洗"剪除 = 鼓糊主要来源 */
+  AE.lpDrums.connect(AE.toneEqDrums);
+  AE.toneDistDrums = new Tone.Distortion(0);
+  AE.toneDistDrums.oversample = '2x';
+  AE.toneDistDrums.connect(AE.lpDrums);
+  if (AE.toneDistGuitar) AE.toneDistGuitar.oversample = '2x';
+  if (AE.toneDistKeys) AE.toneDistKeys.oversample = '2x'; /* EP 饱和毛刺收敛 = 塑料感来源之一 */
   /* 各层空间发送（共享唯一混响） */
   AE.sendGuitar = new Tone.Gain(0.3).connect(AE.masterVerb);
   AE.sendKeys = new Tone.Gain(0.3).connect(AE.masterVerb);
