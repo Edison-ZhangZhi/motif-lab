@@ -136,7 +136,7 @@ const STYLES = {
   },
   rock: {
     name: 'Rock', scaleBias: 'blues',
-    mel: { stepP: 0.38, density: 0.5, durBias: 0.35, rep: 0.8, synco: 0.25, blue: true, regLo: 58, regHi: 82, maxLeap: 12 },
+    mel: { stepP: 0.38, density: 0.5, durBias: 0.25, rep: 0.6, synco: 0.45, blue: true, regLo: 58, regHi: 82, maxLeap: 12 }, /* v10: rep↓(少重复防停车) durBias↓(短音riff感) synco↑(推进力) */
     rhythm: [
       [[0, 2], [2, 2], [4, 2], [6, 2], [8, 2], [10, 2], [12, 2], [14, 2]],
       [[0, 4], [4, 4], [8, 4], [12, 4]],

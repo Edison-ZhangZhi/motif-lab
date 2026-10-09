@@ -413,6 +413,23 @@ function melodyFlowPass(events, rng, styleKey) {
     const e = core[i], n = core[i + 1];
     if (n.beat - (e.beat + e.dur) <= 0.06 && n.midi !== e.midi && Math.abs(n.midi - e.midi) <= 2) n.slur = true;
   }
+  /* 4) v10 反停车守卫（作曲层）：连续 ≥3 个同音高 onset = 旋律钉死——实测 rock 引导带 G 连续 11 秒。
+     从第 3 个起强制"换桩"：级进邻音（保持连线不断）且必须落在调内 → 停车变流动，且不产生新断点 */
+  let parkRun = 1;
+  for (let i = 1; i < core.length; i++) {
+    if (core[i].midi === core[i - 1].midi) {
+      parkRun++;
+      if (parkRun >= 3) {
+        const e = core[i];
+        const ch = chordAtBar(Math.floor(e.beat / BPB()));
+        for (const delta of [2, -2, 3, -3, 1, -1, 4, -4, 5, -5, 7, -7]) {
+          const cand = e.midi + delta;
+          if (cand >= 55 && cand <= 90 && ch.scalePCs.includes(((cand % 12) + 12) % 12)) { e.midi = cand; break; }
+        }
+        parkRun = 1;
+      }
+    } else parkRun = 1;
+  }
 }
 
 /* ================= v5.2 节奏塑形通道：articulation 对比 + 休止呼吸 + 抢拍 =================
