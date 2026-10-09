@@ -1123,7 +1123,7 @@ function buildAudio() {
   }).connect(AE.bassVol);
 
   /* --- 鼓组 --- */
-  AE.drumsVol = new Tone.Volume(-5); /* 路由在音色链创建后建立；v4.1 前置一档 */
+  AE.drumsVol = new Tone.Volume(-3.5); /* 路由在音色链创建后建立；v7 再前置：用户反馈"感受不到鼓点"，律动必须有肉体存在感 */
   AE.drumsComp = new Tone.Compressor(-16, 3.5); /* v2：全鼓挤进同一动态包络，一起呼吸 */
   /* v4.1 NY 并行压缩：重压缩副本 0.4 混入——kick/snare 永远顶穿混音 */
   AE.drumsPar = new Tone.Compressor(-32, 10); /* v4.2 更重：底鼓军鼓压平混音 */
@@ -1606,6 +1606,8 @@ function loadDrumSamples(isRetry) {
       loadDrumSamples(true);
     } else if (missing) {
       sampStatus('鼓采样 ' + missing + '/15 加载失败（网络），已用合成鼓兜底');
+    } else {
+      sampStatus('鼓采样 15/15 ✓ 真实鼓组就绪'); /* v7：正常状态也可见——"有没有鼓"从此不用猜 */
     }
   }, 6000);
 }
@@ -2726,12 +2728,33 @@ async function exportAudio() {
     else { state.playing = false; silenceSampleBuses(); }
     updatePlayBtn();
     const blob = new Blob(chunks, { type: 'audio/webm' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `motif_${pcName(state.keyRoot)}${state.mode}_${state.bpm}bpm.webm`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-    if (btn) btn.textContent = '⬇ 导出音频（WebM）';
+    /* v7 诊断闭环：WebM 在页内解码重编码为 WAV——用户听到的声音变成可测量/可发送的文件，
+       导出同时自动跑成品体检（频谱/动态），把 WAV 发给 AI 即可做根因分析，不再靠形容词猜 */
+    (async () => {
+      try {
+        const actx = new (window.AudioContext || window.webkitAudioContext)();
+        const ab = await actx.decodeAudioData(await blob.arrayBuffer());
+        await actx.close();
+        const wav = encodeWav([ab.getChannelData(0), ab.numberOfChannels > 1 ? ab.getChannelData(1) : ab.getChannelData(0)], ab.sampleRate);
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(wav);
+        a.download = `motif_${pcName(state.keyRoot)}${state.mode}_${state.bpm}bpm.wav`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        try {
+          studioHealthCheck(ab);
+          const stEl = document.getElementById('studio-status');
+          if (stEl) sampStatus(stEl.textContent.split(String.fromCharCode(10)).pop()); /* 体检结果抄送到常驻状态行 */
+        } catch (e) {}
+      } catch (e) {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `motif_${pcName(state.keyRoot)}${state.mode}_${state.bpm}bpm.webm`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+      if (btn) btn.textContent = '⬇ 导出音频（WAV）';
+    })();
   };
   _audioRec = rec;
   if (btn) btn.textContent = '⏺ 录制中…';
