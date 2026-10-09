@@ -1327,7 +1327,7 @@ const GUITAR_PATCH_FX = {
 const GUITAR_STYLE_FX = {
   rnb:    { drive: 1.5, lpf: 9800,  gate: 1.00, vol: 0.95, chorus: 0.42 }, /* v8 deca joins 化：合唱泡透的干净底 + 圆角高频 */
   jazz:   { drive: 1.5, lpf: 7200,  gate: 1.00, vol: 0.95 }, /* v5.1 空心琴体：少推子失真、收敛高频 */
-  rock:   { drive: 12,  lpf: 6800,  gate: 1.00, vol: 1.05 },
+  rock:   { drive: 16,  lpf: 7500,  gate: 1.00, vol: 1.08, presence: 2.2, dmix: 0.13 }, /* v9 GNR/ACDC：JCM800 级 crunch + 中频哼声(Schaffer 特雷布 boost)+短延迟宽度 */
   bossa:  { drive: 0,   lpf: 12500, gate: 1.00, vol: 0.90 },
   afro:   { drive: 2,   lpf: 8800,  gate: 1.00, vol: 0.95 },
   hiphop: { drive: 1.5, lpf: 4200,  gate: 0.85, vol: 0.90 }, /* v5.1 采样 chop 美学：更闷更狠，微失真给砂砾 */
@@ -1361,7 +1361,22 @@ function guitarFxChain(patch, raw, styleKey) {
       shaper.oversample = '2x';
       shaper.connect(lpf); tail = shaper;
     }
-    vol.connect(SAMP.busByRole.guitar);
+    /* v9 GNR/ACDC 链：中频哼声(1.2k 存在感) + 短延迟立体声宽度(Slash 式 lead 空间) */
+    let outNode = vol;
+    if (fx.presence > 0) {
+      const pre = raw.createBiquadFilter(); pre.type = 'peaking'; pre.frequency.value = 1200; pre.Q.value = 0.8; pre.gain.value = fx.presence;
+      vol.connect(pre); outNode = pre;
+    }
+    if (fx.dmix > 0) {
+      const sum = raw.createGain();
+      outNode.connect(sum);
+      const dly = raw.createDelay(0.5); dly.delayTime.value = 0.287;
+      const fb = raw.createGain(); fb.gain.value = 0.24; dly.connect(fb); fb.connect(dly);
+      const wet = raw.createGain(); wet.gain.value = fx.dmix;
+      outNode.connect(dly); dly.connect(wet); wet.connect(sum);
+      outNode = sum;
+    }
+    outNode.connect(SAMP.busByRole.guitar);
     head = tail;
     GUITAR_FX_CHAINS[ck] = head;
   }
