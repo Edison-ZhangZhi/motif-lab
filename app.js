@@ -2372,7 +2372,7 @@ function buildStudioPrompt() {
     hiphop: 'modern trap hip-hop, dark melodic hook, deep 808 sub bass, crisp hi-hats, atmospheric keys, punchy mix',
   };
   const v2 = PROMPT_V2[st] || (P[st] || P.rnb);
-  return v2 + ', in ' + keyName + ', ' + state.bpm + ' bpm' + (preset ? ', progression ' + preset.name : '') + ', high quality, well mixed';
+  return v2 + ', in ' + keyName + ', ' + state.bpm + ' bpm' + (preset ? ', progression ' + preset.name : '') + ', high quality studio recording, clean clear mix, defined punchy low end, crisp transients, controlled reverb';
 }
 async function studioRender(variantIdx, temperature, label) {
   const tokenEl = document.getElementById('replicate-token');
@@ -2382,7 +2382,7 @@ async function studioRender(variantIdx, temperature, label) {
   const beatsPerBar = state.meter === 'm34' ? 3 : state.meter === 'm68' ? 6 : 4;
   const secPerBeat = 60 / state.bpm;
   const loopSec = totalBars() * beatsPerBar * secPerBeat;
-  const CHUNK = 28, FADE = 2; /* 30s 块、28s 步进、2s 交叉淡化 */
+  const CHUNK = 28, FADE = 0.5; /* 30s 块、28s 步进、0.5s 交叉淡化（2s 会让 7% 时长处于双音乐重叠，是"糊"的来源之一） */
   const nChunks = Math.max(1, Math.ceil(loopSec / CHUNK));
   let localOK = false;
   try { localOK = (await fetch('http://127.0.0.1:7860/health', { signal: AbortSignal.timeout(1500) })).ok; } catch (e) {}
@@ -2400,7 +2400,7 @@ async function studioRender(variantIdx, temperature, label) {
       chunkBufs.push(await actx.decodeAudioData(ab));
       await actx.close();
     }
-    /* 交叉淡化拼接：等功率 2s 淡化消除块间接缝 */
+    /* 交叉淡化拼接：等功率 0.5s 淡化消除块间接缝 */
     status.textContent = '③ 拼接 ' + nChunks + ' 个乐段…';
     const sr = 44100;
     const stride = chunkBufs[0].duration - FADE;
@@ -2497,12 +2497,16 @@ async function studioMasterPass(buf) {
   const sr = buf.sampleRate, len = buf.length;
   const ctx = new OfflineAudioContext(buf.numberOfChannels, len, sr);
   const srcN = ctx.createBufferSource(); srcN.buffer = buf;
-  const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 30;
-  const ls = ctx.createBiquadFilter(); ls.type = 'lowshelf'; ls.frequency.value = 200; ls.gain.value = -1.5;
-  const pk = ctx.createBiquadFilter(); pk.type = 'peaking'; pk.frequency.value = 3000; pk.Q.value = 1; pk.gain.value = 1.5;
-  const hs = ctx.createBiquadFilter(); hs.type = 'highshelf'; hs.frequency.value = 9000; hs.gain.value = 1;
+  const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 35;
+  /* 去糊核心：300Hz 低中挖 -2.5（MusicGen 的浑浊集中区）+ 150 低架轻压 */
+  const pkMud = ctx.createBiquadFilter(); pkMud.type = 'peaking'; pkMud.frequency.value = 300; pkMud.Q.value = 0.9; pkMud.gain.value = -2.5;
+  const ls = ctx.createBiquadFilter(); ls.type = 'lowshelf'; ls.frequency.value = 150; ls.gain.value = -1;
+  const pk = ctx.createBiquadFilter(); pk.type = 'peaking'; pk.frequency.value = 2800; pk.Q.value = 1; pk.gain.value = 1.5;
+  const hs = ctx.createBiquadFilter(); hs.type = 'highshelf'; hs.frequency.value = 10000; hs.gain.value = 2;
   const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 2.5; comp.attack.value = 0.003; comp.release.value = 0.2;
-  srcN.connect(hp); hp.connect(ls); ls.connect(pk); pk.connect(hs); hs.connect(comp); comp.connect(ctx.destination);
+  /* 砖墙限幅：整体挺到 -1.5dB，响度即"清晰感"的一半 */
+  const lim = ctx.createDynamicsCompressor(); lim.threshold.value = -1.5; lim.ratio.value = 20; lim.attack.value = 0.001; lim.release.value = 0.1;
+  srcN.connect(hp); hp.connect(pkMud); pkMud.connect(ls); ls.connect(pk); pk.connect(hs); hs.connect(comp); comp.connect(lim); lim.connect(ctx.destination);
   srcN.start();
   return ctx.startRendering();
 }
@@ -2789,7 +2793,7 @@ const STYLE_FX = {
   afro:  { cw: 0.12, rw: 0.18 },
   hiphop:{ cw: 0.2,  rw: 0.28 },
   funk:    { cw: 0.15, rw: 0.20 },
-  soul:    { cw: 0.40, rw: 0.45 },
+  soul:    { cw: 0.32, rw: 0.30 },
   reggae:  { cw: 0.25, rw: 0.35 },
   afrobeats:{ cw: 0.18, rw: 0.22 },
 };
