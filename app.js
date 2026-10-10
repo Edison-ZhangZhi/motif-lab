@@ -75,9 +75,11 @@ function buildChordTimeline() {
   /* v5 和弦九维：延伸和弦为默认体（rnb/jazz/bossa/afro/hiphop），rock 保持三和弦 */
   const EXT_UP = { maj: 'maj9', min: 'min9', dom: '9', sus: 'sus4', dim: 'dim7', aug: 'aug' };
   const EXT_STYLE = ['rnb', 'jazz', 'bossa', 'afro', 'hiphop'].includes(state.styles[0]);
+  /* v15：70% 强制九和弦=每小节都糊满延伸音；按风格分级——rnb/jazz 半概率，其余克制到 1/4 */
+  const EXT_PROB = (state.styles[0] === 'rnb' || state.styles[0] === 'jazz') ? 0.5 : 0.25;
   chordTimeline = state.slots.map(slot => {
     let qKey = autoQualityFor(slot, state.styles, rng);
-    if (EXT_STYLE && (!slot.q || slot.q === 'auto') && CHORDS[EXT_UP[(CHORDS[qKey] || {}).grp]] && rng() < 0.7) qKey = EXT_UP[CHORDS[qKey].grp];
+    if (EXT_STYLE && (!slot.q || slot.q === 'auto') && CHORDS[EXT_UP[(CHORDS[qKey] || {}).grp]] && rng() < EXT_PROB) qKey = EXT_UP[CHORDS[qKey].grp];
     const rootPC = slotRootPC(slot, state.keyRoot, state.mode);
     const c = CHORDS[qKey];
     const pcs = c.iv.map(iv => (rootPC + iv) % 12);
@@ -102,10 +104,10 @@ function parseMotiveText(text) {
   };
   const has = (...words) => words.some(w => t.includes(w));
   const set = (k, v) => { p[k] = v; p._set.add(k); };
-  if (has('上行', '上升', '向上', '攀升', '爬升', 'up', 'ascend', 'climb', 'rise')) p.dir = 'up';
-  if (has('下行', '下降', '向下', '坠落', '下滑', 'down', 'descend', 'fall')) p.dir = 'down';
-  if (has('波浪', '起伏', '迂回', 'wave', 'arch', 'swell')) p.dir = 'wave';
-  if (has('环绕', '盘旋', '绕回', 'hover', 'orbit')) p.dir = 'orbit';
+  if (has('上行', '上升', '向上', '攀升', '爬升', 'up', 'ascend', 'climb', 'rise')) set('dir', 'up');
+  if (has('下行', '下降', '向下', '坠落', '下滑', 'down', 'descend', 'fall')) set('dir', 'down');
+  if (has('波浪', '起伏', '迂回', 'wave', 'arch', 'swell')) set('dir', 'wave');
+  if (has('环绕', '盘旋', '绕回', 'hover', 'orbit')) set('dir', 'orbit');
   if (has('级进', '平稳', '平滑', '连贯', 'step', 'smooth', 'legato', 'flow')) { set('stepP', 0.85); p.maxLeap = 4; p._set.add('maxLeap'); }
   if (has('跳进', '跳跃', '大跳', 'leap', 'jump', 'arpeggio', 'arp')) { set('stepP', 0.3); p.maxLeap = 12; p._set.add('maxLeap'); }
   if (has('密集', '急促', '紧张', 'busy', 'dense', 'fast', 'run', '冲刺')) set('density', 0.85);
@@ -154,8 +156,10 @@ function genMelody() {
     for (const k of Object.keys(dna)) if (!p._set.has(k)) out[k] = dna[k];
     return out;
   };
-  const firstStyle = state.styles.length > 1 ? state.styles[0] : state.styles[0];
-  const firstParams = mergeDna(firstStyle, baseParams);
+  /* v16 融合模式：后处理逐事件按小节所属风格取表（与 genKeys 的 keyForVoicing 同规则），
+     firstParams 仅作 readout/兜底展示 */
+  const styleAtBar = bar => state.styles.length > 1 ? state.styles[bar % state.styles.length] : state.styles[0];
+  const firstParams = mergeDna(state.styles[0], baseParams);
 
   /* 动机细胞作曲：2 小节一个乐句组，A A' B A'' */
   const GROUP = 2;
@@ -163,11 +167,11 @@ function genMelody() {
   let lastCell = null;
   let prev = null;
 
-  const chordAnchor = (chord, near, strongPref) => {
+  const chordAnchor = (chord, near, strongPref, lo, hi) => {
     const opts = chord.pcs.slice();
     let best = null, bd = 99;
     for (const pc of opts) {
-      for (let m = firstParams.regLo; m <= firstParams.regHi; m++) {
+      for (let m = lo; m <= hi; m++) {
         if (m % 12 !== pc) continue;
         const d = Math.abs(m - near) + (strongPref && (pc === chord.rootPC) ? -1.5 : 0);
         if (d < bd) { bd = d; best = m; }
@@ -186,6 +190,8 @@ function genMelody() {
     const isAfro = styleKey === 'afro';
     /* v4 M1/M2 问答句结构：偶数组=问（上扬悬停 2/6 级），奇数组=答（尾反转落解决音） */
     const isQuestion = g % 2 === 0;
+    /* v17 文本方向锁：显式"上行/下行"时各通道（落音/句尾 snap/反停车）都要顺着它 */
+    const dirLock = baseParams._set.has('dir') ? (baseParams.dir === 'up' ? 1 : baseParams.dir === 'down' ? -1 : 0) : 0;
     /* M3 副歌加密：副歌/高能量段密度 +0.15 */
     const effDensity = clamp(params.density + (energy > 0.7 ? 0.15 : 0), 0, 1);
 
@@ -195,9 +201,14 @@ function genMelody() {
     if (reuse && lastCell) {
       cell = { r: lastCell.r.slice(), iv: lastCell.iv.slice() };
       const rv = rng();
-      if ((isAfro || (!isQuestion && cellRng() < 0.5)) && g % 2 === 1) cell.iv = cell.iv.map(v => -v); /* 呼应/答句：反向 */
+      /* v17：用户文本给了显式方向（_set 有 dir）时答句不整体反转——反转直接对抗"上行/下行"指令；
+         落到变尾/模进/节奏变奏分支，问答感靠变奏手法而非反向维持 */
+      if (!baseParams._set.has('dir') && (isAfro || (!isQuestion && cellRng() < 0.5)) && g % 2 === 1) cell.iv = cell.iv.map(v => -v); /* 呼应/答句：反向 */
       else if (rv < 0.35) cell.iv[cell.iv.length - 1] += (cellRng() < 0.5 ? 2 : -2); /* 变尾 */
-      else if (rv < 0.6) cell.iv = cell.iv.map(v => v + (cellRng() < 0.5 ? 2 : -2)); /* 模进：整体平移 */
+      else if (rv < 0.6) { /* 模进：整体平移（v17 方向锁：顺文本方向阶梯模进，重复陈述即推进方向） */
+        const step2 = baseParams._set.has('dir') ? ((baseParams.dir === 'up' ? 1 : baseParams.dir === 'down' ? -1 : 0) * 2 || (cellRng() < 0.5 ? 2 : -2)) : (cellRng() < 0.5 ? 2 : -2);
+        cell.iv = cell.iv.map(v => v + step2);
+      }
       else if (rv < 0.75) cell.r = cell.r.map((r2, i) => i === cell.r.length - 1 ? Math.max(0, r2 - 1) : r2); /* 尾音提前一个16分 */
     } else {
       let pool = (CELL_LIB[styleKey] || CELL_LIB.rnb).slice();
@@ -212,16 +223,35 @@ function genMelody() {
       const maxOn = effDensity > 0.6 ? 6 : effDensity < 0.3 ? 2 : 4;
       const fit = pool.filter(c => c.r.length <= maxOn + 1);
       if (fit.length) pool = fit;
-      /* 走向偏好 */
+      /* 走向偏好：显式方向文本时先按净走向过滤（ pedal 型/逆走向细胞剔除——
+         rock 踏板 riff 库不放行下行细胞时文本"下行"实测只有 ~50%），
+         再按细胞整体方向一致性加权（不止尾音）。
+         注意 cell.iv 是相对锚点的绝对偏移，方向要看相邻差分的符号 */
       const dirUp = baseParams.dir === 'up' ? 1 : baseParams.dir === 'down' ? -1 : 0;
+      if (dirUp !== 0 && baseParams._set.has('dir')) {
+        const netOK = pool.filter(c => { const net = c.iv[c.iv.length - 1] - c.iv[0]; return net === 0 || Math.sign(net) === dirUp; });
+        if (netOK.length) pool = netOK;
+      }
       let tw = pool.map(c => {
         let w = c.w;
         const s = c.iv[c.iv.length - 1];
-        if (dirUp > 0) w *= s >= 0 ? 1.8 : 0.6;
-        if (dirUp < 0) w *= s <= 0 ? 1.8 : 0.6;
-        /* M1/M2：问句偏上扬尾音、答句偏回落尾音 */
-        if (isQuestion) w *= s >= 0 ? 1.9 : 0.55;
-        else w *= s <= 0 ? 1.9 : 0.55;
+        if (dirUp !== 0 && baseParams._set.has('dir')) {
+          let match = 0;
+          for (let k = 1; k < c.iv.length; k++) {
+            const d = c.iv[k] - c.iv[k - 1];
+            if (d !== 0) match += Math.sign(d) === dirUp ? 1 : -1;
+          }
+          w *= Math.pow(1.6, match);
+        } else {
+          if (dirUp > 0) w *= s >= 0 ? 1.8 : 0.6;
+          if (dirUp < 0) w *= s <= 0 ? 1.8 : 0.6;
+        }
+        /* M1/M2：问句偏上扬尾音、答句偏回落尾音；
+           v17 用户给了显式方向文本时让位——文本方向指令优先于问答尾音程式 */
+        if (!baseParams._set.has('dir')) {
+          if (isQuestion) w *= s >= 0 ? 1.9 : 0.55;
+          else w *= s <= 0 ? 1.9 : 0.55;
+        }
         return { c, w };
       });
       let sum = tw.reduce((a, b) => a + b.w, 0), pickV = cellRng() * sum;
@@ -234,8 +264,86 @@ function genMelody() {
     /* 实例化：锚到本组和弦 */
     const ch0 = chordAtBar(bar0);
     const near = prev === null ? (params.regLo + params.regHi) / 2 : prev;
-    const anchor = chordAnchor(ch0, near, true);
+    const anchor = chordAnchor(ch0, near, true, params.regLo, params.regHi);
     if (prev === null) prev = anchor;
+
+    /* v16 轮廓优先落音：目标 = prev + 细胞音程差（保持音程方向），pc snap 只在目标附近微调；
+       目标超音域才八度折返；|间隔| > maxLeap 时折返或重选调内/和弦音（用户 maxLeap 硬约束） */
+    const maxLeap = params.maxLeap || 7;
+    const placeNote = (pc, ivDelta, chord, strong) => {
+      let target = prev + ivDelta;
+      while (target > params.regHi) target -= 12;
+      while (target < params.regLo) target += 12;
+      let m = null, bd = 99;
+      for (let mm = params.regLo; mm <= params.regHi; mm++) {
+        if (mm % 12 !== pc) continue;
+        const d = Math.abs(mm - target);
+        if (d < bd) { bd = d; m = mm; }
+      }
+      if (m === null) m = clamp(prev + ivDelta, params.regLo, params.regHi);
+      /* v17 八度复位：方向锁定下触顶/触底的折返是"爬满八度回另一端重新爬"的呼吸口——
+         豁免 maxLeap 重选与方向守卫（否则下行文本触底后每个下行步都被钳成 +4 上行，
+         实测 rock"下行"因此只有 ~50%）；复位跳压进 12 半音，事件打 _octReset 标记，
+         末尾 maxLeap 复查 pass 凭标记放行（与 _designSus/_blue 同为设计意图） */
+      const wrapped = dirLock !== 0 && (prev + ivDelta > params.regHi || prev + ivDelta < params.regLo);
+      placeNote._reset = false;
+      if (wrapped) {
+        while (m - prev > 12 && m - 12 >= params.regLo) m -= 12;
+        while (m - prev < -12 && m + 12 <= params.regHi) m += 12;
+        placeNote._reset = true;
+        return m;
+      }
+      /* 方向保护：snap 微调不得翻转轮廓方向 */
+      if (ivDelta !== 0 && m !== prev && Math.sign(m - prev) !== Math.sign(ivDelta)) {
+        let alt = null, bdA = 99;
+        for (let mm = params.regLo; mm <= params.regHi; mm++) {
+          if (mm % 12 !== pc || mm === prev || Math.sign(mm - prev) !== Math.sign(ivDelta)) continue;
+          const d = Math.abs(mm - target);
+          if (d < bdA) { bdA = d; alt = mm; }
+        }
+        if (alt !== null) m = alt;
+      }
+      if (Math.abs(m - prev) > maxLeap) {
+        const folded = m - Math.sign(m - prev) * 12;
+        if (folded >= params.regLo && folded <= params.regHi && Math.abs(folded - prev) <= maxLeap) m = folded;
+        else {
+          /* 重选：maxLeap 行程内离目标最近的调内音（强拍限和弦音） */
+          const poolL = strong ? chord.pcs : chord.scalePCs;
+          let bdL = 99;
+          for (const pc2 of poolL) {
+            for (let mm = Math.max(params.regLo, prev - maxLeap); mm <= Math.min(params.regHi, prev + maxLeap); mm++) {
+              if (mm % 12 !== pc2) continue;
+              const d = Math.abs(mm - target);
+              if (d < bdL) { bdL = d; m = mm; }
+            }
+          }
+        }
+      }
+      /* v17 文本方向守卫：用户显式"上行/下行"时，逆向运动改写为同向音
+         （先同 pc，再调内/和弦音）；同向实在无音可落才保持前音 */
+      if (dirLock !== 0 && m !== prev && Math.sign(m - prev) !== dirLock) {
+        let altD = null, bdD = 99;
+        const dLo = dirLock > 0 ? prev + 1 : Math.max(params.regLo, prev - maxLeap);
+        const dHi = dirLock > 0 ? Math.min(params.regHi, prev + maxLeap) : prev - 1;
+        for (let mm = dLo; mm <= dHi; mm++) {
+          if (mm % 12 !== pc) continue;
+          const d = Math.abs(mm - target);
+          if (d < bdD) { bdD = d; altD = mm; }
+        }
+        if (altD === null) {
+          const poolD = strong ? chord.pcs : chord.scalePCs;
+          for (const pc2 of poolD) {
+            for (let mm = dLo; mm <= dHi; mm++) {
+              if (mm % 12 !== pc2) continue;
+              const d = Math.abs(mm - target);
+              if (d < bdD) { bdD = d; altD = mm; }
+            }
+          }
+        }
+        m = altD !== null ? altD : prev;
+      }
+      return m;
+    };
 
     /* 逐音放置 + 逐小节和弦重映射（保持音程轮廓，贴合新和弦） */
     const placed = [];
@@ -266,14 +374,10 @@ function genMelody() {
         }
         pc = bestPc;
       }
-      let m = null, bd2 = 99;
-      for (let mm = params.regLo; mm <= params.regHi; mm++) {
-        if (mm % 12 !== pc) continue;
-        const d = Math.abs(mm - prev);
-        if (d < bd2) { bd2 = d; m = mm; }
-      }
-      if (m === null) m = prev + cell.iv[i];
-      placed.push({ beat: bar * BPB() + on / SPB(), on16: on, midi: m, i });
+      const m = placeNote(pc, i > 0 ? cell.iv[i] - cell.iv[i - 1] : 0, chord, strong);
+      const pl = { beat: bar * BPB() + on / SPB(), on16: on, midi: m, i };
+      if (placeNote._reset) pl.octReset = true;
+      placed.push(pl);
       prev = m;
     });
 
@@ -287,7 +391,7 @@ function genMelody() {
         const pool2 = midiPool(chord.scalePCs, params.regLo, params.regHi);
         let best = null, bd3 = 99;
         for (const cand of pool2) { const d = Math.abs(cand - (a.midi + b2.midi) / 2); if (d < bd3) { bd3 = d; best = cand; } }
-        if (best !== null) events.push({ beat: midBeat, midi: best, dur: 0.25, vel: 0.5, ghost: true });
+        if (best !== null) events.push({ beat: midBeat, midi: best, dur: 0.25, vel: 0.5, ghost: true, _sty: styleAtBar(Math.floor(midBeat / BPB())) });
       }
     }
 
@@ -302,40 +406,48 @@ function genMelody() {
         let pc = ((chord.rootPC + rel) % 12 + 12) % 12;
         if (on % 4 === 0 && !chord.pcs.includes(pc)) pc = nearestPc(pc, chord.pcs);
         else if (on % 4 !== 0 && !chord.scalePCs.includes(pc)) pc = nearestPc(pc, chord.scalePCs);
-        let m = null, bd2 = 99;
-        for (let mm = params.regLo; mm <= params.regHi; mm++) {
-          if (mm % 12 !== pc) continue;
-          const d = Math.abs(mm - prev); if (d < bd2) { bd2 = d; m = mm; }
-        }
-        if (m !== null) { placed.push({ beat: bar * BPB() + on / SPB(), on16: on, midi: m, i }); prev = m; }
+        const m = placeNote(pc, i > 0 ? cell.iv[i] - cell.iv[i - 1] : 0, chord, on % 4 === 0);
+        const pl2 = { beat: bar * BPB() + on / SPB(), on16: on, midi: m, i };
+        if (placeNote._reset) pl2.octReset = true;
+        placed.push(pl2);
+        prev = m;
       });
       placed.sort((a, b) => a.beat - b.beat);
     }
     /* 写入事件：时值架构 + 分风格力度 */
     const isLastGroup = g === groups - 1;
-    const MAXSUS16 = { rnb: 12, jazz: 10, bossa: 10, rock: 8, afro: 6, hiphop: 12 };
+    const MAXSUS16 = { rnb: 12, jazz: 10, bossa: 10, rock: 8, afro: 6, hiphop: 12,
+      funk: 6, soul: 14, reggae: 6, afrobeats: 8 }; /* funk/reggae 短促不许拖长；soul 福音长音可拖到 3.5 拍；afrobeats 流动中速 */
     const susCap = MAXSUS16[styleKey] || 8;
     const groupEndBeat = (bar0 + GROUP) * BPB();
     placed.sort((a, b) => a.beat - b.beat);
     placed.forEach((p, idx) => {
       const strong = p.on16 % 4 === 0;
       const lastOfCell = idx === placed.length - 1;
-      /* M1/M2 句尾处理：问句悬停在和弦 2/6 级（不解决），答句大概率回和弦音 */
+      /* M1/M2 句尾处理：问句悬停在和弦 2/6 级（不解决），答句大概率回和弦音；
+         v17 方向锁：snap 目标优先取与文本方向同号的（前音→句尾的运动不得逆行稀释文本方向） */
       if (lastOfCell && !isLastGroup) {
         const chF = chordAtBar(Math.floor(p.beat / 4));
+        const prevM = idx > 0 ? placed[idx - 1].midi : null;
+        const snapTo = (pcSet) => {
+          for (let pass = 0; pass < 2; pass++) {
+            let best2 = null, bd4 = 99;
+            for (let mm = p.midi - 5; mm <= p.midi + 5; mm++) {
+              if (!pcSet.includes(((mm % 12) + 12) % 12)) continue;
+              if (pass === 0 && dirLock !== 0 && prevM !== null && mm !== prevM && Math.sign(mm - prevM) !== dirLock) continue;
+              if (Math.abs(mm - p.midi) < bd4) { bd4 = Math.abs(mm - p.midi); best2 = mm; }
+            }
+            if (best2 !== null) return { m: best2, d: bd4 };
+          }
+          return null;
+        };
         if (isQuestion) {
           const susp = [((chF.rootPC + 2) % 12 + 12) % 12, ((chF.rootPC + 9) % 12 + 12) % 12];
-          let best2 = null, bd4 = 99;
-          for (let mm = p.midi - 5; mm <= p.midi + 5; mm++) {
-            if (susp.includes(((mm % 12) + 12) % 12) && Math.abs(mm - p.midi) < bd4) { bd4 = Math.abs(mm - p.midi); best2 = mm; }
-          }
-          if (best2 !== null && bd4 <= 4) p.midi = best2;
+          const r = snapTo(susp);
+          if (r && r.d <= 4) { p.midi = r.m; p.designSus = true; } /* v16 故意悬停打标：终止解决/调性 snap 不得动（设计意图 > 修正） */
         } else if (cellRng() < 0.7) {
-          let best2 = null, bd4 = 99;
-          for (let mm = p.midi - 5; mm <= p.midi + 5; mm++) {
-            if (chF.pcs.includes(((mm % 12) + 12) % 12) && Math.abs(mm - p.midi) < bd4) { bd4 = Math.abs(mm - p.midi); best2 = mm; }
-          }
-          if (best2 !== null) p.midi = best2;
+          const r = snapTo(chF.pcs);
+          if (r) p.midi = r.m;
         }
       }
       /* v4.1 时值架构：时值默认延伸到下一 onset（连线写进音符本身），句尾长音收束乐句。
@@ -350,14 +462,28 @@ function genMelody() {
       else if (styleKey === 'bossa') vel *= 0.88 + 0.24 * (p.on16 / SBAR());
       else if (styleKey === 'rnb') vel *= 0.85 + 0.25 * (p.on16 / SBAR());
       if (idx === 0) vel += 0.06; // 动机头重音
-      events.push({ beat: p.beat, midi: p.midi, dur: dur16 / 4, vel });
+      /* v16 融合模式：风格标记按小节取（与 genKeys keyForVoicing 同规则），后处理逐事件查表 */
+      const ev = { beat: p.beat, midi: p.midi, dur: dur16 / 4, vel, _sty: styleAtBar(Math.floor(p.beat / BPB())), _dur: params.durBias, _durT: baseParams._set.has('durBias') };
+      if (p.designSus) ev._designSus = true;
+      if (p.octReset) ev._octReset = true; /* v17 方向锁下的八度复位音：末尾 maxLeap 复查放行 */
+      events.push(ev);
     });
   }
 
+  /* v16 蓝调音：调内 3/5 级按 blue 概率降半音（♭3/♭5 色彩，jazz/rnb/soul 生效）。
+     文本给了 blue 用文本值，没给随风格 DNA（mergeDna 兜底）；降出的变化音是设计意图，打标防调性规则拉回 */
+  const BLUE_STYLE = { jazz: 1, rnb: 1, soul: 1 };
+  for (const e of events) {
+    const sty = e._sty || styleAtBar(Math.floor(e.beat / BPB()));
+    if (e.ghost || !BLUE_STYLE[sty]) continue;
+    if (!mergeDna(sty, baseParams).blue) continue;
+    const deg = (((e.midi - state.keyRoot) % 12) + 12) % 12;
+    if ((deg === 4 || deg === 7) && rng() < 0.4) { e.midi -= 1; e._blue = true; }
+  }
   /* v4 M4-M6 + 连线标记：切分拖拍 / 装饰语汇 / 轮廓约束 / tie-breath */
   postMelodyCraft(events, rng, firstParams);
-  melodyFlowPass(events, rng, firstStyle); /* v4.2 流动性整形 */
-  melodyRhythmPass(events, rng, firstStyle); /* v5.2 节奏塑形：articulation 对比 + 休止 + 抢拍 */
+  melodyFlowPass(events, rng); /* v4.2 流动性整形（融合模式逐事件按小节风格取表） */
+  melodyRhythmPass(events, rng); /* v5.2 节奏塑形：articulation 对比 + 休止 + 抢拍 */
   /* 排序 + 终止：尾音落最后和弦根/三/五 */
   events.sort((a, b) => a.beat - b.beat);
   if (events.length) {
@@ -371,20 +497,54 @@ function genMelody() {
     }
     final.midi = best;
   }
+  /* v17 最终 maxLeap 复查：句尾 snap ±5 / 蓝调音 ±1 / M6 八度置换 / 终止 snap / 休止抽音
+     都可能绕过 placeNote 的 maxLeap 硬约束（实测违例峰值 8%，rnb maxLeap=9 出现 14 半音）。
+     旋律写完统一复检（与 audit 口径一致：非 dbl 事件链）：超限先八度折返，折返出界或仍超限
+     则向 prev 方向收拢到限内最近调内音；用户文本给了显式方向时收拢保号优先（折返会翻转方向）。
+     _designSus/_blue 标记音是设计意图，跳过不修正。 */
+  {
+    const seq = events.filter(e => !e.dbl).sort((a, b) => a.beat - b.beat);
+    const dirLocked = baseParams._set.has('dir');
+    for (let i = 1; i < seq.length; i++) {
+      const e = seq[i], pr = seq[i - 1];
+      if (e._designSus || e._blue || e._octReset) continue;
+      const ep = mergeDna(e._sty || styleAtBar(Math.floor(e.beat / BPB())), baseParams);
+      const ml = ep.maxLeap || 7;
+      const iv = e.midi - pr.midi;
+      if (Math.abs(iv) <= ml) continue;
+      /* 八度折返：方向锁定且 |iv|≤12 时折返必然翻号，直接走收拢 */
+      const folded = e.midi - Math.sign(iv) * 12;
+      if (!(dirLocked && Math.abs(iv) <= 12) && folded >= ep.regLo - 2 && folded <= ep.regHi + 2 && Math.abs(folded - pr.midi) <= ml) { e.midi = folded; continue; }
+      /* 向 prev 收拢：限内离原音最近的调内音（方向锁定时保号优先） */
+      const ch = chordAtBar(Math.floor(e.beat / BPB()));
+      let best2 = null, bd2 = 99;
+      for (const pc of ch.scalePCs) {
+        for (let mm = Math.max(ep.regLo - 2, pr.midi - ml); mm <= Math.min(ep.regHi + 2, pr.midi + ml); mm++) {
+          if (((mm % 12) + 12) % 12 !== pc) continue;
+          if (dirLocked && mm !== pr.midi && Math.sign(mm - pr.midi) !== Math.sign(iv)) continue;
+          const d = Math.abs(mm - e.midi);
+          if (d < bd2) { bd2 = d; best2 = mm; }
+        }
+      }
+      if (best2 !== null) e.midi = best2;
+    }
+  }
   melodyEvents = events.filter(e => e.beat >= 0); /* v5：负拍预示音拦截 */
   state._params = firstParams;
 }
 
 /* ================= v4.2 流动性整形：跨组连线 + 乐句力度拱 + 圆滑音标记 =================
    线上 v4.1 实测：组内衔接率 86-91%，但组与组之间仍"断气"——乐句级流动性靠本通道补齐 */
-const FLOW_SUS_BEATS = { rnb: 4, jazz: 3.5, bossa: 3.5, rock: 3, afro: 2, hiphop: 4 };
-function melodyFlowPass(events, rng, styleKey) {
+const FLOW_SUS_BEATS = { rnb: 4, jazz: 3.5, bossa: 3.5, rock: 3, afro: 2, hiphop: 4,
+  funk: 2, soul: 4.5, reggae: 2, afrobeats: 2.5 }; /* soul 长连音歌唱性；funk/reggae 留空气；afrobeats 流动但不断气 */
+function melodyFlowPass(events, rng) {
   if (!events.length) return;
   const core = events.filter(e => !e.ghost).sort((a, b) => a.beat - b.beat);
-  const susCap = FLOW_SUS_BEATS[styleKey] || 3;
-  /* 1) 跨组连线：时值延伸到下一 onset（风格上限内），乐句内部不许断气 */
+  /* 1) 跨组连线：时值延伸到下一 onset（风格上限内），乐句内部不许断气；
+     v16 融合模式：susCap 逐事件按其小节所属风格取 FLOW 表 */
   for (let i = 0; i < core.length; i++) {
     const e = core[i];
+    const susCap = FLOW_SUS_BEATS[e._sty || state.styles[0]] || 3;
     const nxt = i + 1 < core.length ? core[i + 1] : null;
     const gap = nxt ? nxt.beat - e.beat : susCap;
     e.dur = clamp(Math.min(gap, susCap), 0.25, susCap);
@@ -414,33 +574,63 @@ function melodyFlowPass(events, rng, styleKey) {
     if (n.beat - (e.beat + e.dur) <= 0.06 && n.midi !== e.midi && Math.abs(n.midi - e.midi) <= 2) n.slur = true;
   }
   /* 4) v10 反停车守卫（作曲层）：连续 ≥3 个同音高 onset = 旋律钉死——实测 rock 引导带 G 连续 11 秒。
-     从第 3 个起强制"换桩"：级进邻音（保持连线不断）且必须落在调内 → 停车变流动，且不产生新断点 */
-  let parkRun = 1;
+     从第 3 个起强制"换桩"：级进邻音（保持连线不断）且必须落在调内 → 停车变流动，且不产生新断点；
+     v17 方向锁：停车段改走文本方向的调内阶梯逐级爬升/下行（旧版随机换桩会制造一上一下对冲，
+     实测把上行文本的方向一致性从放置期 60% 稀释回 ~50%） */
+  const __bp = parseMotiveText(state.motiveText);
+  const dirLockF = __bp._set.has('dir') ? (__bp.dir === 'up' ? 1 : __bp.dir === 'down' ? -1 : 0) : 0;
+  let parkRun = 1, parkBase = null;
   for (let i = 1; i < core.length; i++) {
-    if (core[i].midi === core[i - 1].midi) {
-      parkRun++;
+    const ref = parkBase !== null ? parkBase : core[i - 1].midi;
+    if (core[i].midi === ref) {
+      parkRun++; parkBase = ref;
       if (parkRun >= 3) {
         const e = core[i];
         const ch = chordAtBar(Math.floor(e.beat / BPB()));
-        for (const delta of [2, -2, 3, -3, 1, -1, 4, -4, 5, -5, 7, -7]) {
-          const cand = e.midi + delta;
-          if (cand >= 55 && cand <= 90 && ch.scalePCs.includes(((cand % 12) + 12) % 12)) { e.midi = cand; break; }
+        let done = false;
+        if (dirLockF !== 0) {
+          let cand = parkBase, steps = 0;
+          while (steps < parkRun - 1) {
+            let nxt = null;
+            for (let mm = cand + dirLockF; dirLockF > 0 ? mm <= cand + 4 : mm >= cand - 4; mm += dirLockF) {
+              if (ch.scalePCs.includes(((mm % 12) + 12) % 12)) { nxt = mm; break; }
+            }
+            if (nxt === null || nxt < 55 || nxt > 90) { cand = null; break; }
+            cand = nxt; steps++;
+          }
+          if (cand !== null) { e.midi = cand; done = true; }
         }
-        parkRun = 1;
+        if (!done) {
+          const deltas = [2, -2, 3, -3, 1, -1, 4, -4, 5, -5, 7, -7];
+          for (const delta of deltas) {
+            const cand = e.midi + delta;
+            if (cand >= 55 && cand <= 90 && ch.scalePCs.includes(((cand % 12) + 12) % 12)) { e.midi = cand; break; }
+          }
+          parkRun = 1; parkBase = null;
+        }
       }
-    } else parkRun = 1;
+    } else { parkRun = 1; parkBase = null; }
   }
   /* 5) v13 乐句终止解决：乐句边界（换气口）的尾音必须落在和弦音上——
-     悬而未决的尾音是"旋律难听"的核心来源之一：snap 到最近和弦音（≤3 半音） */
+     悬而未决的尾音是"旋律难听"的核心来源之一：snap 到最近和弦音（≤3 半音）；
+     v16 起跳过 _designSus 标记音（问句悬停是设计意图，不许"修正"）；
+     v17 方向锁：snap 目标优先与文本方向同号 */
   for (let gi = 0; gi < core.length; gi++) {
     const e = core[gi];
+    if (e._designSus) continue;
     const nxt = gi + 1 < core.length ? core[gi + 1] : null;
     if (!nxt || nxt.breath || nxt.beat - (e.beat + e.dur) >= 1) {
       const ch = chordAtBar(Math.floor(e.beat / BPB()));
       if (!ch.pcs.includes(((e.midi % 12) + 12) % 12)) {
+        const prevM = gi > 0 ? core[gi - 1].midi : null;
         let best = e.midi, bd = 4;
-        for (const pc of ch.pcs) for (let m = e.midi - 3; m <= e.midi + 3; m++) {
-          if (((m % 12) + 12) % 12 === pc && Math.abs(m - e.midi) < bd) { bd = Math.abs(m - e.midi); best = m; }
+        for (let pass = 0; pass < 2; pass++) {
+          for (const pc of ch.pcs) for (let m = e.midi - 3; m <= e.midi + 3; m++) {
+            if (((m % 12) + 12) % 12 !== pc) continue;
+            if (pass === 0 && dirLockF !== 0 && prevM !== null && m !== prevM && Math.sign(m - prevM) !== dirLockF) continue;
+            if (Math.abs(m - e.midi) < bd) { bd = Math.abs(m - e.midi); best = m; }
+          }
+          if (best !== e.midi || dirLockF === 0 || prevM === null) break;
         }
         e.midi = best;
       }
@@ -463,9 +653,14 @@ const ARTIC = {
   bossa: { sus: 0.24, port: 0.52, stacc: 0.24, rest: 0.55, antici: 0.28, accOff: 0.05 },
   afro:  { sus: 0.16, port: 0.38, stacc: 0.46, rest: 0.45, antici: 0.20, accOff: 0.08 },
   hiphop:{ sus: 0.16, port: 0.34, stacc: 0.50, rest: 0.70, antici: 0.42, accOff: 0.09 },
+  funk:     { sus: 0.10, port: 0.30, stacc: 0.60, rest: 0.45, antici: 0.30, accOff: 0.10 }, /* 短促顿奏为主：16 分 stab 之间必须有空气，切分重音强 */
+  soul:     { sus: 0.42, port: 0.40, stacc: 0.18, rest: 0.45, antici: 0.28, accOff: 0.06 }, /* 长连音歌唱性：延音占比最高，福音式呼吸 */
+  reggae:   { sus: 0.12, port: 0.34, stacc: 0.54, rest: 0.55, antici: 0.16, accOff: 0.10 }, /* 反拍断奏 + 大留白（one-drop 空间感），少抢拍 */
+  afrobeats:{ sus: 0.22, port: 0.44, stacc: 0.34, rest: 0.45, antici: 0.22, accOff: 0.08 }, /* 流动中速：半断为主，介于 rnb 与 afro 之间 */
 };
-function melodyRhythmPass(events, rng, styleKey) {
-  const A = ARTIC[styleKey] || ARTIC.rnb;
+function melodyRhythmPass(events, rng) {
+  /* v16 融合模式：ARTIC 表逐事件按其小节所属风格取（事件生成时已打 _sty 标记） */
+  const Aof = e => ARTIC[e._sty || state.styles[0]] || ARTIC.rnb;
   const core = events.filter(e => !e.ghost).sort((a, b) => a.beat - b.beat);
   if (!core.length) return;
   const spb = SPB(), bpb = BPB();
@@ -473,6 +668,7 @@ function melodyRhythmPass(events, rng, styleKey) {
   const GROUP_BEATS = 2 * bpb;
   for (let gi = 0; gi < core.length; gi++) {
     const e = core[gi];
+    const A = Aof(e);
     const nxt = gi + 1 < core.length ? core[gi + 1] : null;
     const gap = nxt ? nxt.beat - e.beat : 2;
     const isPhraseEnd = !nxt || Math.floor(nxt.beat / GROUP_BEATS) !== Math.floor(e.beat / GROUP_BEATS);
@@ -483,8 +679,14 @@ function melodyRhythmPass(events, rng, styleKey) {
     if (gap <= 0.05) kind = 'stacc'; /* v5.2b 重述/M4 撞车产生的同音齐奏 → 双音 stab，时值不能归零 */
     else if (isPhraseEnd || isPeak || e.tie) kind = 'sus';
     else {
-      const r = rng();
-      kind = r < A.stacc ? 'stacc' : r < A.stacc + A.port ? 'port' : 'sus';
+      /* v16 durBias 接通：文本时值倾向与风格 ARTIC 乘法混合——文本给了 durBias 才介入
+         （高 → sus 升/stacc 降；低 → 反之；0.5 中性）；没给则风格 ARTIC 表本身即兜底 */
+      const db = e._durT ? (e._dur != null ? e._dur : 0.5) : 0.5;
+      const staccP = clamp(A.stacc * (1.4 - 0.8 * db), 0.03, 0.85);
+      const susP = clamp(A.sus * (0.4 + 1.2 * db), 0.03, 0.85);
+      const tot = staccP + A.port + susP;
+      const rr = rng() * tot;
+      kind = rr < staccP ? 'stacc' : rr < staccP + A.port ? 'port' : 'sus';
     }
     if (kind === 'stacc') e.dur = gap <= 0.05 ? 0.18 : clamp(gap * 0.35, 0.12, 0.35); /* 真断奏：+尾音后可闻 <0.5 拍 */
     else if (kind === 'port') e.dur = clamp(gap * 0.8, 0.2, Math.max(0.4, gap - 0.06));
@@ -495,7 +697,7 @@ function melodyRhythmPass(events, rng, styleKey) {
   let gs = Math.floor(core[0].beat / GROUP_BEATS) * GROUP_BEATS;
   let phrase = [];
   const doRest = () => {
-    if (phrase.length < 3 || rng() > A.rest) { phrase = []; return; }
+    if (phrase.length < 3 || rng() > Aof(phrase[0]).rest) { phrase = []; return; }
     const cand = phrase.filter(e => e.artic !== 'sus' && e !== phrase[0] && e !== phrase[phrase.length - 1]);
     if (cand.length) {
       const victim = cand[Math.floor(rng() * cand.length)];
@@ -514,7 +716,7 @@ function melodyRhythmPass(events, rng, styleKey) {
     const e = survivors[i];
     const on16 = Math.round(e.beat * spb) % SBAR();
     if (on16 % 4 !== 0 || e.artic === 'sus') continue;
-    if (rng() >= A.antici) continue;
+    if (rng() >= Aof(e).antici) continue;
     const shift = rng() < 0.6 ? 0.25 : 0.5;
     const newOn = e.beat - shift;
     if (newOn < 0) continue;
@@ -527,7 +729,7 @@ function melodyRhythmPass(events, rng, styleKey) {
   for (const e of events) {
     if (e.ghost) continue;
     const on16 = Math.round(e.beat * spb);
-    if (on16 % 4 !== 0) e.vel = Math.min(1, e.vel + A.accOff);
+    if (on16 % 4 !== 0) e.vel = Math.min(1, e.vel + Aof(e).accOff);
   }
   events.sort((a, b) => a.beat - b.beat);
 }
@@ -540,13 +742,21 @@ const M5_TABLE = {
   bossa: { neighbor: 0.15, approach: 0.10, run: 0.15, double: 0    },
   afro:  { neighbor: 0.10, approach: 0,    run: 0.20, double: 0.15 },
   hiphop:{ neighbor: 0,    approach: 0.15, run: 0.15, double: 0.10 },
+  funk:     { neighbor: 0.10, approach: 0.25, run: 0.10, double: 0 },    /* 短促 hammer-on（半音趋近）为主，装饰少而脆 */
+  soul:     { neighbor: 0.28, approach: 0.20, run: 0.22, double: 0 },    /* 揉弦/滑音感：邻音摇曳 + 半音滑进 + 福音尾 run */
+  reggae:   { neighbor: 0.05, approach: 0.05, run: 0.05, double: 0 },    /* 少用装饰：旋律朴素让位律动 */
+  afrobeats:{ neighbor: 0.25, approach: 0.05, run: 0.18, double: 0.05 }, /* 回音式上邻音装饰 + 偶发双音色彩 */
 };
 function postMelodyCraft(events, rng, params) {
   if (!events.length) return;
-  const styleKey = state.styles[0];
-  const m5 = M5_TABLE[styleKey] || M5_TABLE.rnb;
+  /* v16 融合模式：M5 表逐事件按其小节所属风格取；synco 接通——
+     用户文本给了 synco 用文本值（映射为拖拍概率），没给才用风格默认 */
+  const styOf = e => e._sty || (state.styles.length > 1 ? state.styles[Math.floor(e.beat / BPB()) % state.styles.length] : state.styles[0]);
+  const syncoPOf = sty => (params._set && params._set.has('synco')) ? Math.min(0.5, params.synco * 0.45)
+    : (sty === 'rnb' || sty === 'jazz') ? 0.3 : (sty === 'hiphop' || sty === 'afro') ? 0.15 : 0;
+  /* v17 方向锁：装饰音（趋近/邻音/run）方向顺文本，不逆行稀释 */
+  const dirLockM5 = (params._set && params._set.has('dir')) ? (params.dir === 'up' ? 1 : params.dir === 'down' ? -1 : 0) : 0;
   const scalePCs = MODES[state.mode].offsets.map(o => (state.keyRoot + o) % 12);
-  const syncoP = (styleKey === 'rnb' || styleKey === 'jazz') ? 0.3 : (styleKey === 'hiphop' || styleKey === 'afro') ? 0.15 : 0;
   const added = [];
   const freeBefore = (e, i, need) => {
     const prev = events[i - 1];
@@ -570,31 +780,42 @@ function postMelodyCraft(events, rng, params) {
   };
   for (let i = 0; i < events.length; i++) {
     const e = events[i];
+    const m5 = M5_TABLE[styOf(e)] || M5_TABLE.rnb;
+    const syncoP = syncoPOf(styOf(e));
     const on16 = Math.round(e.beat * SPB()) % SBAR();
     const nx = events[i + 1];
     /* M4：弱拍 onset 向后拖 1/16（不顶撞下一音、不拖幽灵音） */
     if (syncoP && on16 % 4 !== 0 && !e.ghost && rng() < syncoP) {
       if (!nx || nx.beat - e.beat > 0.35) e.beat += 0.25;
     }
-    /* M5 趋近音：强拍长音前插半音趋近 */
+    /* M5 趋近音：强拍长音前插半音趋近（v17 方向锁：趋近音落在目标另一侧——上行文本从下方趋近，
+       装饰→目标的解析运动才是文本方向） */
     if (m5.approach && on16 % 4 === 0 && e.dur >= 0.75 && rng() < m5.approach && freeBefore(e, i, 0.3)) {
-      const dir = rng() < 0.5 ? -1 : 1;
-      added.push({ beat: e.beat - 0.25, midi: e.midi + dir, dur: 0.2, vel: e.vel * 0.65, ghost: true });
+      const dir = dirLockM5 !== 0 ? -dirLockM5 : (rng() < 0.5 ? -1 : 1);
+      added.push({ beat: e.beat - 0.25, midi: e.midi + dir, dur: 0.2, vel: e.vel * 0.65, ghost: true, _sty: styOf(e) });
     }
-    /* M5 邻音摇曳：长音前上邻音装饰 */
+    /* M5 邻音摇曳：长音前邻音装饰（v17 方向锁：上行文本用下邻音，解析向上；下行保持上邻音） */
     if (m5.neighbor && e.dur >= 1.25 && rng() < m5.neighbor && freeBefore(e, i, 0.3)) {
       let nb = null;
-      for (const pc of scalePCs) {
-        const d = ((pc - (e.midi % 12)) % 12 + 12) % 12;
-        if (d >= 1 && d <= 3) { nb = e.midi + d; break; }
+      if (dirLockM5 > 0) {
+        for (const pc of scalePCs) {
+          const d = (((e.midi % 12) - pc) % 12 + 12) % 12;
+          if (d >= 1 && d <= 3) { nb = e.midi - d; break; }
+        }
+        if (nb !== null && nb >= params.regLo - 2) added.push({ beat: e.beat - 0.25, midi: nb, dur: 0.2, vel: e.vel * 0.6, ghost: true, _sty: styOf(e) });
+      } else {
+        for (const pc of scalePCs) {
+          const d = ((pc - (e.midi % 12)) % 12 + 12) % 12;
+          if (d >= 1 && d <= 3) { nb = e.midi + d; break; }
+        }
+        if (nb !== null && nb <= params.regHi + 2) added.push({ beat: e.beat - 0.25, midi: nb, dur: 0.2, vel: e.vel * 0.6, ghost: true, _sty: styOf(e) });
       }
-      if (nb !== null && nb <= params.regHi + 2) added.push({ beat: e.beat - 0.25, midi: nb, dur: 0.2, vel: e.vel * 0.6, ghost: true });
     }
-    /* M5 尾 run：乐句尾长音前插 3 音下行十六分 */
-    if (m5.run && on16 >= 12 && e.dur >= 1 && rng() < m5.run && freeBefore(e, i, 0.8)) {
+    /* M5 尾 run：乐句尾长音前插 3 音下行十六分（v17 方向锁：上行文本跳过——下行 run 直接逆行） */
+    if (m5.run && on16 >= 12 && e.dur >= 1 && rng() < m5.run && freeBefore(e, i, 0.8) && dirLockM5 <= 0) {
       for (let k = 3; k >= 1; k--) {
         const mk = scaleDown(e.midi, k);
-        if (mk !== null && mk >= params.regLo - 2) added.push({ beat: e.beat - 0.25 * k, midi: mk, dur: 0.2, vel: e.vel * (0.42 + 0.08 * k), ghost: true });
+        if (mk !== null && mk >= params.regLo - 2) added.push({ beat: e.beat - 0.25 * k, midi: mk, dur: 0.2, vel: e.vel * (0.42 + 0.08 * k), ghost: true, _sty: styOf(e) });
       }
     }
     /* M5 双音：强拍叠和弦音（rock/afro/hiphop 和声厚度） */
@@ -603,7 +824,7 @@ function postMelodyCraft(events, rng, params) {
       for (const pc of ch.pcs) {
         const d = ((pc - (e.midi % 12)) % 12 + 12) % 12;
         if (d === 3 || d === 4 || d === 7) {
-          added.push({ beat: e.beat, midi: e.midi + d, dur: Math.min(e.dur, 1), vel: e.vel * 0.7, ghost: true, dbl: true });
+          added.push({ beat: e.beat, midi: e.midi + d, dur: Math.min(e.dur, 1), vel: e.vel * 0.7, ghost: true, dbl: true, _sty: styOf(e) });
           break;
         }
       }
@@ -611,21 +832,26 @@ function postMelodyCraft(events, rng, params) {
   }
   events.push(...added);
   events.sort((a, b) => a.beat - b.beat);
-  /* M6 轮廓约束：大跳后必须反向；同向三次强制转折（八度置换，保持调内） */
+  /* M6 轮廓约束：大跳后必须反向；同向三次强制转折（八度置换，保持调内）。
+     v16：八度置换本身不得突破 maxLeap（否则为修轮廓反而制造 12+ 半音大跳，架空用户约束）
+     v17：用户文本显式 maxLeap 时严格按文本值（不再保底 6）；置换后与被移音另一侧的邻音
+     也不得超 m6Cap（实测 rock 大跳 4.4%→37% 全是这里置换后甩出的远端违例） */
+  const m6Cap = (params._set && params._set.has('maxLeap')) ? params.maxLeap : Math.max(params.maxLeap || 7, 6);
+  const m6FarOK = (idx, cand) => idx + 1 >= events.length || events[idx + 1].dbl || Math.abs(events[idx + 1].midi - cand) <= m6Cap;
   for (let i = 1; i + 1 < events.length; i++) {
     const d1 = events[i].midi - events[i - 1].midi;
     const d2 = events[i + 1].midi - events[i].midi;
     if (d1 !== 0 && Math.abs(d1) > 5 && Math.sign(d2) === Math.sign(d1) && d2 !== 0) {
       const cand = events[i + 1].midi - Math.sign(d1) * 12;
       const ch = chordAtBar(Math.floor(events[i + 1].beat / 4));
-      if (cand >= params.regLo - 2 && cand <= params.regHi + 2 && ch.scalePCs.includes(((cand % 12) + 12) % 12)) events[i + 1].midi = cand;
+      if (cand >= params.regLo - 2 && cand <= params.regHi + 2 && Math.abs(cand - events[i].midi) <= m6Cap && m6FarOK(i + 1, cand) && ch.scalePCs.includes(((cand % 12) + 12) % 12)) events[i + 1].midi = cand;
     }
     if (i >= 2) {
       const d0 = events[i - 1].midi - events[i - 2].midi;
       if (d0 !== 0 && d1 !== 0 && d2 !== 0 && Math.sign(d0) === Math.sign(d1) && Math.sign(d1) === Math.sign(d2)) {
         const cand = events[i].midi + (Math.sign(d1) > 0 ? -12 : 12);
         const ch = chordAtBar(Math.floor(events[i].beat / 4));
-        if (cand >= params.regLo - 2 && cand <= params.regHi + 2 && ch.scalePCs.includes(((cand % 12) + 12) % 12)) events[i].midi = cand;
+        if (cand >= params.regLo - 2 && cand <= params.regHi + 2 && Math.abs(cand - events[i - 1].midi) <= m6Cap && m6FarOK(i, cand) && ch.scalePCs.includes(((cand % 12) + 12) % 12)) events[i].midi = cand;
       }
     }
   }
@@ -703,6 +929,32 @@ function genBass() {
         ev[ev.length - 1].b808 = true;
         ev[ev.length - 1].slideTo = clamp(nextRoot + 12, 30, 50);
       }
+    } else if (pat === 'funk16') {
+      /* 放克十六分切分（Bootsy/Meters）：1 拍锚定 + 1a/2e 幽灵短音 + 3a 八度弹跳 + 4a 趋近下一和弦 */
+      push(0, r, 0.35, 0.9);
+      push(0.75, r, 0.15, 0.55);
+      push(1.5, fifth, 0.2, 0.65);
+      push(1.75, r, 0.15, 0.5);
+      push(2, r, 0.3, 0.75);
+      push(2.75, oct, 0.2, 0.7);
+      push(3.5, r, 0.15, 0.55);
+      push(3.75, approach, 0.2, 0.6);
+    } else if (pat === 'soul') {
+      /* Motown/Jamerson：正拍锚 + 1a 五音应答 + 3 拍根音 + 4a 半音趋近（歌唱性贝斯线） */
+      push(0, r, 0.7, 0.85);
+      push(0.75, fifth, 0.2, 0.6);
+      push(1.5, r, 0.4, 0.7);
+      push(2, fifth, 0.45, 0.72);
+      push(3, r, 0.4, 0.7);
+      push(3.75, approach, 0.2, 0.55);
+    } else if (pat === 'onedrop') {
+      /* 雷鬼 one-drop 贝斯：第 1 拍休止（鼓组 kick/军鼓同落第 3 拍），
+         2a 进入铺垫，第 3 拍根音重音与鼓同落，3 拍后五音/趋近收束 */
+      push(1.5, r, 0.4, 0.65);
+      push(2, r, 0.9, 0.9);
+      push(3, fifth, 0.4, 0.7);
+      if (rng() < 0.5) push(3.5, oct, 0.2, 0.55);
+      else push(3.75, approach, 0.2, 0.5);
     } else { /* afro：弹性 16 分 Vamp */
       push(0, r, 0.4, 0.85);
       push(0.75, oct, 0.2, 0.55);
@@ -717,38 +969,124 @@ function genBass() {
 }
 
 /* ================= 电钢琴生成 ================= */
-function chooseVoicing(pcs, prevNotes) {
-  /* 候选：各种转位 × 八度（音域 C3–C5），最小化声部移动 */
-  const candidates = [];
+function chooseVoicing(pcs, prevNotes, avoidMidi) {
+  /* v15 开放排列：最低音 ≥ E3(MIDI 52)，相邻声部间距 ≥3 半音（低音区 <60 处 ≥5），上限 C5(72)。
+     九和弦（>4 音）省略五音成 4 音 voicing（根/3/7/9）；四音以上补 drop-2 候选拉开中声部。
+     avoidMidi：当前小节旋律音——候选 voicing 避开旋律 ±2 半音（同音区撞音=浑浊主源） */
   const uniq = Array.from(new Set(pcs));
-  for (let rot = 0; rot < uniq.length; rot++) {
-    const base = uniq.slice(rot).concat(uniq.slice(0, rot));
-    for (let oct = 48; oct <= 60; oct += 12) {
+  let base = uniq;
+  if (uniq.length > 4) {
+    base = uniq.filter((pc, i) => i !== 2); /* 省五音：根/3/7/9 */
+    if (base.length < 4) base = uniq;
+  }
+  const ok = (notes) => {
+    if (notes[0] < 52 || notes[notes.length - 1] > 72) return false;
+    for (let i = 1; i < notes.length; i++) {
+      const gap = notes[i] - notes[i - 1];
+      if (gap < (notes[i - 1] < 60 ? 5 : 3)) return false;
+    }
+    return true;
+  };
+  const candidates = [];
+  for (let rot = 0; rot < base.length; rot++) {
+    const b = base.slice(rot).concat(base.slice(0, rot));
+    for (let oct = 40; oct <= 60; oct += 12) {
       const notes = [];
       let prev = -1;
-      for (const pc of base) {
+      for (const pc of b) {
         let m = oct + pc;
         while (m <= prev) m += 12;
         notes.push(m); prev = m;
       }
-      if (notes[notes.length - 1] <= 81) candidates.push(notes);
+      if (ok(notes)) candidates.push(notes);
+      /* drop-2：次高音降八度，密集四音排列变开放 */
+      if (notes.length >= 4) {
+        const d2 = notes.slice(0, -2).concat([notes[notes.length - 2] - 12, notes[notes.length - 1]]).sort((a, b) => a - b);
+        if (ok(d2)) candidates.push(d2);
+      }
     }
   }
+  if (!candidates.length) { /* 兜底：放宽声部间距，只保音域 */
+    for (let oct = 48; oct <= 60; oct += 12) {
+      const notes = [];
+      let prev = -1;
+      for (const pc of base) { let m = oct + pc; while (m <= prev) m += 12; notes.push(m); prev = m; }
+      if (notes[0] >= 52 && notes[notes.length - 1] <= 72) candidates.push(notes);
+    }
+  }
+  if (!candidates.length) candidates.push(base.map(pc => 52 + pc).sort((a, b) => a - b));
+  /* v17 旋律避让重做：旧版"全撞则按冲突数排序"被后面的声部连接距离选择架空（排完序从不按序取），
+     兜底从未真正生效（rock 实测撞音 67%）。新兜底三级：零撞音候选 → 删音（移除与旋律 ±2 冲突的
+     声部，保 ≥3 声部，从高位色彩音/五音删起，保低中声部 3/7 音）→ 低区开放候选（pc 重新搭建，
+     38~64、低区相邻 ≥5 半音——整体降八度的窄间距会把浑浊打爆）；
+     最终只在最低撞音档内做声部连接 */
+  let pool = candidates;
+  if (avoidMidi && avoidMidi.length) {
+    const clash = c => c.reduce((s, n) => s + (avoidMidi.some(m => Math.abs(m - n) <= 2) ? 1 : 0), 0);
+    const pruneClash = ns => {
+      for (;;) {
+        let idx = -1;
+        for (let i = ns.length - 1; i >= 0; i--) if (avoidMidi.some(m => Math.abs(m - ns[i]) <= 2)) { idx = i; break; }
+        if (idx < 0 || ns.length <= 3) break;
+        ns = ns.slice(0, idx).concat(ns.slice(idx + 1));
+      }
+      return ns;
+    };
+    let clean = candidates.filter(c => clash(c) === 0);
+    if (!clean.length) {
+      const pruned = candidates.map(c => pruneClash(c.slice()));
+      clean = pruned.filter(c => clash(c) === 0);
+      if (!clean.length) {
+        /* 低区开放候选：34~66，低区相邻 ≥4 半音（≥5 太严，三和弦转位全部卡死、兜底形同虚设）；
+           三和弦八度叠根音凑成 4 声部，给删音留出可删的余量（否则 3 声部触底一音不能删） */
+        const okLo = notes => {
+          if (notes[0] < 34 || notes[notes.length - 1] > 66) return false;
+          for (let i = 1; i < notes.length; i++) if (notes[i] - notes[i - 1] < (notes[i - 1] < 60 ? 4 : 3)) return false;
+          return true;
+        };
+        const loSrc = base.length <= 3 ? base.concat(base[0]) : base;
+        const lowCands = [];
+        for (let rot = 0; rot < loSrc.length; rot++) {
+          const b = loSrc.slice(rot).concat(loSrc.slice(0, rot));
+          for (let oct = 34; oct <= 48; oct += 12) {
+            const notes = [];
+            let pv = -1;
+            for (const pc of b) {
+              let m = oct + pc;
+              while (m <= pv) m += 12;
+              while (pv >= 0 && m - pv < (pv < 60 ? 4 : 3)) m += 12; /* 低区拉开 */
+              notes.push(m); pv = m;
+            }
+            if (okLo(notes)) lowCands.push(notes);
+          }
+        }
+        const low = lowCands.map(c => pruneClash(c.slice()));
+        clean = low.filter(c => clash(c) === 0);
+        if (!clean.length) {
+          const all = pruned.concat(low, candidates);
+          const bc = Math.min(...all.map(clash));
+          clean = all.filter(c => clash(c) === bc);
+        }
+      }
+    }
+    pool = clean;
+  }
   const cap = state.perf ? 3 : 4;
-  if (!prevNotes) { const c = candidates[Math.floor(candidates.length / 2)] || candidates[0]; return c.slice(0, cap); }
-  let best = candidates[0], bd = 1e9;
-  for (const c of candidates) {
+  if (!prevNotes) { const c = pool[Math.floor(pool.length / 2)] || pool[0]; return c.slice(0, cap); }
+  let best = pool[0], bd = 1e9;
+  for (const c of pool) {
     const d = c.reduce((s, n, i) => s + Math.abs(n - (prevNotes[i] !== undefined ? prevNotes[i] : n)), 0);
     if (d < bd) { bd = d; best = c; }
   }
   return best.slice(0, cap);
 }
 
-/* 风格化 voicing：RnB 去根音保 3-7-9-13；Jazz shell(3-7)+延伸 */
+/* 风格化 voicing：RnB 去根音保 3-7-9(-13)；Jazz shell(3-7)+延伸 */
 function styleVoicingPcs(pcs, styleKey) {
   if (styleKey === 'rnb' && pcs.length > 4) {
-    const noFifth = pcs.filter((pc, i) => i !== 2);
-    return noFifth.length >= 3 ? noFifth : pcs;
+    /* 真去根音 + 省五音：保 3-7-9（旧代码 filter(i!==2) 去的是五音，根音还在） */
+    const noRoot = pcs.filter((pc, i) => i !== 0 && i !== 2);
+    return noRoot.length >= 3 ? noRoot : pcs;
   }
   if (styleKey === 'jazz') {
     const rest = pcs.slice(1);
@@ -780,7 +1118,9 @@ function genKeys() {
     if (bar < grooveEntry) continue;
     const chord = chordAtBar(bar);
     const keyForVoicing = state.styles.length > 1 ? state.styles[bar % state.styles.length] : state.styles[0];
-    let voicing = chooseVoicing(styleVoicingPcs(chord.pcs, keyForVoicing), prevVoicing);
+    /* v15 旋律避让：本小节旋律音传入 voicing 选择，撞音候选让位 */
+    const melInBar = melodyEvents.filter(m => Math.floor(m.beat / BPB()) === bar).map(m => m.midi);
+    let voicing = chooseVoicing(styleVoicingPcs(chord.pcs, keyForVoicing), prevVoicing, melInBar);
     prevVoicing = voicing;
     let patch = state.layers.keys.patch;
     const styleKey = styleKeys.length > 1 ? styleKeys[bar % styleKeys.length] : styleKeys[0];
@@ -801,6 +1141,13 @@ function genKeys() {
       } else if (styleKey === 'hiphop') {
         /* S6：暗黑 stab 顿奏，把空间留给 808 */
         for (const s of [0, 7, 8, 15]) ev.push({ beat: bar * BPB() + s / SPB(), notes: voicing, dur: 0.3, vel: 0.42 + rng() * 0.1, inst: 'keys' });
+      } else if (styleKey === 'funk') {
+        /* clavinet 式十六分顿奏 stab（无 clav 采样，闷音吉他拼咬合感）：重音落 1/3，其余幽灵力度 */
+        for (const s of [0, 3, 6, 8, 11, 14]) ev.push({ beat: bar * BPB() + s / SPB(), notes: voicing, dur: 0.16, vel: (s % 8 === 0 ? 0.55 : 0.38) + rng() * 0.08, inst: 'guitar:muted' });
+      } else if (styleKey === 'reggae') {
+        /* skank：2/4 拍反拍 chop（清音短扫）+ 八分反拍 organ bubble 轻垫（少三音 voicing） */
+        for (const s of [4, 12]) ev.push({ beat: bar * BPB() + s / SPB(), notes: voicing, dur: 0.22, vel: 0.5 + rng() * 0.1, inst: 'guitar:clean' });
+        for (const s of [2, 6, 10, 14]) ev.push({ beat: bar * BPB() + s / SPB(), notes: voicing.slice(0, 3), dur: 0.14, vel: 0.3 + rng() * 0.08, inst: 'keys' });
       } else {
         /* rnb/jazz comping + 答句填空 */
         let hits = pick(rng, COMP_PATTERNS).slice();
@@ -821,6 +1168,13 @@ function genKeys() {
       for (const [b, d] of stabs) ev.push({ beat: bar * BPB() + b / SPB(), notes: voicing, dur: d / SPB(), vel: 0.42 + rng() * 0.14, inst: 'keys' });
     } else if (patch === 'bossa' || (patch === 'comp' && styleKey === 'bossa' && rng() < 0.5)) {
       for (const [b, d] of BOSSA_KEYS) ev.push({ beat: bar * BPB() + b, notes: voicing, dur: Math.min(d, BPB() - b), vel: 0.55 + rng() * 0.1, inst: 'keys' });
+    } else if (patch === 'comp' && styleKey === 'funk') {
+      /* funk 默认伴奏 = clavinet 式十六分顿奏（同 auto 分支语汇，Rhodes 短 stab 近似 clav 咬合） */
+      for (const s of [0, 3, 6, 8, 11, 14]) ev.push({ beat: bar * BPB() + s / SPB(), notes: voicing, dur: 0.16, vel: (s % 8 === 0 ? 0.55 : 0.38) + rng() * 0.08, inst: 'keys' });
+    } else if (patch === 'comp' && styleKey === 'reggae') {
+      /* reggae 默认伴奏 = skank：2/4 拍反拍 chop + 八分反拍 bubble 轻垫（同 auto 分支语汇） */
+      for (const s of [4, 12]) ev.push({ beat: bar * BPB() + s / SPB(), notes: voicing, dur: 0.22, vel: 0.5 + rng() * 0.1, inst: 'keys' });
+      for (const s of [2, 6, 10, 14]) ev.push({ beat: bar * BPB() + s / SPB(), notes: voicing.slice(0, 3), dur: 0.14, vel: 0.3 + rng() * 0.08, inst: 'keys' });
     } else if (patch === 'pad') {
       ev.push({ beat: bar * BPB(), notes: voicing, dur: Math.max(1, BPB() - 0.2), vel: 0.42, inst: 'keys' });
     } else {
@@ -846,6 +1200,10 @@ const PAD_BY_STYLE = {
   bossa: { bank: 'strings',   presence: 0.10, attack: 'slow', lpf: 6200, mode: 'air',  vol: 0.55 },
   afro:  { bank: 'warm',      presence: 0.35, attack: 'stab', lpf: 4200, mode: 'stab', vol: 0.85 },
   hiphop:{ bank: 'polysynth', presence: 0.65, attack: 'slow', lpf: 3400, mode: 'pad',  vol: 1.00 },
+  funk:     { bank: 'sweep',     presence: 0.07, attack: 'gate', lpf: 3600, mode: 'gate', vol: 0.55 }, /* 放克几乎不用 pad：律动靠吉他/贝斯/鼓，仅高能量段一抹门控底色 */
+  soul:     { bank: 'choir',     presence: 0.50, attack: 'slow', lpf: 5000, mode: 'pad',  vol: 0.90 }, /* 福音合唱垫 = soul 的教堂空间感核心 */
+  reggae:   { bank: 'polysynth', presence: 0.32, attack: 'stab', lpf: 4400, mode: 'stab', vol: 0.80 }, /* organ bubble 感：polysynth 短促反拍 stab，与 skank 错开 */
+  afrobeats:{ bank: 'halo',      presence: 0.30, attack: 'slow', lpf: 5600, mode: 'pad',  vol: 0.80 }, /* 亮色 halo 薄垫：阳光电台感，不压打击乐 */
 };
 function genSynthPad() {
   const rng = mulberry32(curSeed ^ 0x5EED);
@@ -857,8 +1215,12 @@ function genSynthPad() {
     const chord = chordAtBar(bar);
     const styleKey = state.styles.length > 1 ? state.styles[bar % state.styles.length] : state.styles[0];
     const cfg = PAD_BY_STYLE[styleKey] || PAD_BY_STYLE.rnb;
-    let voicing = chooseVoicing(styleVoicingPcs(chord.pcs, styleKey), prevVoicing);
+    let voicing = chooseVoicing(styleVoicingPcs(chord.pcs, styleKey), prevVoicing,
+      melodyEvents.filter(m => Math.floor(m.beat / BPB()) === bar).map(m => m.midi));
     prevVoicing = voicing;
+    /* v15 Pad 与键盘错开音区：只取色彩声部（顶层 7/9/13）整体上移八度，
+       不再与键盘同 voicing 同音区叠加（同构叠加=浑浊加倍） */
+    if (voicing.length >= 3) voicing = voicing.slice(-3).map(n => Math.min(n + 12, 84));
     /* N1 RnB pad 跨八度 spread：3 音拉开（沙滩多层弦乐式厚度） */
     if (styleKey === 'rnb' && voicing.length >= 3) {
       voicing = [voicing[0], voicing[1], Math.min(voicing[voicing.length - 1] + 12, 96)];
@@ -925,6 +1287,10 @@ const DRUM_PRESENCE = { /* v4.2 再提一档 +1dB */
   rock:   { kick: +3,   snare: +3, perc: +1 },
   jazz:   { kick: 0,    snare: +2, perc: +2 },
   bossa:  { kick: +2,   snare: +2, perc: +3 },
+  funk:     { kick: +2.5, snare: +3,   perc: +2   }, /* 紧而干：kick/snare 顶前咬律动，ghost 音群已有余量 */
+  soul:     { kick: +2,   snare: +3.5, perc: +1.5 }, /* 大 backbeat 慢灵魂：军鼓最前，击掌/沙锤退后 */
+  reggae:   { kick: +2.5, snare: +2.5, perc: +2   }, /* one-drop：第 3 拍 kick+rim 同落必须是全曲最重一击 */
+  afrobeats:{ kick: +3.5, snare: +2,   perc: +3.5 }, /* log-drum 式切分 kick 前置 + shaker/clap 群前置 */
 };
 function genDrums() {
   const rng = mulberry32((curSeed ^ 0xD00D) >>> 0);
@@ -946,6 +1312,49 @@ function genDrums() {
     /* v5 拍子系统：3/4 华尔兹 / 6·8 摇曳专用鼓型（12 步矩阵） */
     const meterPats = { m34: 'waltz', m68: 'soul68' };
     if (meterPats[state.meter] && DRUM_PATTERNS[meterPats[state.meter]]) P = DRUM_PATTERNS[meterPats[state.meter]];
+    /* 主型 + 双变体轮换：2 小节一组，组内第二小节用变体，V1/V2 按组轮换。
+       变体用独立确定性种子派生（不改 DRUM_PATTERNS 主型、不消耗主 rng 流，主型小节输出不变）。
+       fill 小节（bar%8==7）与 afro（自带 kickB 二小节变体）回主型 */
+    let Pv = P;
+    if (state.meter === 'm44' && !P.kickB && bar % 2 === 1 && bar % 8 !== 7) {
+      const vrng = mulberry32((curSeed ^ hashStr('dv|' + patName + '|' + (bar >> 1))) >>> 0);
+      Pv = {};
+      for (const row of Object.keys(P)) Pv[row] = P[row].slice();
+      if ((bar >> 1) % 2 === 0) {
+        /* V1：kick 加花 + 一记闭镲转开镲 */
+        if (Pv.kick) {
+          const cands = [3, 7, 11, 14].filter(s2 => !Pv.kick[s2] && !(Pv.snare && Pv.snare[s2]));
+          if (cands.length) Pv.kick[cands[Math.floor(vrng() * cands.length)]] = 1;
+        }
+        if (Pv.hat && vrng() < 0.6) {
+          const hc = [2, 6, 10, 14].filter(s2 => Pv.hat[s2]);
+          if (hc.length) {
+            const hs = hc[Math.floor(vrng() * hc.length)];
+            Pv.hat[hs] = 0;
+            Pv.ohat = Pv.ohat || new Array(SBAR()).fill(0);
+            Pv.ohat[hs] = 1;
+          }
+        }
+      } else {
+        /* V2：ghost 移位一步 + 军鼓前置装饰（flam 感） */
+        if (Pv.ghost) {
+          const gh = Pv.ghost.map((v, i) => v ? i : -1).filter(i => i >= 0);
+          if (gh.length) {
+            const gs = gh[Math.floor(vrng() * gh.length)];
+            Pv.ghost[gs] = 0;
+            Pv.ghost[(gs + (vrng() < 0.5 ? 1 : SBAR() - 1)) % SBAR()] = 1;
+          }
+        }
+        if (Pv.snare) {
+          const sh2 = Pv.snare.map((v, i) => v ? i : -1).filter(i => i >= 1);
+          if (sh2.length) {
+            const ss = sh2[Math.floor(vrng() * sh2.length)];
+            Pv.ghost = Pv.ghost || new Array(SBAR()).fill(0);
+            if (!Pv.ghost[ss - 1] && !Pv.snare[ss - 1] && !(Pv.kick && Pv.kick[ss - 1])) Pv.ghost[ss - 1] = 1;
+          }
+        }
+      }
+    }
     const density = state.layers.drums.patch;
     const kit = DRUM_KITS[state.layers.drums.patch === '808' ? 's808' : state.layers.drums.patch === 'beach' ? 'beach' : styleKey] || DRUM_KITS.rnb;
     /* B4 声部配比（dB→倍数） */
@@ -956,7 +1365,7 @@ function genDrums() {
         : (inst === 'hat' || inst === 'ohat') ? 0 : (pres.perc || 0);
       return db ? Math.pow(10, db / 20) : 1;
     };
-    const kickRow = (patName === 'afro' && bar % 2 === 1 && P.kickB) ? P.kickB : P.kick; /* afro 第二小节变体 */
+    const kickRow = (patName === 'afro' && bar % 2 === 1 && Pv.kickB) ? Pv.kickB : Pv.kick; /* afro 第二小节变体 */
     for (let s = 0; s < SBAR(); s++) {
       const arc = [0.92, 0.97, 1.0, 1.06]; /* 四小节呼吸弧：第 4 小节冲刺进下一段 */
       const push = (inst, vel) => {
@@ -965,33 +1374,33 @@ function genDrums() {
         ev.push({ step16: bar * SBAR() + s, inst, vel: vel * (0.65 + energy * 0.45) * arc[bar % 4] * presMul(inst), kit });
       };
       /* A3 剥壳：前奏/尾奏只留 hat 轴 + 第 1 拍 kick */
-      if (isThinSec && !(P.hat && P.hat[s]) && s % 4 !== 0 && !(s === 0 && P.kick && P.kick[s])) continue;
-      if (P.kick && kickRow[s]) {
+      if (isThinSec && !(Pv.hat && Pv.hat[s]) && s % 4 !== 0 && !(s === 0 && Pv.kick && Pv.kick[s])) continue;
+      if (Pv.kick && kickRow[s]) {
         if (subtract && s % 4 !== 0) { /* B5 减法：正拍 kick 保留，其余抽掉 */ }
         else {
-          push('kick', (patName === 'jazz' ? 0.3 : (patName === 'bossa' ? 0.55 : (patName === 'afro' ? 0.7 : 1))) * (s % 4 === 0 ? 1.0 : 0.85));
+          push('kick', (patName === 'jazz' ? 0.3 : (patName === 'bossa' ? 0.55 : (patName === 'afro' ? 0.7 : 1))) * (s % 4 === 0 ? 1.0 : 0.85) * (0.9 + rng() * 0.2)); /* v15 ±10% 力度随机 */
           /* B2 强 kick 叠 808 次低音层（rnb/hiphop） */
           if ((styleKey === 'rnb' || styleKey === 'hiphop') && s % 8 === 0) ev[ev.length - 1].sub = true;
         }
       }
       if (patName === 'jazz') {
         /* 爵士军鼓 = 反拍应答 comping，不是摇滚式 backbeat */
-        if (P.snare && P.snare[s] && !isThinSec && rng() < 0.35) push('snare', 0.5);
+        if (Pv.snare && Pv.snare[s] && !isThinSec && rng() < 0.35) push('snare', 0.5);
         if ((s === 3 || s === 7 || s === 11 || s === 14) && !isThinSec && rng() < 0.22) push('snare', 0.32);
-      } else if (P.snare && P.snare[s]) {
+      } else if (Pv.snare && Pv.snare[s]) {
         if (!isThinSec) {
           if (patName === 'bossa') {
             /* 实测 Ipanema：rim 只在 B 段/高能量段出现 */
             if (energy > 0.65 || bar % 2 === 1) push('snare', 0.45);
           } else {
-            push('snare', patName === 'afro' ? 0.55 : 0.9);
+            push('snare', (patName === 'afro' ? 0.55 : 0.9) * (0.9 + rng() * 0.2)); /* v15 ±10% 力度随机 */
             /* B2 rnb 军鼓叠 rimshot（Questlove flam 感） */
             if (styleKey === 'rnb' && s % 8 === 4) ev[ev.length - 1].rimLayer = true;
           }
         }
       }
-      if (P.ghost && P.ghost[s] && !isThinSec && rng() < 0.5) push('snare', 0.38);
-      if (P.hat && P.hat[s]) {
+      if (Pv.ghost && Pv.ghost[s] && !isThinSec && rng() < 0.5) push('snare', 0.25 + rng() * 0.2); /* v15 ghost 力度 0.25-0.45 随机（旧恒定 0.38） */
+      if (Pv.hat && Pv.hat[s]) {
         if (density === 'lite' && s % 4 !== 0) continue;
         if (density === 'drive' && rng() < 0.3) { push('hat', 0.5); continue; }
         let hatBase = patName === 'beach' ? (s % 4 === 0 ? 0.62 : 0.4 + rng() * 0.18) : (s % 4 === 0 ? 0.85 : 0.6); /* 律动载体站出来 */
@@ -1000,16 +1409,17 @@ function genDrums() {
           if (s % 4 === 0) hatBase *= 1.35;
           else if (s % 4 === 2) hatBase *= 0.6;
         }
+        hatBase *= 0.9 + rng() * 0.2; /* v15 hat 两档力度 ±10% 抖动 */
         push('hat', hatBase);
       }
-      if (P.ohat && P.ohat[s] && density !== 'lite') push('ohat', 0.6);
+      if (Pv.ohat && Pv.ohat[s] && density !== 'lite') push('ohat', 0.6);
       /* N5 rock verse 开镲：15% 概率在反拍点开镲（GNR 式动态） */
       if (patName === 'rock' && !rockChorus && s % 4 === 2 && rng() < 0.15) push('ohat', 0.5);
-      if (P.ride && P.ride[s]) push('ride', s % 4 === 0 ? 0.8 : 0.5);
-      if (P.crash && P.crash[s] && (bar % 4 === 0 || rockChorus)) push('crash', styleKey === 'rock' ? 0.5 : 0.7);
-      if (P.congaH && P.congaH[s]) push('congaH', 0.7);
-      if (P.congaL && P.congaL[s]) push('congaL', 0.65);
-      if (P.bell && P.bell[s]) push('bell', s % 4 === 0 ? 0.55 : 0.4);
+      if (Pv.ride && Pv.ride[s]) push('ride', s % 4 === 0 ? 0.8 : 0.5);
+      if (Pv.crash && Pv.crash[s] && (bar % 4 === 0 || rockChorus)) push('crash', styleKey === 'rock' ? 0.5 : 0.7);
+      if (Pv.congaH && Pv.congaH[s]) push('congaH', 0.7);
+      if (Pv.congaL && Pv.congaL[s]) push('congaL', 0.65);
+      if (Pv.bell && Pv.bell[s]) push('bell', s % 4 === 0 ? 0.55 : 0.4);
       /* rnb 现代变体（Frank Ocean 式）：第二小节军鼓上 3 */
       if (patName === 'rnb' && bar % 2 === 1 && s === 8 && !isThinSec) push('snare', 0.55);
       /* Fela 式 break：每 16 小节最后一拍全停 */
@@ -1017,17 +1427,20 @@ function genDrums() {
         ev.filter(x => x.step16 === bar * SBAR() + s).forEach(x => { x._drop = true; });
       }
     }
+    /* Fill 非线性化：力度指数渐强 0.3→1.0（真鼓手 fill 的能量曲线）+ 每击 ±15ms 人性化偏移 */
+    const fillVel = (i, n) => 0.3 + 0.7 * Math.pow(n > 1 ? i / (n - 1) : 1, 2);
+    const fillJit = () => (rng() * 2 - 1) * 0.015 / secPer16();
     /* Rock：每 4 小节末加花进下一段（Nirvana/GNR 式） */
     if (styleKey === 'rock' && bar % 4 === 3 && bar !== bars - 1 && energy > 0.45) {
-      for (let s = SBAR() - 4; s < SBAR(); s++) ev.push({ step16: bar * SBAR() + s, inst: 'snare', vel: (0.45 + (s - (SBAR() - 4)) * 0.15) * presMul('snare'), kit });
+      for (let s = SBAR() - 4; s < SBAR(); s++) ev.push({ step16: bar * SBAR() + s + fillJit(), inst: 'snare', vel: fillVel(s - (SBAR() - 4), 4) * presMul('snare'), kit });
     }
     /* 结尾加花（Afro break 小节不加） */
     if (bar === bars - 1 && !(styleKey === 'afro' && bar % 16 === 15)) {
-      for (let s = SBAR() - 4; s < SBAR(); s++) ev.push({ step16: bar * SBAR() + s, inst: s % 2 ? 'snare' : 'hat', vel: (0.5 + (s - (SBAR() - 4)) * 0.12) * presMul('snare'), kit });
+      for (let s = SBAR() - 4; s < SBAR(); s++) ev.push({ step16: bar * SBAR() + s + fillJit(), inst: s % 2 ? 'snare' : 'hat', vel: fillVel(s - (SBAR() - 4), 4) * presMul('snare'), kit });
     }
     /* v5 fill 库：段落末或每 8 小节，末 3 步军鼓渐强滚奏 + 下小节 crash 收束（afro/bossa 免） */
     if (state.meter === 'm44' && styleKey !== 'afro' && styleKey !== 'bossa' && styleKey !== 'rock' && (secChange || bar % 8 === 7) && bar + 1 < bars) {
-      for (let s = SBAR() - 3; s < SBAR(); s++) ev.push({ step16: bar * SBAR() + s, inst: 'snare', vel: (0.4 + (s - (SBAR() - 3)) * 0.2) * presMul('snare'), kit });
+      for (let s = SBAR() - 3; s < SBAR(); s++) ev.push({ step16: bar * SBAR() + s + fillJit(), inst: 'snare', vel: fillVel(s - (SBAR() - 3), 3) * presMul('snare'), kit });
       ev.push({ step16: (bar + 1) * SBAR(), inst: 'crash', vel: 0.6 * presMul('crash'), kit });
     }
     /* Hip-Hop：32 分 hat 滚奏（每 2 小节随机一整拍）+ 偶发 16 分三连音顿奏 */
@@ -1056,6 +1469,20 @@ function genDrums() {
     }
     /* 实测 Ipanema：bossa 的 shaker 型已并入 P.hat（X.X...X.X.X...X.），不再叠层 */
   }
+  /* 开镲制音（choke）：ohat 一响，同小节随后 2 步的闭镲被踩掉、第 3 步力度减半——
+     真鼓上开/闭镲共一张镲片，开镲延音中不可能继续密打闭镲 */
+  for (const e of ev) {
+    if (e.inst !== 'ohat') continue;
+    const barOf = Math.floor(e.step16 / SBAR());
+    for (const h of ev) {
+      if (h.inst !== 'hat' || h._drop) continue;
+      const d = h.step16 - e.step16;
+      if (d > 0 && Math.floor(h.step16 / SBAR()) === barOf) {
+        if (d <= 2) h._drop = true;
+        else if (d <= 3) h.vel *= 0.5;
+      }
+    }
+  }
   drumEvents = ev.filter(x => !x._drop && x.step16 < totalBars() * SBAR()); /* v5：非4/4 roll/ clap 越界拦截 */
 }
 
@@ -1083,10 +1510,34 @@ function makeCabIR(dur = 0.22, decay = 5) {
   }
   return buf;
 }
+/* v15 吉他箱体脉冲响应：1s 白噪 → 单极点带通 100Hz-5kHz → 指数衰减窗。
+   失真直进低通=蜂鸣 fizz；卷积一次即得喇叭箱体的频谱塌陷与瞬态抹圆，CPU 代价一次加载后为零 */
+let _cabImpulse = null;
+function makeCabImpulse() {
+  if (_cabImpulse) return _cabImpulse;
+  const raw = Tone.getContext().rawContext;
+  const rate = raw.sampleRate, len = Math.floor(rate * 1.0);
+  const buf = raw.createBuffer(2, len, rate);
+  const aLP = Math.exp(-2 * Math.PI * 5000 / rate);  /* 低通 5kHz：箱体高频截止 */
+  const aHP = Math.exp(-2 * Math.PI * 100 / rate);   /* 高通 100Hz：箱体低频轰鸣切除 */
+  for (let ch = 0; ch < 2; ch++) {
+    const d = buf.getChannelData(ch);
+    let lp = 0, hpY = 0, prevX = 0;
+    for (let i = 0; i < len; i++) {
+      const n = Math.random() * 2 - 1;
+      lp = aLP * lp + (1 - aLP) * n;
+      hpY = aHP * (hpY + lp - prevX); prevX = lp;
+      d[i] = hpY * Math.exp(-(i / len) * 7) * 3;
+    }
+  }
+  _cabImpulse = buf;
+  return buf;
+}
 
 function buildAudio() {
   if (AE.ready) return;
-  /* v4 Logic 级母带链：音量(AGC) → 三段EQ → 多段压缩 → 温和饱和 → 限制器 → 输出。
+  /* v4 Logic 级母带链：音量 → 三段EQ → 多段压缩 → 限制器 → 输出。
+     v14 降 CPU：饱和 0.06→0.015（波形整形是过采样大户）；删除 AGC 呼吸环（每 3.5s 写 volume 的定时器是卡顿嫌疑）。
      各层推子仍汇入 AE.master；导出音频从限制器后分流（与听到的一致） */
   AE.master = new Tone.Volume(-2);
   AE.masterEq = new Tone.EQ3({ low: 0, mid: 0, high: 0.5, lowFrequency: 120, highFrequency: 7500 });
@@ -1096,7 +1547,7 @@ function buildAudio() {
     mid:  { threshold: -16, ratio: 2.5, attack: 0.015, release: 0.12 },
     high: { threshold: -13, ratio: 3,   attack: 0.01,  release: 0.1  },
   });
-  AE.masterSat = new Tone.Distortion(0.06);
+  AE.masterSat = new Tone.Distortion(0.015); /* v14：仅留染色底线，CPU 优先 */
   AE.limiterRef = new Tone.Limiter(-1);
   AE.master.connect(AE.masterEq);
   AE.masterEq.connect(AE.masterMB);
@@ -1106,39 +1557,32 @@ function buildAudio() {
   AE.masterMeter = new Tone.Meter({ normalRange: false, smoothing: 0.85 });
   AE.recDest = Tone.getContext().createMediaStreamDestination();
   AE.limiterRef.connect(AE.recDest);
-  /* 限制器后 → 电平监听（并联，不影响信号链） */
+  /* 限制器后 → 电平监听（并联，不影响信号链；v14 AGC 呼吸环已删除，meter 留作诊断） */
   setTimeout(() => { try { AE.limiterRef.connect(AE.masterMeter); } catch (e) {} }, 0);
-  /* v4 AGC：3.5s 一拍、±0.4dB 步进、±3dB 死区、目标 -12dB RMS（不泵动、不抢瞬态） */
-  setInterval(() => {
-    if (!state.playing || !AE.masterMeter) return;
-    let db = -60;
-    try { const v = AE.masterMeter.getValue(); db = typeof v === 'number' ? v : -60; } catch (e) { return; }
-    if (db < -45 || db > -3) return;
-    const err = -12 - db;
-    if (Math.abs(err) < 3) return;
-    const cur = AE.master.volume.value;
-    const next = Math.max(-14, Math.min(8, cur + Math.sign(err) * 0.4));
-    AE.master.volume.value = next;
-  }, 3500);
 
   /* --- 旋律吉他（效果器链路）：
      双锯齿声源 → 电子管波形塑形前级 → 三段 EQ → 箱体 IR 卷积 → 压缩 → 反馈延迟 --- */
-  AE.guitarVol = new Tone.Volume(-3).connect(AE.master);
+  AE.guitarVol = new Tone.Volume(-3); /* v14：推子串进分工表链，接线在 hpGuitar 创建后 */
   AE.guitarDelay = new Tone.FeedbackDelay('8n.', 0.28).connect(AE.guitarVol);
-  /* 吉他 cab 卷积仅合成回退用：采样为主的时代先旁路省一个卷积器（手机 CPU） */
+  /* 吉他 cab 卷积：WaveShaper 失真后必须过箱体（带通 100Hz-5kHz + 指数衰减 IR），
+     否则蜂鸣 fizz 直出；25% 直声并联保瞬态 */
   AE.guitarComp = new Tone.Compressor(-16, 3).connect(AE.guitarDelay);
   AE.guitarEq = new Tone.EQ3({ low: -1, mid: 0.5, high: 2.5, lowFrequency: 220, highFrequency: 2400 }).connect(AE.guitarComp);
-  AE.guitarPre = new Tone.WaveShaper(driveCurve(6), 2048).connect(AE.guitarEq);
+  AE.guitarCab = new Tone.Convolver(makeCabImpulse()).connect(AE.guitarEq);
+  AE.guitarCabDry = new Tone.Gain(0.25).connect(AE.guitarEq);
+  AE.guitarPre = new Tone.WaveShaper(driveCurve(6), 2048);
+  AE.guitarPre.connect(AE.guitarCab);
+  AE.guitarPre.connect(AE.guitarCabDry);
   AE.guitar = new Tone.Synth({
     oscillator: { type: 'fatsawtooth', count: 2, spread: 22 },
     envelope: { attack: 0.012, decay: 0.22, sustain: 0.4, release: 0.35 },
     portamento: 0.045,
   }).connect(AE.guitarPre);
 
-  /* --- 电钢琴：三角波 Poly + 颤音 + 合唱 + 混响 --- */
-  AE.keysVol = new Tone.Volume(-6).connect(AE.master);
-  const keysChorus = new Tone.Chorus(4, 2.5, 0.4).connect(AE.keysVol);
-  AE.keysTremolo = new Tone.Tremolo(5, 0.22).connect(keysChorus);
+  /* --- 电钢琴：三角波 Poly + 颤音 + 合唱 + 混响（调制按风格门控，见 applyStyleFx） --- */
+  AE.keysVol = new Tone.Volume(-6); /* v14：推子串进分工表链，接线在 hpKeys 创建后 */
+  AE.keysChorus = new Tone.Chorus(4, 2.5, 0.4).connect(AE.keysVol);
+  AE.keysTremolo = new Tone.Tremolo(5, 0.22).connect(AE.keysChorus);
   AE.keysTremolo.start();
   AE.keys = new Tone.PolySynth(Tone.Synth, {
     oscillator: { type: 'triangle' },
@@ -1187,13 +1631,13 @@ function buildAudio() {
     envelope: { attack: 0.001, decay: 0.12, sustain: 0 },
   }).connect(AE.drumsVol);
   AE.hat = new Tone.MetalSynth({
-    envelope: { attack: 0.001, decay: 0.05, release: 0.02 },
-    harmonicity: 5.1, modulationIndex: 24, resonance: 5000, octaves: 1.2,
+    envelope: { attack: 0.001, decay: 0.035, release: 0.02 },
+    harmonicity: 5.1, modulationIndex: 14, resonance: 3200, octaves: 0.8, /* v15 去金属味：降共振/调制/泛音数 */
   }).connect(AE.drumsVol);
   AE.hat.volume.value = -6; /* 兜底也要听得见 */
   AE.ride = new Tone.MetalSynth({
-    envelope: { attack: 0.001, decay: 0.35, release: 0.05 },
-    harmonicity: 5.1, modulationIndex: 18, resonance: 3200, octaves: 1,
+    envelope: { attack: 0.001, decay: 0.22, release: 0.05 },
+    harmonicity: 5.1, modulationIndex: 12, resonance: 2400, octaves: 0.5, /* v15 去金属味 */
   }).connect(AE.drumsVol);
   AE.ride.volume.value = -8;
   AE.conga = new Tone.MembraneSynth({
@@ -1207,14 +1651,14 @@ function buildAudio() {
   AE.crash.volume.value = -8;
 
   /* --- 合成器 Pad 兜底链（采样未就绪时用）：锯齿波 → 移相器 → 大混响 --- */
-  AE.synthVol = new Tone.Volume(-9).connect(AE.master);
+  AE.synthVol = new Tone.Volume(-9); /* v14：推子接入 pad 信号链，接线在 hpPad 创建后 */
   AE.padPhaser = new Tone.Phaser(0.08, 0.5, 320); /* v4.3 合成器老问题根因：octaves=4 全频扫描 → 几乎静止的模拟暖度 */
   AE.synthPad = new Tone.PolySynth(Tone.Synth, {
     oscillator: { type: 'fatsawtooth' }, /* v8 暖模拟化：双锯齿微失谐 = Juno 宽度，锯齿单波是塑料 pad 的根源 */
     envelope: { attack: 0.6, decay: 1.5, sustain: 0.5, release: 2.5 },
   }).connect(AE.padPhaser);
-  /* v12 模拟垫底：任何 pad（采样或合成）底下垫 -10/0/+10 音分三锯齿 supersaw。
-     MusyngKite choir/warm 采样的"塑料圣咏感"被模拟体温焐住——这层永远出声，与采样加载无关 */
+  /* v12 模拟垫底：pad 采样缺失时的 supersaw 托底（-10/0/+10 音分三锯齿）。
+     v15 起只在兜底路径启用——与采样 pad 叠加出声 = 浑浊加倍（调度层 if/else 门控） */
   AE.padUnder = [];
   for (const det of [-10, 0, 10]) {
     const p = new Tone.PolySynth(Tone.Synth, {
@@ -1239,6 +1683,7 @@ function buildAudio() {
   AE.toneEqGuitar = new Tone.EQ3({ low: 0, mid: 0, high: 3, lowFrequency: 300, highFrequency: 3500 }).connect(AE.lpGuitar); /* 3.5k 以上=拨片定义感区，空气感从这出 */
   AE.hpGuitar = new Tone.Filter(70, 'highpass').connect(AE.toneEqGuitar); /* 70Hz 以下让给贝斯 */
   AE.toneDistGuitar = new Tone.Distortion(0).connect(AE.hpGuitar);
+  AE.guitarVol.connect(nativeInputOf(AE.hpGuitar)); /* v14：吉他层推子（合成回退+采样总线共用）→ 分工表链 */
   AE.lpKeys = new Tone.Filter(9500, 'lowpass'); /* 分工表：EP 上限 9.5k，金属毛刺让位镲片空气感 */
   AE.lpKeys.connect(AE.musicBus);
   AE.toneEqKeys = new Tone.EQ3({ low: 0, mid: 0, high: 2, lowFrequency: 350, highFrequency: 4000 }).connect(AE.lpKeys);
@@ -1247,6 +1692,7 @@ function buildAudio() {
   AE.keysRoleGain = new Tone.Gain(0.85); /* EP 退后 ≈-1.4dB：不再喧宾夺主 */
   AE.hpKeys.connect(AE.npKeys); AE.npKeys.connect(AE.keysRoleGain); AE.keysRoleGain.connect(AE.toneEqKeys);
   AE.toneDistKeys = new Tone.Distortion(0).connect(AE.hpKeys);
+  AE.keysVol.connect(nativeInputOf(AE.hpKeys)); /* v14：键盘层推子（合成回退+采样总线共用）→ 分工表链 */
   /* 频率分工表（系统级频谱编排）：每件乐器一个工位，挖掉侵占别人工位的频段
      贝斯 30-700 · Pad 150-5k(400以下全权让给贝斯) · EP 100-9.5k(350挖泥) · 吉他 90-13.5k(300挖泥) · 鼓 28-11k(11k以上洗剪) */
   AE.toneFilterBass = new Tone.Filter(9000, 'lowpass').connect(AE.master);
@@ -1262,7 +1708,8 @@ function buildAudio() {
   AE.padRoleGain = new Tone.Gain(0.72); /* 持续声部 RMS 天然碾压瞬态主角，整体退后 ≈-2.8dB */
   AE.padChorus = new Tone.Chorus(0.9, 4, 0.35); /* v8 deca joins 暖模拟：Juno 式慢合唱在 pad 链 */
   AE.padChorus.wet.value = 0; /* 风格门控（applyStyleFx），非目标风格零开销 */
-  AE.padPhaser.connect(AE.hpPad);
+  AE.padPhaser.connect(AE.synthVol);
+  AE.synthVol.connect(AE.hpPad); /* v14：Pad 推子串入信号链（合成回退+采样总线共用），之前 synthVol 悬空 = 推子失灵 */
   AE.hpPad.connect(AE.padFilter);
   AE.padFilter.connect(AE.padChorus);
   AE.padChorus.connect(AE.npPad);
@@ -1290,7 +1737,7 @@ function buildAudio() {
     envelope: { attack: 0.002, decay: 0.9, sustain: 0.12, release: 2.0 },
     modulation: { type: 'sine' },
     modulationEnvelope: { attack: 0.002, decay: 0.25, sustain: 0.3, release: 0.5 },
-  }).connect(nativeInputOf(AE.toneDistKeys));
+  }).connect(nativeInputOf(AE.keysVol)); /* v14：颤音琴也过键盘层推子 */
   AE.keysVibes.volume.value = -4;
   AE.drumsVol.connect(AE.drumsComp);
   AE.drumsVol.connect(AE.drumsPar);
@@ -1367,7 +1814,9 @@ const GUITAR_SETS = {
 const GUITAR_PATCH_MAP = { clean:'electric', crunch:'electric', dist:'electric', jazz:'electric', muted:'electric', harmonics:'electric', delay:'electric', steel:'acoustic', nylon:'acoustic' };
 /* v4 吉他双源（§2.1）：rnb/jazz/bossa = SoundFont 连音乐句（滑音/长音可控）；
    rock/hiphop/afro = 真实单音采样（颗粒/riff 质感优先），SoundFont 兜底 */
-const GUITAR_SRC_BY_STYLE = { rnb: 'samp', jazz: 'sf', bossa: 'sf', rock: 'samp', hiphop: 'samp', afro: 'samp' }; /* v4.2 rnb 走采样：滑音/揉弦/前音闪避才谈得上流动性 */
+const GUITAR_SRC_BY_STYLE = { rnb: 'samp', jazz: 'sf', bossa: 'sf', rock: 'samp', hiphop: 'samp', afro: 'samp',
+  funk: 'samp', soul: 'sf', reggae: 'samp', afrobeats: 'samp' }; /* v4.2 rnb 走采样：滑音/揉弦/前音闪避才谈得上流动性 */
+/* funk/reggae/afrobeats = 打击化 chop/拨弦 → 真实单音采样；soul = 长连音歌唱线 → SoundFont（同 jazz/bossa 理由） */
 /* 按 patch 的音色塑造：真实采样只有两套库，风格差异靠效果链分家。
    drive→线路失真量, lpf→低通, gate→音门（闷音）, vol→音量补偿 */
 const GUITAR_PATCH_FX = {
@@ -1389,6 +1838,10 @@ const GUITAR_STYLE_FX = {
   bossa:  { drive: 0,   lpf: 12500, gate: 1.00, vol: 0.90 },
   afro:   { drive: 2,   lpf: 8800,  gate: 1.00, vol: 0.95 },
   hiphop: { drive: 1.5, lpf: 4200,  gate: 0.85, vol: 0.90 }, /* v5.1 采样 chop 美学：更闷更狠，微失真给砂砾 */
+  funk:     { drive: 4,   lpf: 5200,  gate: 0.45, vol: 0.95, presence: 1.2 }, /* wah/闷音感：中低通收高频 + 1.2k 咕哝 + gate 把音掐短成 chop */
+  soul:     { drive: 1,   lpf: 8200,  gate: 1.00, vol: 0.95, chorus: 0.22 }, /* 温暖清音：微合唱泡软起音，长音不断 */
+  reggae:   { drive: 0.5, lpf: 6800,  gate: 0.60, vol: 0.90 }, /* 干、短、反拍 chop：近零失真、无合唱/延迟，skank 要脆 */
+  afrobeats:{ drive: 0,   lpf: 11000, gate: 1.00, vol: 0.95, dmix: 0.18 }, /* 清亮拨弦 + 短延迟拖尾（highlife/当代 Afro-pop 亮色） */
 };
 const GUITAR_FX_CHAINS = {}; /* patch|style -> chain head */
 function guitarFxChain(patch, raw, styleKey) {
@@ -1417,7 +1870,14 @@ function guitarFxChain(patch, raw, styleKey) {
       const shaper = raw.createWaveShaper();
       shaper.curve = driveCurve(fx.drive);
       shaper.oversample = '2x';
-      shaper.connect(lpf); tail = shaper;
+      /* v15 箱体模拟：失真/过载必须过 cab IR（clean/harmonics drive=0 不经此路），
+         25% 直声并联防发闷 */
+      const cab = raw.createConvolver();
+      cab.buffer = makeCabImpulse();
+      const cabDry = raw.createGain(); cabDry.gain.value = 0.25;
+      shaper.connect(cab); cab.connect(lpf);
+      shaper.connect(cabDry); cabDry.connect(lpf);
+      tail = shaper;
     }
     /* v9 GNR/ACDC 链：中频哼声(1.2k 存在感) + 短延迟立体声宽度(Slash 式 lead 空间) */
     let outNode = vol;
@@ -1647,8 +2107,8 @@ const DRUM_FILES = ['kick_room','snare_room','hat_closed','crash','brush_snare',
 /* 每风格鼓件映射：值=采样名，null=用合成鼓回退 */
 const DRUM_KITS = {
   rock:  { kick:'kick_room', snare:'snare_room', hat:'hat_closed', ohat:'hat_closed', ride:'hat_closed', crash:'crash', congaH:null, congaL:null, ghost:'snare_room' },
-  jazz:  { kick:null, snare:'brush_snare', hat:null, ohat:'hat_closed', ride:null, crash:'crash', congaH:null, congaL:null, ghost:'brush_snare' },
-  bossa: { kick:null, snare:'rim_click', hat:'shaker', ohat:'shaker', ride:'shaker', crash:'crash', congaH:null, congaL:null, ghost:'rim_click' },
+  jazz:  { kick:'kick_room', snare:'brush_snare', hat:'hat_closed', ohat:'hat_closed', ride:'crash', crash:'crash', congaH:null, congaL:null, ghost:'brush_snare' }, /* v15：ride 用 crash 采样低力度+低通+短衰减模拟（播放层特判），kick/hat 复用房间采样，告别金属合成兜底 */
+  bossa: { kick:'kick_room', snare:'rim_click', hat:'hat_closed', ohat:'shaker', ride:'shaker', crash:'crash', congaH:null, congaL:null, ghost:'rim_click' }, /* v15：kick/hat 复用真实采样 */
   afro:  { kick:'kick_room', snare:'clave', hat:'shekere', ohat:'shekere', ride:'shekere', bell:'clave', crash:null, congaH:'conga_h', congaL:'conga_l', ghost:null },
   rnb:   { kick:'kick_808', snare:'snap', hat:'hat_808', ohat:'hat_808', ride:'hat_808', crash:'crash', congaH:null, congaL:null, ghost:'snap' },
   s808:  { kick:'kick_808', snare:null, hat:'hat_808', ohat:'hat_808', ride:'hat_808', crash:'crash', congaH:null, congaL:null, ghost:null },
@@ -1700,7 +2160,7 @@ function loadDrumSamples(isRetry) {
   }, 6000);
 }
 const DRUM_GAIN = { shekere: 1.3, shaker: 0.9, snap: 1.1, clap: 1.3, hat_808: 0.9, kick_808: 1.25, crash: 0.95, rim_click: 1.1, kick_room: 1.45, snare_room: 1.2, brush_snare: 1.1, conga_h: 1.25, conga_l: 1.25, clave: 1.2 };
-function playDrumSample(name, t, vel) {
+function playDrumSample(name, t, vel, opts) {
   const buf = DRUM_SAMP.buffers[name];
   if (!buf || !DRUM_SAMP.bus) return false;
   t += Math.random() * 0.008 - 0.004; /* v2 人性化：±4ms 偏移 */
@@ -1709,12 +2169,20 @@ function playDrumSample(name, t, vel) {
   const src = raw.createBufferSource();
   src.buffer = buf;
   src.playbackRate.value = 1 + (Math.random() * 0.06 - 0.03);
+  if (name === 'conga_l') src.playbackRate.value *= 0.84; /* conga_l 与 conga_h 是同一文件：播放层降 ~3 半音，听起来才是真低康加 */
   const g = raw.createGain();
   const v = vel * (DRUM_GAIN[name] || 1);
   g.gain.setValueAtTime(v, t);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + Math.min(buf.duration * 0.85, 1.8));
+  /* opts.short：缩短衰减（crash 采样模拟 ride 等场景） */
+  const tail = opts && opts.short ? Math.min(buf.duration * 0.85, opts.short) : Math.min(buf.duration * 0.85, 1.8);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + tail);
   src.connect(g);
-  if (vel < 0.45 && (name === 'snare_room' || name === 'snare808' || name === 'snap')) {
+  if (opts && opts.dark) {
+    /* ride 模拟：低通变暗 = 镲片边击的暗色泛音 */
+    const lp = raw.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = 2800;
+    g.connect(lp); lp.connect(DRUM_SAMP.bus);
+  } else if (vel < 0.45 && (name === 'snare_room' || name === 'snare808' || name === 'snap')) {
     /* 幽灵音/轻击：低通变暗 = 真实轻击鼓皮音色（非仅调音量） */
     const lp = raw.createBiquadFilter();
     lp.type = 'lowpass'; lp.frequency.value = 2200;
@@ -1731,10 +2199,11 @@ function silenceSampleBuses() {
 function restoreSampleBuses() {
   try { if (SAMP.bus) SAMP.bus.gain.value = 1; if (SAMP.padBus) SAMP.padBus.gain.value = 1; if (DRUM_SAMP.bus) DRUM_SAMP.bus.gain.value = 1; } catch (e) {}
 }
-/* ================= v4 律动引擎（GROOVE 表 + 排程层逐件 swing） =================
- * 谱面实测/风格对标：hatSwing=摇摆对 hat 族的额外推拉，snareLag=军鼓习惯性拖后，
+/* ================= v4 律动引擎（GROOVE 表 + 全声部共享 swing 网格） =================
+ * 谱面实测/风格对标：hatSwing=八分反拍的额外推拉，snareLag=军鼓习惯性拖后，
  * kickP=kick 去摆（负=略提前）。Transport.swing 对 Transport.schedule 回调不生效，
- * 且各声部律动不同 → swing 全部在排程层逐件计算（baseSwingSec / drumTimeShift）。
+ * → swing 全部在排程层逐件计算。sharedSwingSec 是所有声部（旋律/键盘/贝斯/pad/鼓/
+ * MIDI 导出）共享的"swing 后网格"；drumTimeShift = 共享网格 + 鼓件专属偏移叠加。
  */
 const GROOVE = {
   rnb:   { hatSwing: 0.62, snareLag: 0.028, kickP: -0.004 }, /* v5 醉拍：12→28ms */ /* 重音在 3&，军鼓大拖后 */
@@ -1743,23 +2212,34 @@ const GROOVE = {
   bossa: { hatSwing: 0.22, snareLag: 0.004, kickP: 0      },
   hiphop:{ hatSwing: 0.55, snareLag: 0.014, kickP: -0.004 },
   afro:  { hatSwing: 0.12, snareLag: 0.004, kickP: 0      },
+  funk:     { hatSwing: 0.18, snareLag: 0.006, kickP: -0.006 }, /* 紧：kick 微提前、hat 小幅推拉 */
+  soul:     { hatSwing: 0.58, snareLag: 0.024, kickP: 0.004  }, /* 慵懒：军鼓大拖后、底鼓也躺 */
+  reggae:   { hatSwing: 0.30, snareLag: 0.008, kickP: 0.002  }, /* 反拍强调：hat 反拍中等推拉 */
+  afrobeats:{ hatSwing: 0.26, snareLag: 0.006, kickP: -0.003 }, /* 轻微推拉 */
 };
 const HAT_FAMILY = new Set(['hat', 'ohat', 'ride', 'shekere', 'shaker', 'bell', 'clave']);
 /* B3 互锁：Afro 打击乐错位时间（Tony Allen 式多层前后错开） */
 const AFRO_INTERLOCK = { shekere: -0.003, congaH: 0.008, congaL: 0.008, bell: 0.004, clap: -0.006 };
-function baseSwingSec(pos16) {
+/* 共享 swing 网格：奇数 16 分整体后移 + 八分反拍按风格 hatSwing 推拉。
+   所有声部与 MIDI 导出落在同一张网格上（旧版 hat 族独吞反拍推拉 = 鼓与乐队两张网格） */
+function sharedSwingSec(styleKey, pos16) {
   if (state.meter === 'm68') return 0; /* v5 6/8：三连音网格自带摇曳，swing 不再叠加 */
-  return (Math.round(pos16) % 2 === 1) ? state.swing * secPer16() : 0;
+  let sh = (Math.round(pos16) % 2 === 1) ? state.swing * secPer16() : 0;
+  const grv = GROOVE[styleKey];
+  if (grv) {
+    const s16 = ((Math.round(pos16) % SBAR()) + SBAR()) % SBAR();
+    if (s16 % 4 === 2) sh += grv.hatSwing * (0.5 + state.swing * 2) * secPer16() * 0.9; /* 八分 &：拉向摇摆 */
+  }
+  return sh;
 }
 function drumTimeShift(styleKey, inst, step16) {
   const s16 = ((Math.round(step16) % SBAR()) + SBAR()) % SBAR();
-  let sh = (state.meter === 'm68') ? 0 : (Math.round(step16) % 2 === 1) ? state.swing * secPer16() : 0;
+  let sh = sharedSwingSec(styleKey, step16); /* 鼓件也站共享网格上 */
   const grv = GROOVE[styleKey];
   if (grv) {
-    if (HAT_FAMILY.has(inst)) {
-      const eff = grv.hatSwing * (0.5 + state.swing * 2);
-      if (s16 % 4 === 2) sh += eff * secPer16() * 0.9;       /* 八分 &：拉向摇摆 */
-      else if (s16 % 2 === 1) sh += eff * secPer16() * 0.45;  /* 奇数 16 分 */
+    /* 鼓件专属偏移在共享网格之上叠加 */
+    if (HAT_FAMILY.has(inst) && s16 % 2 === 1 && state.meter !== 'm68') {
+      sh += grv.hatSwing * (0.5 + state.swing * 2) * secPer16() * 0.45; /* hat 族专属：奇数 16 分再拖 */
     }
     if (inst === 'snare' || inst === 'clap') sh += grv.snareLag;
     if (inst === 'kick') sh += grv.kickP;
@@ -1831,11 +2311,12 @@ const SAMP_GUITAR = {
 };
 const SAMP_KEYS = 'electric_piano_1';
 /* v4 S6 键盘按风格分音色：rnb=Rhodes(双层)/jazz=FM 颤音琴/rock=无(吉他chug 为主)
-   bossa=原钢(Jobim)/afro=原钢稀疏顿奏/hiphop=暗黑 polysynth stab */
+   bossa=电钢（原钢采样 404 回退）/afro=原钢稀疏顿奏/hiphop=暗黑 polysynth stab */
 const SAMP_KEYS_BY_STYLE = {
   rnb: '@fmrhodes', jazz: '@vibes', rock: null,
-  bossa: 'acoustic_grand_piano', afro: '@fmrhodes', hiphop: 'pad_3_polysynth',
-  funk: '@fmrhodes', soul: '@fmrhodes', reggae: '@fmrhodes', afrobeats: '@fmrhodes',
+  bossa: 'electric_piano_1', afro: '@fmrhodes', hiphop: 'pad_3_polysynth', /* v15：acoustic_grand_piano 两库都 404 → electric_piano_1（soundfont/soundfont2 均有） */
+  funk: '@fmrhodes', soul: '@fmrhodes', reggae: 'pad_3_polysynth', afrobeats: '@fmrhodes',
+  /* funk/soul/afrobeats = FM tine 顿奏（clav/Rhodes/亮色琴键的最近近似）；reggae = polysynth 短 stab 拼 organ 咬感（无风琴采样可用） */
 }; /* v12: GM 电钢采样退出和声层——换 DX7 式 FM tine 合成（塑料感主犯） */
 const SAMP_BASS = 'electric_bass_finger';
 const SAMP_PAD = {
@@ -1857,10 +2338,12 @@ function ensureBuses() {
   SAMP.busByRole = {};
   const mk = (role) => { const g = raw.createGain(); g.gain.value = 1; SAMP.busByRole[role] = g; return g; };
   /* 吉他 → 失真→EQ→暖声链；keys → EQ→暖声链；贝斯 → 低通→主总线（不过合唱混响） */
-  mk('guitar').connect(nativeInputOf(AE.hpGuitar));
-  mk('keys').connect(nativeInputOf(AE.hpKeys));
-  mk('bass').connect(nativeInputOf(AE.toneFilterBass));
-  mk('pad').connect(nativeInputOf(AE.hpPad));
+  /* v14 混音路由修复：采样总线先进对应层 Volume 推子，再进分工表链——UI 推子对所有发声路径生效。
+     吉他 → hpGuitar 链；keys → hpKeys 链；贝斯 → bassVol→hpBass 链；pad → synthVol→hpPad 链 */
+  mk('guitar').connect(nativeInputOf(AE.guitarVol));
+  mk('keys').connect(nativeInputOf(AE.keysVol));
+  mk('bass').connect(nativeInputOf(AE.bassVol));
+  mk('pad').connect(nativeInputOf(AE.synthVol));
   /* 空间发送（原生 gain → Tone.Gain） */
   const mkSend = (role, send) => { const g = raw.createGain(); g.gain.value = 0.3; g.connect(nativeInputOf(send)); return g; };
   SAMP.sendByRole = {
@@ -1869,10 +2352,11 @@ function ensureBuses() {
     bass: mkSend('bass', AE.sendBass),
     pad: mkSend('pad', AE.sendPad),
   };
-  SAMP.busByRole.guitar.connect(SAMP.sendByRole.guitar);
-  SAMP.busByRole.keys.connect(SAMP.sendByRole.keys);
-  SAMP.busByRole.bass.connect(SAMP.sendByRole.bass);
-  SAMP.busByRole.pad.connect(SAMP.sendByRole.pad);
+  /* v14：发送改挂层推子之后——mute/推子对混响尾同样生效（之前挂总线前端，mute 后混响还在响） */
+  AE.guitarVol.connect(SAMP.sendByRole.guitar);
+  AE.keysVol.connect(SAMP.sendByRole.keys);
+  AE.bassVol.connect(SAMP.sendByRole.bass);
+  AE.synthVol.connect(SAMP.sendByRole.pad);
   /* 兼容旧引用 */
   SAMP.bus = SAMP.busByRole.guitar;
   SAMP.padBus = SAMP.busByRole.pad;
@@ -1956,6 +2440,10 @@ const STYLE_TIMBRE = {
   bossa: { guitar:{b:0.45,s:0.55}, keys:{b:0.35,s:0.50}, bass:{b:0.35,s:0.55}, pad:{b:0.30,s:0.70} },
   afro:  { guitar:{b:0.50,s:0.50}, keys:{b:0.45,s:0.45}, bass:{b:0.40,s:0.60}, pad:{b:0.35,s:0.60} },
   hiphop:{ guitar:{b:0.35,s:0.75}, keys:{b:0.25,s:0.85}, bass:{b:0.20,s:0.95}, pad:{b:0.20,s:0.95} },
+  funk:     { guitar:{b:0.45,s:0.30}, keys:{b:0.45,s:0.35}, bass:{b:0.45,s:0.35}, pad:{b:0.35,s:0.40} }, /* 亮而短：clav/闷音 chop/slap 都是高瞬态低延音 */
+  soul:     { guitar:{b:0.35,s:0.75}, keys:{b:0.30,s:0.70}, bass:{b:0.25,s:0.85}, pad:{b:0.25,s:0.90} }, /* 暖而长：福音长音、圆贝斯、教堂合唱垫 */
+  reggae:   { guitar:{b:0.40,s:0.45}, keys:{b:0.35,s:0.50}, bass:{b:0.20,s:0.90}, pad:{b:0.30,s:0.70} }, /* skank 脆亮短促 + dub 贝斯最暗最圆 */
+  afrobeats:{ guitar:{b:0.55,s:0.50}, keys:{b:0.45,s:0.55}, bass:{b:0.30,s:0.85}, pad:{b:0.30,s:0.85} }, /* 明亮拨弦 + 圆 sub 贝斯（log-drum 感） */
 };
 function ensureSampleBank(name, base) {
   const key = base + ':' + name;
@@ -2016,20 +2504,25 @@ function loadInstruments() {
     done++;
     sampStatus(done < core.length ? `正在加载采样音色 ${done}/${core.length}…` : '✓ 核心采样音色已就绪');
   }));
-  /* 后台错峰预载其余吉他（播放中不加载，避免解码风暴导致卡顿） */
-  Object.values(SAMP_GUITAR).forEach((n, i) => {
-    if (!core.includes(n)) setTimeout(() => { if (!state.playing) ensureSample(n); }, 15000 + i * 6000);
-  });
-  /* v4 预载：所有启用风格的 pad bank 与键盘音色（换挡换色不卡解码） */
+  /* v14 后台串行+空闲预载：一次只加载一个（解码风暴是播放卡顿根源），播放中整体挂起 */
+  const extraSet = new Set();
+  Object.values(SAMP_GUITAR).forEach(n => { if (!core.includes(n)) extraSet.add(n); });
   const actStyles = state.styles.length ? state.styles : ['rnb'];
-  const extra = new Set();
   actStyles.forEach(k => {
     const pc = PAD_BY_STYLE[k];
-    if (pc && SAMP_PAD[pc.bank]) extra.add(SAMP_PAD[pc.bank]);
+    if (pc && SAMP_PAD[pc.bank]) extraSet.add(SAMP_PAD[pc.bank]);
     const kn = SAMP_KEYS_BY_STYLE[k];
-    if (kn && kn !== '@vibes') extra.add(kn);
+    if (kn && kn !== '@vibes') extraSet.add(kn);
   });
-  extra.forEach(n => { if (!core.includes(n)) ensureSample(n); });
+  const queue = [...extraSet].filter(n => !core.includes(n) && !n.startsWith('@'));
+  let qi = 0;
+  const step = () => {
+    if (qi >= queue.length) return;
+    if (state.playing) { setTimeout(step, 5000); return; } /* 播放中挂起，停止后继续 */
+    const n = queue[qi++];
+    ensureSample(n).then(() => setTimeout(step, 1200), () => setTimeout(step, 1200));
+  };
+  setTimeout(step, 3000);
 }
 
 function applyGuitarPatch() {
@@ -2095,9 +2588,9 @@ const secPer16 = () => 60 / state.bpm / 4;
 function scheduleAll() {
   Tone.Transport.cancel(0);
   Tone.Transport.bpm.value = state.bpm;
-  /* v4：swing 由排程层逐件计算（baseSwingSec/drumTimeShift）。
+  /* v4：swing 由排程层逐件计算（sharedSwingSec 共享网格 + drumTimeShift 鼓件专属偏移）。
      Transport.swing 只对 Sequence/Part 迭代生效，对 Transport.schedule 回调无效——
-     旧代码里 swing 滑条对实时播放完全不生效，MIDI 导出却生效（两套时间），此处统一 */
+     旧代码里 swing 滑条对实时播放完全不生效，MIDI 导出却生效（两套时间），此处统一（导出见 buildMidi） */
   Tone.Transport.swing = 0;
   Tone.Transport.swingSubdivision = '16n';
   _ksStepsCache = null; /* pad/keys 侧链缓存随鼓重算 */
@@ -2115,7 +2608,7 @@ function scheduleAll() {
       let durSteps = Math.max(1, Math.round(e.dur * 4));
       if (e.tie && nx && nx.beat - e.beat <= 2 && !nx.ghost) durSteps = Math.max(durSteps, Math.round((nx.beat - e.beat) * 4));
       const dur = durSteps * secPer16() * 0.95;
-      const toff = voiceOff(styleOfBar(e.beat), 'melody', e.beat) + baseSwingSec(e.beat * SPB());
+      const toff = voiceOff(styleOfBar(e.beat), 'melody', e.beat) + sharedSwingSec(styleOfBar(e.beat), e.beat * SPB());
       /* v4 §2.3 滑音放宽：tie 级进必滑（|Δ|≤2）；|Δ|≤5 且缝隙 ≤0.25 拍也滑；大跳干净分离 */
       const gapBeats = prevMel ? e.beat - prevMel.end : 99;
       const dMidi = prevMel ? e.midi - prevMel.midi : 0;
@@ -2147,9 +2640,9 @@ function scheduleAll() {
       const t = t16(Math.round(e.beat * SPB()));
       const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.95;
       const names = e.notes.map(midiName);
-      const koff = voiceOff(styleOfBar(e.beat), 'keys', e.beat) + baseSwingSec(e.beat * SPB());
+      const koff = voiceOff(styleOfBar(e.beat), 'keys', e.beat) + sharedSwingSec(styleOfBar(e.beat), e.beat * SPB());
       const ks = SAMP_KEYS_BY_STYLE[styleOfBar(e.beat)] || SAMP_KEYS;
-      const kduck = duckMulAt(e.beat, 0.68); /* B6：kick/snare 后和声闪避（v4.2 加深，泵感=鼓的力量感） */
+      const kduck = duckMulAt(e.beat, 0.85); /* B6：kick/snare 后和声闪避（v15 0.68→0.85：深度闪避把 comping 泵没了） */
       Tone.Transport.schedule(tt2 => { const tt = tt2 + koff;
         const gi = e.inst && e.inst.startsWith('guitar:') ? e.inst.slice(7) : null;
         const gInst = gi && sampOf(SAMP_GUITAR[gi], 'guitar');
@@ -2174,24 +2667,26 @@ function scheduleAll() {
       const t = t16(Math.round(e.beat * SPB()));
       const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.98;
       const names = e.notes.map(midiName);
-      const poff = voiceOff(styleOfBar(e.beat), 'pad', e.beat) + baseSwingSec(e.beat * SPB());
+      const poff = voiceOff(styleOfBar(e.beat), 'pad', e.beat) + sharedSwingSec(styleOfBar(e.beat), e.beat * SPB());
       const lag = e.padLag || 0;
       const pcfg = PAD_BY_STYLE[styleOfBar(e.beat)] || PAD_BY_STYLE.rnb;
       const padName = SAMP_PAD[pcfg.bank];
       const inst = (padName && sampOf(padName, 'pad')) || null;
-      const pduck = duckMulAt(e.beat, 0.68); /* B6：kick 后 pad 闪避更深 */
+      const pduck = duckMulAt(e.beat, 0.85); /* B6：kick 后 pad 闪避（v15 0.68→0.85：深闪=糊） */
       Tone.Transport.schedule(tt => {
         if (inst) for (const n of e.notes) inst.play(n, tt + poff + lag, { duration: dur, gain: e.vel * 1.4 * pduck });
-        else AE.synthPad.triggerAttackRelease(names, dur, tt + poff + lag, e.vel * pduck);
-        /* v12 模拟垫底永随：三锯齿微失谐在 pad 底下托着，choir 采样也变成"模拟合成器 + 人声"的混合体 */
-        for (const p of AE.padUnder) p.triggerAttackRelease(names, dur, tt + poff + lag, e.vel * 0.9 * pduck);
+        else {
+          AE.synthPad.triggerAttackRelease(names, dur, tt + poff + lag, e.vel * pduck);
+          /* v15：supersaw 模拟垫底只在 Pad 采样缺失时启用（与采样叠加=浑浊加倍） */
+          for (const p of AE.padUnder) p.triggerAttackRelease(names, dur, tt + poff + lag, e.vel * 0.9 * pduck);
+        }
       }, t);
     }
     /* v5 horn 层：反拍铜管 stab（走 pad 采样库，短促 envelope） */
     for (const e of hornEvents) {
       const t = t16(Math.round(e.beat * SPB()));
       const dur = Math.max(1, Math.round(e.dur * SPB())) * secPer16() * 0.9;
-      const poff = voiceOff('afro', 'pad', e.beat);
+      const poff = voiceOff('afro', 'pad', e.beat) + sharedSwingSec('afro', e.beat * SPB());
       Tone.Transport.schedule(tt => {
         const inst = sampOf('brass_section', 'pad') || (SAMP_PAD.warm && sampOf(SAMP_PAD.warm, 'pad'));
         if (inst) for (const n of e.notes) inst.play(n, tt + poff, { duration: dur, gain: e.vel * 1.3 });
@@ -2209,7 +2704,7 @@ function scheduleAll() {
       const duckMul = ducked ? 0.7 : 1;
       const t = t16(Math.round(e.beat * SPB()));
       const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.95;
-      const boff = voiceOff(styleOfBar(e.beat), 'bass', e.beat) + baseSwingSec(e.beat * SPB());
+      const boff = voiceOff(styleOfBar(e.beat), 'bass', e.beat) + sharedSwingSec(styleOfBar(e.beat), e.beat * SPB());
       Tone.Transport.schedule(tt => {
         if (e.b808) {
           if (!play808(e.midi, tt, dur * 1.6, e.vel, e.slideTo)) {
@@ -2231,7 +2726,12 @@ function scheduleAll() {
         + drumTimeShift(dStyle, e.inst, e.step16);
       Tone.Transport.schedule(tt0 => { const tt = tt0 + doff;
         const kit = e.kit || DRUM_KITS.rnb;
-        const smp = (inst) => { const n = kit[inst]; return n ? playDrumSample(n, tt, e.vel) : false; };
+        const smp = (inst) => {
+          const n = kit[inst]; if (!n) return false;
+          /* v15：jazz ride 无采样——复用 crash 低力度+低通变暗+缩短衰减模拟 ride 叮声 */
+          if (inst === 'ride' && n === 'crash') return playDrumSample(n, tt, e.vel * 0.55, { dark: true, short: 0.5 });
+          return playDrumSample(n, tt, e.vel);
+        };
         if (smp(e.inst)) {
           /* B2 叠层：强 kick 叠 808 次低音 / rnb 军鼓叠 rimshot（采样命中时也叠） */
           if (e.sub) trig808kick(tt + 0.002, e.vel * 0.5);
@@ -2273,6 +2773,21 @@ function scheduleAll() {
   Tone.Transport.loop = true;
 }
 
+/* v14 页面加载即预热：suspended 状态的 AudioContext 也能 fetch+decode，
+   用户点播放时核心采样/鼓/吉他采样已就绪，音色门秒过。
+   注意：Tone.start() 仍需用户手势（ensureAudio 内保持），这里只建图+预载，不出声。 */
+function warmupAudio() {
+  if (typeof Tone === 'undefined' || state.audioReady) return;
+  try {
+    buildAudio(); /* 建图不依赖 running state */
+    state.audioReady = true;
+    loadInstruments();
+    loadDrumSamples();
+    loadGuitarSamples();
+    loadWurli(); /* 后台预热，fire-and-forget，不阻塞任何路径 */
+  } catch (e) { console.warn('音频预热失败（不影响播放手势路径）', e); }
+}
+
 async function ensureAudio() {
   if (typeof Tone === 'undefined') return false;
   if (!state.audioReady) { buildAudio(); state.audioReady = true; loadInstruments(); loadDrumSamples(); loadGuitarSamples(); loadWurli(); /* v13 后台预热 Wurli 采样电钢 */ }
@@ -2302,12 +2817,13 @@ async function togglePlay() {
     restoreSampleBuses();
     applyMix();
     (async () => {
-      /* 播放闸：仅会话首次等待核心采样（6s 封顶），之后直接播 */
+      /* 播放闸：仅会话首次等待核心采样（6s 封顶），之后直接播；v14 页面加载即预热，多数情况此门秒过 */
       const need = [SAMP_GUITAR[state.layers.guitar.patch], SAMP_KEYS, SAMP_BASS, SAMP_PAD[state.layers.synth.patch]].filter(Boolean);
       const t0 = Date.now();
       while (!state._gateDone && need.some(n => !SAMP.cache[state.sfBase + ':' + n]) && Date.now() - t0 < 6000) {
         need.forEach(n => ensureSample(n));
-        sampStatus('正在准备音色…');
+        const done = need.filter(n => SAMP.cache[state.sfBase + ':' + n]).length;
+        sampStatus('正在准备音色 ' + done + '/' + need.length + '…'); /* v14：显示具体进度 */
         await new Promise(r => setTimeout(r, 250));
         if (state.playing) return; /* 等待中被再次点击则取消 */
       }
@@ -2435,59 +2951,101 @@ async function renderMelodyToWav(guideOffsetBeats) {
 /* v6 分块拼接：块长 30s、步进 28s（2s 等功率交叉淡化），整曲突破 30s 上限 */
 /* v11 provider 3：浏览器内置 MusicGen（transformers.js）——零安装零 token 的唱片级渲染。
    无 mel 条件时把完整和弦走向写进提示词（模型对和弦名跟随度好），风格描述沿用 PROMPT_V2 */
-let _browserGen = null;
-/* v13 smplr 采样电钢：WurlitzerEP200（GregSullivan E-Pianos 采样，带力度层）——RnB/Soul 的标志性键盘。
-   加载失败/超时自动回退 v12 的 FM tine；库走 jsdelivr/unpkg 双镜像 */
-let _wurli = null, _wurliFailed = false;
-async function loadWurli() {
-  if (_wurli || _wurliFailed) return _wurli;
-  try {
-    const raw = Tone.getContext().rawContext;
-    let mod = null;
-    try { mod = await import('https://cdn.jsdelivr.net/npm/smplr/+esm'); }
-    catch (e1) { mod = await import('https://unpkg.com/smplr/+esm'); }
-    const EP = mod.ElectricPiano;
-    if (!EP) throw new Error('no EP');
-    const inst = new EP(raw, { instrument: 'WurlitzerEP200' });
-    inst.connect(nativeInputOf(AE.hpKeys)); /* 进入分工表链：高通→2.8k让位→低通→musicBus */
-    if (inst.load) await Promise.race([inst.load(), new Promise((_, rj) => setTimeout(() => rj(new Error('timeout')), 45000))]);
-    _wurli = inst;
-  } catch (e) { _wurliFailed = true; _wurli = null; }
-  return _wurli;
+let _browserGen = null, _browserGenDevice = null;
+/* v14 引擎 B 修复：@xenova/transformers v2 不支持 MusicGen（必抛 Unsupported model type），
+   且 v3 起包名改为 @huggingface/transformers（旧 neuralRender 里的 @xenova/transformers@3.3.1 是不存在的版本，404）。
+   统一到真实存在的 v3.8.1（registry 已验证）；jsdelivr 15s 超时快切 unpkg（国内 jsdelivr 常挂起）。 */
+let _tfMod = null;
+async function loadTransformers(onStatus) {
+  if (_tfMod) return _tfMod;
+  const VER = '3.8.1';
+  const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rj) => setTimeout(() => rj(new Error('加载超时')), ms))]);
+  try { _tfMod = await withTimeout(import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@' + VER), 15000); }
+  catch (e1) {
+    if (onStatus) onStatus('② jsdelivr 不可达，切换 unpkg 镜像…');
+    _tfMod = await withTimeout(import('https://unpkg.com/@huggingface/transformers@' + VER), 20000);
+  }
+  _tfMod.env.allowLocalModels = false;
+  _tfMod.env.useBrowserCache = true;
+  return _tfMod;
+}
+async function buildMusicGenPipe(device, onStatus) {
+  const t = await loadTransformers(onStatus);
+  /* v14 进度回调修复：v3 回调里 progress 已是百分比、total 是字节数——旧算法 progress/total*100 恒 ~0% */
+  const progress = (p) => {
+    if (!onStatus) return;
+    if (p.status === 'progress') {
+      const pct = typeof p.progress === 'number' && p.progress <= 100 ? Math.round(p.progress)
+        : (p.total ? Math.round((p.loaded || 0) / p.total * 100) : 0);
+      onStatus('② 模型下载 ' + pct + '%' + (p.file ? '（' + p.file + '）' : '') + '（仅首次）…');
+    }
+  };
+  const opts = { dtype: 'q8', progress_callback: progress };
+  if (device) opts.device = device;
+  return t.pipeline('text-to-audio', 'Xenova/musicgen-small', opts);
 }
 
 async function browserGenerateChunk(prompt, temperature, onStatus) {
   if (!_browserGen) {
     if (onStatus) onStatus('② 首次使用：加载浏览器 AI 模型（约 400MB，下载进度见下）…');
-    /* 双 CDN 兜底：jsdelivr 部分地区不可达时自动换 unpkg */
-    let trans = null;
-    try { trans = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.0'); }
-    catch (e1) {
-      if (onStatus) onStatus('② jsdelivr 不可达，切换 unpkg 镜像…');
-      trans = await import('https://unpkg.com/@xenova/transformers@2.17.0');
+    /* device 优先 webgpu，失败回退 wasm（v3 + WebGPU 上 musicgen 有输出异常的已知 issue） */
+    if (navigator.gpu) {
+      try { _browserGen = await buildMusicGenPipe('webgpu', onStatus); _browserGenDevice = 'webgpu'; }
+      catch (e) {
+        if (onStatus) onStatus('② WebGPU 加载失败（' + String(e && e.message || e).slice(0, 80) + '），回退 wasm…');
+      }
     }
-    trans.env.allowLocalModels = false;
-    trans.env.useBrowserCache = true;
-    const progress = (p) => {
-      if (onStatus && p.status === 'progress' && p.total) onStatus('② 模型下载 ' + Math.round(p.progress / p.total * 100) + '%（仅首次）…');
-    };
-    _browserGen = await trans.pipeline('text-to-audio', 'Xenova/musicgen-small', { progress_callback: progress });
+    if (!_browserGen) { _browserGen = await buildMusicGenPipe('wasm', onStatus); _browserGenDevice = 'wasm'; }
   }
   /* 和弦走向逐小节写进指令——浏览器路径没有旋律引导带，这是防"和声跑遍"的替身 */
   if (!chordTimeline.length) buildChordTimeline();
   const chords = chordTimeline.map(c => c.name).join(' - ');
   const full = prompt + ', chord progression: ' + chords + ', stay in key, consistent harmony';
-  if (onStatus) onStatus('② 浏览器 AI 作曲中（CPU 约 1-3 分钟/段，请勿关页面）…');
-  const out = await _browserGen(full, {
+  if (onStatus) onStatus('② 浏览器 AI 作曲中（' + (_browserGenDevice === 'webgpu' ? 'WebGPU 加速' : 'CPU 约 1-3 分钟/段') + '，请勿关页面）…');
+  const genOpts = {
     max_new_tokens: 1400, /* musicgen 50 token/秒 ≈ 28s */
     do_sample: true,
     temperature: Math.min(1.5, (temperature || 1.0) + 0.1),
     top_k: 50,
-  });
+    guidance_scale: 3.0,
+  };
+  let out;
+  try {
+    out = await _browserGen(full, genOpts);
+  } catch (e) {
+    if (_browserGenDevice !== 'webgpu') throw e;
+    /* WebGPU 生成异常（已知 issue）：回退 wasm 重试一次，仍失败则把错误抛给状态栏，不静默 */
+    if (onStatus) onStatus('② WebGPU 生成异常，回退 wasm 重新生成…');
+    try { if (_browserGen.dispose) _browserGen.dispose(); } catch (e2) {}
+    _browserGen = await buildMusicGenPipe('wasm', onStatus);
+    _browserGenDevice = 'wasm';
+    out = await _browserGen(full, genOpts);
+  }
   const audio = out.audio instanceof Float32Array ? out.audio : new Float32Array(out.audio);
   const sr2 = out.sampling_rate || 32000;
   const blob = encodeWav([audio], sr2);
   return await blob.arrayBuffer();
+}
+/* v13 smplr 采样电钢：WurlitzerEP200（GregSullivan E-Pianos 采样，带力度层）——RnB/Soul 的标志性键盘。
+   加载失败/超时自动回退 v12 的 FM tine；库走 jsdelivr/unpkg 双镜像（v14：加超时快切） */
+let _wurli = null, _wurliFailed = false;
+async function loadWurli() {
+  if (_wurli || _wurliFailed) return _wurli;
+  try {
+    const raw = Tone.getContext().rawContext;
+    /* v14：jsdelivr 国内常长时间挂起——import 加 8s 超时快切 unpkg；本函数永远 fire-and-forget，不阻塞播放 */
+    const withTimeout = (p, ms, tag) => Promise.race([p, new Promise((_, rj) => setTimeout(() => rj(new Error(tag + ' 超时')), ms))]);
+    let mod = null;
+    try { mod = await withTimeout(import('https://cdn.jsdelivr.net/npm/smplr/+esm'), 8000, 'jsdelivr'); }
+    catch (e1) { mod = await withTimeout(import('https://unpkg.com/smplr/+esm'), 15000, 'unpkg'); }
+    const EP = mod.ElectricPiano;
+    if (!EP) throw new Error('no EP');
+    const inst = new EP(raw, { instrument: 'WurlitzerEP200' });
+    inst.connect(nativeInputOf(AE.keysVol)); /* v14：进键盘层推子（之前直连分工表链，推子对 Wurli 无效） */
+    if (inst.load) await withTimeout(inst.load(), 20000, '采样加载'); /* v14：45s→20s，失败回退 FM tine */
+    _wurli = inst;
+  } catch (e) { _wurliFailed = true; _wurli = null; }
+  return _wurli;
 }
 
 async function studioGenerateChunk(prompt, melodyURI, token, temperature) {
@@ -2561,11 +3119,14 @@ async function studioRender(variantIdx, temperature, label) {
   const secPerBeat = 60 / state.bpm;
   const loopSec = totalBars() * beatsPerBar * secPerBeat;
   const CHUNK = 28, FADE = 0.5; /* 30s 块、28s 步进、0.5s 交叉淡化（2s 会让 7% 时长处于双音乐重叠，是"糊"的来源之一） */
-  const nChunks = Math.max(1, Math.ceil(loopSec / CHUNK));
+  let nChunks = Math.max(1, Math.ceil(loopSec / CHUNK));
   let localOK = false;
   try { localOK = (await fetch('http://127.0.0.1:7860/health', { signal: AbortSignal.timeout(1500) })).ok; } catch (e) {}
   /* v11 零安装底线：没本机服务也没 token → 浏览器内置 AI 渲染（模型约 400MB，之后离线可用） */
   const useBrowser = !localOK && !token;
+  /* v14：浏览器 MusicGen 单块上限 30s——每块独立生成必然音色漂移，宁可截取前 30s 并明确提示 */
+  const aiTrunc = useBrowser && nChunks > 1;
+  if (aiTrunc) nChunks = 1;
   if (useBrowser) status.textContent = '未检测到本机服务/Replicate → 启用【浏览器内置 AI 渲染】（首次下载模型约 400MB，之后离线可用）…';
   status.textContent = '① ' + (useBrowser ? '整理作曲指令（风格+和弦走向+编曲画面）…' : '正在渲染引导带（旋律+和声+贝斯）…');
   try {
@@ -2577,7 +3138,7 @@ async function studioRender(variantIdx, temperature, label) {
         const wav = await renderMelodyToWav(i * CHUNK / secPerBeat);
         melodyURI = await blobToDataURI(wav);
       }
-      status.textContent = '② AI 录音棚 ' + (i + 1) + '/' + nChunks + '…' + (localOK ? '（本机 medium 模型）' : useBrowser ? '（浏览器内置·首次较慢）' : '（Replicate）');
+      status.textContent = '② AI 录音棚 ' + (i + 1) + '/' + nChunks + '…' + (localOK ? '（本机 medium 模型）' : useBrowser ? '（浏览器内置·首次较慢）' : '（Replicate）') + (aiTrunc ? ' ⚠ AI 渲染限 30 秒，已截取前 30 秒' : '');
       const ab = useBrowser
         ? await browserGenerateChunk(prompt, temperature, (t) => { status.textContent = t; })
         : await studioGenerateChunk(prompt, melodyURI, token, temperature);
@@ -2619,7 +3180,7 @@ async function studioRender(variantIdx, temperature, label) {
     document.getElementById('studio-result').hidden = false;
     document.getElementById('studio-audio').src = url;
     document.getElementById('studio-dl').href = url;
-    status.textContent = '✓ ' + (label ? label + ' 完成（' : '完成！AI 按你的旋律/和声/风格生成 ') + Math.round(total) + 's 唱片级渲染（引导带含完整和声，模型只负责演奏与录音）。';
+    status.textContent = '✓ ' + (label ? label + ' 完成（' : '完成！AI 按你的旋律/和声/风格生成 ') + Math.round(total) + 's 唱片级渲染（引导带含完整和声，模型只负责演奏与录音）。' + (aiTrunc ? ' ⚠ AI 渲染限 30 秒，已截取前 30 秒。' : '');
     try { studioHealthCheck(stitched); } catch (e) {}
   } catch (e) {
     status.textContent = '出错：' + (e && e.message ? e.message.slice(0, 240) : e);
@@ -2634,36 +3195,29 @@ async function studioRender(variantIdx, temperature, label) {
 let NEURAL_PIPE = null, NEURAL_LOADING = null;
 async function neuralRender() {
   const status = document.getElementById('studio-status');
-  if (!navigator.gpu) { status.textContent = '本浏览器不支持 WebGPU（需桌面版 Chrome/Edge）；可改用「渲染成唱片」或导出 WAV 到 HuggingFace 免费生成'; return; }
+  /* v14：不再硬卡 WebGPU——优先 webgpu，失败/不支持自动回退 wasm（慢但可用）；两条路径统一走 @huggingface/transformers v3.8.1 */
   try {
     if (!NEURAL_PIPE) {
       if (!NEURAL_LOADING) {
         NEURAL_LOADING = (async () => {
-          status.textContent = '正在加载神经网络（首次约 1.2GB，之后走缓存）…';
-          const t = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@3.3.1');
-          t.env.allowLocalModels = false;
-          t.env.progress_callback = p => {
-            if (p.status === 'progress') status.textContent = '下载模型 ' + (p.file || '') + ' ' + Math.round(p.progress || 0) + '%';
-          };
-          let pipe;
-          try {
-            pipe = await t.pipeline('text-to-audio', 'Xenova/musicgen-small', { dtype: 'q8' });
-          } catch (e) {
-            pipe = await t.pipeline('text-to-audio', 'Xenova/musicgen-small');
+          status.textContent = '正在加载神经网络（首次约 400MB，之后走缓存）…';
+          if (navigator.gpu) {
+            try { return await buildMusicGenPipe('webgpu', t2 => { status.textContent = t2; }); }
+            catch (e) { status.textContent = 'WebGPU 加载失败，回退 wasm（较慢）…'; }
           }
-          return pipe;
+          return await buildMusicGenPipe('wasm', t2 => { status.textContent = t2; });
         })();
       }
       NEURAL_PIPE = await NEURAL_LOADING;
     }
-    status.textContent = '🧠 神经网络生成中（约 1-5 分钟，取决显卡）…';
+    status.textContent = '🧠 神经网络生成中（WebGPU 约 1-2 分钟 / wasm 约 1-5 分钟）…';
     const prompt = buildStudioPrompt();
     const out2 = await NEURAL_PIPE(prompt, {
       max_new_tokens: 512,
       do_sample: true,
       temperature: 1.0,
       top_k: 50,
-      guidance_scale: null,
+      guidance_scale: 3.0,
     });
     const audio = out2.audio, sr = out2.sampling_rate || 32000;
     const wav = encodeWav([audio], sr);
@@ -2786,8 +3340,10 @@ function buildMidi() {
   const totalTicks = totalBars() * BPB() * tpb;
   const noteOn = (tick, ch, note, vel) => ev.push({ tick, order: 2, bytes: [0x90 | ch, note, vel] });
   const noteOff = (tick, ch, note) => ev.push({ tick, order: 1, bytes: [0x80 | ch, note, 0] });
-  /* swing 对齐：与 Tone.Transport.swing('16n') 一致，奇数 16 分位移 */
-  const swingAdd = pos16 => (Math.round(pos16) % 2 === 1 ? Math.round(state.swing * tpb / 4) : 0);
+  /* swing 对齐：与排程层共享同一张 swing 网格（sharedSwingSec；鼓件走 drumTimeShift 含专属偏移），
+     秒 → tick 换算：1 个 16 分 = tpb/4 ticks */
+  const swingTicks = (styleKey, pos16) => Math.round(sharedSwingSec(styleKey, pos16) / secPer16() * tpb / 4);
+  const drumTicks = (styleKey, inst, step16) => Math.round(drumTimeShift(styleKey, inst, step16) / secPer16() * tpb / 4);
   const notePair = (t, dur, ch, note, vel) => {
     if (t >= totalTicks) return;
     noteOn(t, ch, note, vel);
@@ -2803,17 +3359,17 @@ function buildMidi() {
   ev.push({ tick: 0, order: 0, bytes: [0xC2, 33] });
 
   for (const e of melodyEvents) {
-    const t = Math.round(e.beat * tpb) + swingAdd(e.beat * SPB());
+    const t = Math.round(e.beat * tpb) + swingTicks(styleOfBar(e.beat), e.beat * SPB());
     const dur = Math.round(e.dur * tpb);
     notePair(t, dur, 0, e.midi, clamp(Math.round(e.vel * 127), 25, 127));
   }
   for (const e of keysEvents) {
-    const t = Math.round(e.beat * tpb) + swingAdd(e.beat * SPB());
+    const t = Math.round(e.beat * tpb) + swingTicks(styleOfBar(e.beat), e.beat * SPB());
     const dur = Math.round(e.dur * tpb);
     for (const n of e.notes) notePair(t, dur, 1, n, clamp(Math.round(e.vel * 127), 20, 110));
   }
   for (const e of bassEvents) {
-    const t = Math.round(e.beat * tpb) + swingAdd(e.beat * SPB());
+    const t = Math.round(e.beat * tpb) + swingTicks(styleOfBar(e.beat), e.beat * SPB());
     const dur = Math.round(e.dur * tpb);
     notePair(t, dur, 2, e.midi, clamp(Math.round(e.vel * 127), 25, 120));
   }
@@ -2822,13 +3378,14 @@ function buildMidi() {
   const domStyle = state.styles.length === 1 ? state.styles[0] : 'rnb';
   ev.push({ tick: 0, order: 0, bytes: [0xC3, PAD_PROGRAM[(PAD_BY_STYLE[domStyle] || PAD_BY_STYLE.rnb).bank] || 90] });
   for (const e of synthEvents) {
-    const t = Math.round(e.beat * tpb) + swingAdd(e.beat * SPB());
+    const t = Math.round(e.beat * tpb) + swingTicks(styleOfBar(e.beat), e.beat * SPB());
     const dur = Math.round(e.dur * tpb);
     for (const n of e.notes) notePair(t, dur, 3, n, clamp(Math.round(e.vel * 127 * 1.4), 15, 100));
   }
   const DRUM_GM = { kick: 36, snare: 38, hat: 42, ohat: 46, ride: 51, bell: 56, congaH: 63, congaL: 64, crash: 49, shekere: 70, shaker: 70, clap: 39, snap: 37, clave: 75 };
   for (const e of drumEvents) {
-    const t = Math.round(e.step16 * tpb / 4) + swingAdd(e.step16);
+    const dStyle = styleOfBar(e.step16 / SPB());
+    const t = Math.round(e.step16 * tpb / 4) + drumTicks(dStyle, e.inst, e.step16);
     const note = DRUM_GM[e.inst]; if (note === undefined) continue;
     notePair(t, Math.round(tpb / 4), 9, note, clamp(Math.round(e.vel * 127), 20, 127));
   }
@@ -2961,7 +3518,7 @@ function applyTone(layer) {
     AE.toneDistKeys.distortion = t.t * 0.25;
     AE.sendKeys.gain.value = t.s * 0.55 * perfMul; /* v5.2 0.9→0.55：电钢琴不再泡在大混响里 */
   } else if (layer === 'bass' && AE.toneFilterBass) {
-    AE.toneFilterBass.frequency.value = 400 + t.b * 9000; /* 200Hz(闷)~9.4kHz(亮)，默认不再闷 */
+    AE.toneFilterBass.frequency.value = 300 + t.b * 1200; /* 300Hz(闷)~1.5kHz(亮)，默认 ≈660Hz——旧公式 400+t.b*9000 实测 3100Hz，贝斯泛音全频抢戏 */
     AE.sendBass.gain.value = t.s * 0.25;
   } else if (layer === 'pad' && AE.toneEqPad) {
     AE.toneEqPad.high.value = brightDb;
@@ -3006,12 +3563,16 @@ const STYLE_FX = {
 function applyStyleFx(styleKey) {
   const fx = STYLE_FX[styleKey];
   if (!fx || !AE.ready || !AE.masterVerb) return;
-  /* fx.cw→混响湿度, fx.rw→衰减长度映射 */
+  /* fx.cw→混响湿度, fx.rw→衰减长度映射；v15 全风格 decay 上限 2.2s（长尾=浑浊） */
   AE.masterVerb.wet.value = Math.min(0.5, fx.cw * 0.6); /* 收敛：wash 会埋掉鼓和律动 */
-  AE.masterVerb.decay = 1 + fx.rw * 3.2;
-  /* v8 deca joins 空间/调制包：rnb = 超大空间感(3.4s) + Juno 合唱 pad */
+  AE.masterVerb.decay = Math.min(2.2, 1 + fx.rw * 3.2);
+  /* v8 deca joins 空间/调制包：rnb = 大空间感(1.8s，旧 3.4s 太糊) + Juno 合唱 pad */
   if (AE.padChorus) AE.padChorus.wet.value = styleKey === 'rnb' ? 0.5 : styleKey === 'soul' ? 0.3 : 0;
-  if (styleKey === 'rnb') { AE.masterVerb.decay = 3.4; AE.masterVerb.wet.value = Math.min(0.55, fx.cw * 0.6 + 0.06); }
+  if (styleKey === 'rnb') { AE.masterVerb.decay = 1.8; AE.masterVerb.wet.value = Math.min(0.55, fx.cw * 0.6 + 0.06); }
+  /* v15 keys 颤音/合唱按风格门控：rnb/soul 开（Rhodes 招牌调味），jazz/rock 等关（常开调制=塑料浑浊） */
+  const keysMod = (styleKey === 'rnb' || styleKey === 'soul') ? 1 : 0;
+  if (AE.keysTremolo) AE.keysTremolo.wet.value = keysMod;
+  if (AE.keysChorus) AE.keysChorus.wet.value = keysMod;
 }
 
 /* ---------- 风格整体配置：切换风格 = 整套编曲画面变换 ---------- */
@@ -3021,7 +3582,7 @@ const STYLE_SETUP = {
   rock:  { guitar: 'dist',   keys: 'auto',  drums: 'drive', swing: 0,  bpm: 122, synth: 'sweep',  preset: 'rock-min' },
   bossa: { guitar: 'nylon',  keys: 'auto',  drums: 'auto',  swing: 2,  bpm: 78,  synth: 'warm',   preset: 'bossa-251' }, /* 138=Samba，78 才是 Bossa */
   afro:  { guitar: 'clean',  keys: 'auto',  drums: 'drive', swing: 4,  bpm: 104, synth: 'halo',   preset: 'afro-min' },
-  hiphop:{ guitar: 'clean',  keys: 'pad',   drums: 'auto',  swing: 0,  bpm: 140, synth: 'halo',   preset: 'trap-min' }, /* trap 标准速度 */
+  hiphop:{ guitar: 'clean',  keys: 'pad',   drums: 'auto',  swing: 15, bpm: 140, synth: 'halo',   preset: 'trap-min' }, /* trap 标准速度；v15 swing 0→15：零摇摆=机器感 */
   funk:    { guitar: 'muted',  keys: 'comp',  drums: 'auto',  swing: 8,  bpm: 100, synth: 'sweep' },
   soul:    { guitar: 'clean',  keys: 'comp',  drums: 'auto',  swing: 30, bpm: 72,  synth: 'choir' },
   reggae:  { guitar: 'clean',  keys: 'comp',  drums: 'auto',  swing: 6,  bpm: 82,  synth: 'halo' },
@@ -3657,5 +4218,6 @@ function init() {
     const h = document.getElementById('ios-hint');
     if (h) h.hidden = false;
   }
+  setTimeout(warmupAudio, 0); /* v14：DOMContentLoaded 后即预热采样（suspended 也可 fetch+decode） */
 }
 document.addEventListener('DOMContentLoaded', init);

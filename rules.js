@@ -4,7 +4,7 @@
  *   1. 调性约束器：强拍=和弦音，弱拍=调内音阶，变化音级进解决
  *   2. 鼓密度预算：每风格小节鼓数上限 + 军鼓白名单 + kick≥90ms
  *   3. 力度塑形：力度绑定节拍位置（正拍+/弱拍−/乐句尾渐弱）
- *   4. kick-贝斯互锁：<30ms 的贝斯 onset 后移或休止
+ *   4. kick-贝斯互锁：v15 起删除（与 app.js interlockPass 吸合语义互搏，保留吸合）
  *   5. 织体错峰：前奏/尾奏键盘退出只留 Pad；Pad 换和弦延迟跟进
  * ============================================================ */
 'use strict';
@@ -26,23 +26,36 @@ const snapMidi = (midi, pool) => {
   }
   return best;
 };
+/* 限幅 snap：只在 ±lim 半音内微调，找不到则返回 null（>lim 的"纠正"视为设计意图，不动） */
+const snapMidiLim = (midi, pool, lim) => {
+  const pc = nearestPc(((midi % 12) + 12) % 12, pool);
+  let best = null, bd = lim + 1;
+  for (let m = midi - lim; m <= midi + lim; m++) {
+    if (((m % 12) + 12) % 12 === pc && Math.abs(m - midi) < bd) { bd = Math.abs(m - midi); best = m; }
+  }
+  return best;
+};
 
 /* ---- 1. 调性约束 ---- */
 function ruleTonality() {
   const scalePCs = MODES[state.mode].offsets.map(o => (state.keyRoot + o) % 12);
-  /* 旋律：强拍→和弦音；弱拍→调内；调外音→最近调内音 */
+  /* 旋律：强拍→和弦音；弱拍→调内；调外音→最近调内音
+     v16 优先级：设计意图 > 修正——_designSus(问句悬停)/_blue(蓝调音) 跳过；
+     snap 只移动 ≤2 半音，>2 半音的偏差视为设计意图不动 */
   for (const e of melodyEvents) {
+    if (e._designSus || e._blue) continue;
     const bar = Math.floor(e.beat / 4);
     const ch = chordAtBar(bar);
     const strong = Math.round(e.beat * 4) % 4 === 0;
     const pc = ((e.midi % 12) + 12) % 12;
     if (strong && !ch.pcs.includes(pc)) {
-      e.midi = snapMidi(e.midi, ch.pcs);
+      const s = snapMidiLim(e.midi, ch.pcs, 2);
+      if (s !== null) e.midi = s;
     } else if (!scalePCs.includes(pc)) {
       /* 半音经过音豁免：级进解决到下一音则保留（参考曲 31% 半音连接） */
       const nx = melodyEvents.find(x => x.beat > e.beat);
       const resolves = nx && Math.abs(nx.midi - e.midi) <= 2;
-      if (!resolves) e.midi = snapMidi(e.midi, scalePCs);
+      if (!resolves) { const s = snapMidiLim(e.midi, scalePCs, 2); if (s !== null) e.midi = s; }
     }
   }
   /* 贝斯：变化音（调外）只允许级进解决到和弦音，否则修正为和弦音 */
@@ -74,6 +87,9 @@ function ruleDrumBudget() {
   for (const e of drumEvents) {
     if (e.inst !== 'snare' || e.vel < 0.45) continue;
     const st = state.styles.length > 1 ? state.styles[Math.floor(e.step16 / 16) % state.styles.length] : state.styles[0];
+    /* 爵士概率 comping 军鼓（genDrums：step 3/7/11/14 的应答语汇）豁免白名单——
+       它们是爵士 comping 的核心，不该被 backbeat 白名单裁掉 */
+    if (st === 'jazz' && [3, 7, 11, 14].includes(Math.round(e.step16) % 16)) continue;
     const wl = SNARE_WHITELIST[st];
     if (wl && e.kit && e.kit.snare !== 'clave' && !wl.includes(e.step16 % 16)) e._drop = true;
   }
@@ -84,13 +100,19 @@ function ruleDrumBudget() {
     const budget = (DRUM_BUDGET[st] || 22) * (state.structure === 'song' ? sectionAt(bar).energy * 0.6 + 0.5 : 1);
     let evs = drumEvents.filter(e => Math.floor(e.step16 / 16) === bar);
     if (evs.length <= budget) continue;
-    evs = evs.sort((a, b) => a.vel - b.vel);
+    /* 保粘合剂：shekere/shaker/ghost 是律动胶水——先删骨架装饰（hat/ride/ohat/crash 等），
+       按 2 骨架 : 1 粘合剂 的配比才轮到粘合剂；骨架删完仍超限才兜底删粘合剂 */
+    const isGlue = e => e.inst === 'shekere' || e.inst === 'shaker' || (e.inst === 'snare' && e.vel < 0.5);
+    const isCore = e => e.inst === 'kick' || (e.inst === 'snare' && e.vel >= 0.5); /* 保骨架 */
+    const skeleton = evs.filter(e => !isGlue(e) && !isCore(e)).sort((a, b) => a.vel - b.vel);
+    const glue = evs.filter(isGlue).sort((a, b) => a.vel - b.vel);
     let over = evs.length - Math.floor(budget);
-    for (const e of evs) {
-      if (over <= 0) break;
-      if (e.inst === 'kick' || (e.inst === 'snare' && e.vel > 0.5)) continue; /* 保骨架 */
-      e._drop = true; over--;
+    let si = 0, gi = 0;
+    while (over > 0 && si < skeleton.length) {
+      for (let k = 0; k < 2 && over > 0 && si < skeleton.length; k++) { skeleton[si++]._drop = true; over--; }
+      if (over > 0 && gi < glue.length) { glue[gi++]._drop = true; over--; }
     }
+    while (over > 0 && gi < glue.length) { glue[gi++]._drop = true; over--; } /* 骨架用尽，粘合剂兜底 */
   }
   drumEvents = drumEvents.filter(e => !e._drop);
 }
@@ -117,32 +139,13 @@ function ruleVelocity() {
   }
   for (const e of drumEvents) {
     if (e.inst === 'snare' && e.vel < 0.5) e.vel = Math.min(e.vel, 0.38); /* 幽灵音量化 */
-    if (e.inst === 'hat' || e.inst === 'shaker') e.vel = clamp(e.vel, 0.25, 0.8);
+    if (e.inst === 'hat' || e.inst === 'shaker') e.vel = clamp(e.vel, 0.25, 1.0); /* v15：上限 0.8→1.0，不再压平生成层的正拍重音 */
   }
 }
 
-/* ---- 4. kick-贝斯互锁：<30ms 后移（±2 步找空位），找不到则让位 ---- */
-function ruleKickBassInterlock() {
-  const gapSteps = Math.max(1, Math.round(0.03 / secPer16()));
-  const kickSteps = new Set(drumEvents.filter(e => e.inst === 'kick').map(e => e.step16));
-  const occupied = new Set(bassEvents.map(e => Math.round(e.beat * 4)));
-  const nearKick = s => { for (let k = s - gapSteps; k <= s + gapSteps; k++) if (kickSteps.has(k)) return true; return false; };
-  for (const e of bassEvents) {
-    const s = Math.round(e.beat * 4);
-    if (e.b808 && e.slideTo !== undefined) continue; /* 808 抢拍滑音是有意为之，不被互锁挪走 */
-    if (!nearKick(s)) continue;
-    let placed = false;
-    for (const cand of [s + 1, s + 2, s - 1, s - 2]) {
-      if (cand < 0) continue;
-      if (!nearKick(cand) && !occupied.has(cand) && (cand % 16) < 15) {
-        occupied.delete(s); e.beat = cand / 4; occupied.add(cand);
-        placed = true; break;
-      }
-    }
-    if (!placed) e.vel *= 0.5; /* 无空位则让位（配合调度期 ducking） */
-  }
-  bassEvents.sort((a, b) => a.beat - b.beat);
-}
+/* ---- 4. kick-贝斯互锁：已删除（v15） ----
+   旧 ruleKickBassInterlock 把贝斯推离 kick，与 app.js interlockPass（贝斯吸合到 kick）直接互搏。
+   保留吸合语义：互锁统一由 interlockPass 在调度前处理。 */
 
 /* ---- 5. 织体错峰：低能量段键盘退出；Pad 换和弦延迟跟进 ---- */
 function ruleStagger() {
@@ -166,6 +169,5 @@ function applyCompositionRules() {
   ruleTonality();
   ruleDrumBudget();
   ruleVelocity();
-  ruleKickBassInterlock();
   ruleStagger();
 }

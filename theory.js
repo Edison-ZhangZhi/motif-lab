@@ -166,8 +166,8 @@ const STYLES = {
       [[0,4],[6,2],[8,4],[14,2]],
       [[0,2],[3,2],[6,2],[10,2],[12,4]],
     ],
-    ext: { maj: ['9','13'], min: ['m9','m7'], dom: ['13','9'], dim: ['dim'], sus: ['9sus4'] },
-    bass: 'groove', drums: 'funk',
+    ext: { maj: ['9','13'], min: ['min9','min7'], dom: ['13','9'], dim: ['dim'], sus: ['9sus4'] }, /* 修正：'m9'/'m7' 不是 CHORDS 键名，原值会让 buildChordTimeline 崩溃 */
+    bass: 'funk16', drums: 'funk', /* 十六分切分贝斯（app.js genBass），不再与 rnb 共用 groove */
     mel: { stepP: 0.5, density: 0.55, durBias: 0.35, rep: 0.7, synco: 0.9, blue: true, regLo: 58, regHi: 82, maxLeap: 8 },
   },
   soul: {
@@ -178,8 +178,8 @@ const STYLES = {
       [[0,8],[8,6]],
       [[0,3],[8,4],[11,4]],
     ],
-    ext: { maj: ['maj7','6','maj9'], min: ['m7','m9'], dom: ['9','13'], dim: ['dim7'], sus: ['9sus4'] },
-    bass: 'eighth', drums: 'soul',
+    ext: { maj: ['maj7','6','maj9'], min: ['min7','min9'], dom: ['9','13'], dim: ['dim7'], sus: ['9sus4'] }, /* 修正：'m7'/'m9' 不是 CHORDS 键名 */
+    bass: 'soul', drums: 'soul', /* Motown/Jamerson 式切分贝斯（app.js genBass），不再与 rock 共用 eighth */
     mel: { stepP: 0.62, density: 0.5, durBias: 0.6, rep: 0.6, synco: 0.7, blue: true, regLo: 62, regHi: 86, maxLeap: 9 },
   },
   reggae: {
@@ -191,7 +191,7 @@ const STYLES = {
       [[0,8]],
     ],
     ext: { maj: ['maj7'], min: ['min7','min9'], dom: ['7'], dim: ['dim'], sus: ['7sus4'] },
-    bass: 'eighth', drums: 'reggae',
+    bass: 'onedrop', drums: 'reggae', /* one-drop 贝斯：第 1 拍休止、重第 3 拍（app.js genBass），不再与 rock 共用 eighth */
     mel: { stepP: 0.6, density: 0.45, durBias: 0.5, rep: 0.6, synco: 0.75, blue: false, regLo: 60, regHi: 84, maxLeap: 8 },
   },
   afrobeats: {

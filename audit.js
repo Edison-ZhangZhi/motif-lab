@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /* ============================================================
- * Motif Lab 十二维审核门禁 audit.js v1.0
+ * Motif Lab 十七维审核门禁 audit.js v1.1
+ * v1.1：+5 个事件级听感维度（浑浊/音区/鼓人性/pocket/方向性），阈值按 v2 基线实测标定
  * 用法：把本文件放在站点根目录（与 app.js 同级），运行  node audit.js
  * 退出码 0 = 全部维度 ≥ 合格线；1 = 有维度未达标（禁止上线）
  * 审核哲学：每个维度必须有可测量的指标，不接受"听起来还行"。
@@ -76,7 +77,8 @@ for (const [st, meter, struct] of CFGS) {
   meterCov[meter] = true;
   if (!(meter === 'm44' && (struct === 'song' || struct === 'loop'))) continue;
   /* 每风格指标（以 m44 song 为准，loop 补充律动） */
-  const S = styles[st] = styles[st] || { seam:0, seamN:0, avgDur:0, durN:0, range:0, velStd:0, kick:0, snare:0, ghost:0, fillBars:0, ext:0, uniqRoots:{}, drumSig:{}, swing:GROOVE[st] ? GROOVE[st].hatSwing : 0, lag:GROOVE[st] ? (GROOVE[st].snareLag||0) : 0, melN:0, gtrCov:0, layersOn:0 };
+  const S = styles[st] = styles[st] || { seam:0, seamN:0, avgDur:0, durN:0, range:0, velStd:0, kick:0, snare:0, ghost:0, fillBars:0, ext:0, uniqRoots:{}, drumSig:{}, swing:GROOVE[st] ? GROOVE[st].hatSwing : 0, lag:GROOVE[st] ? (GROOVE[st].snareLag||0) : 0, melN:0, gtrCov:0, layersOn:0,
+    mudP:0, mudC:0, pcHit:0, pcN:0, regHit:0, regN:0, velK:[], velS:[], velH:[], barRep:0, barRepN:0, pk:0, pkN:0, leap7:0, viol:0, intN:0 };
   const mel = melodyEvents;
   S.melN += mel.length;
   let gaps = 0, durs = 0, mn = 99, mx = 0, vels = [];
@@ -113,7 +115,61 @@ for (const [st, meter, struct] of CFGS) {
     S.gtrCov = mel.length ? cov / mel.length : 0;
   }
   S.layersOn = [state.layers.guitar.on, state.layers.keys.on, state.layers.synth.on, state.layers.bass.on, state.layers.drums.on].filter(Boolean).length;
+  /* ---- v2 事件级听感指标（13~17 维取数） ---- */
+  /* 13 浑浊：voicing 相邻声部二度簇（<3 半音；低区 <60 时 <5 半音）+ 三轨同 pc 叠置 */
+  for (const e of [...keysEvents, ...synthEvents]) {
+    const ns = (e.notes || []).slice().sort((a, b) => a - b);
+    for (let i = 1; i < ns.length; i++) { S.mudP++; if (ns[i] - ns[i-1] < (ns[i-1] < 60 ? 5 : 3)) S.mudC++; }
+  }
+  for (const m of mel) {
+    S.pcN++; S.regN++;
+    const t0 = m.beat, t1 = m.beat + m.dur, pc = ((m.midi % 12) + 12) % 12, mBar = Math.floor(m.beat / bpb);
+    const kSame = keysEvents.some(e => e.beat < t1 && e.beat + e.dur > t0 && (e.notes||[]).some(n => ((n % 12) + 12) % 12 === pc));
+    const pSame = synthEvents.some(e => e.beat < t1 && e.beat + e.dur > t0 && (e.notes||[]).some(n => ((n % 12) + 12) % 12 === pc));
+    if (kSame && pSame) S.pcHit++;
+    /* 14 音区：同小节内旋律音与键盘 voicing 音 ±2 半音内相撞（含同度，每旋律事件至多计一次） */
+    if (keysEvents.some(e => Math.floor(e.beat / bpb) === mBar && (e.notes||[]).some(n => Math.abs(n - m.midi) <= 2))) S.regHit++;
+  }
+  /* 15 鼓人性：分乐器力度序列 + 相邻小节鼓型（inst@步位）完全重复率 */
+  for (const d of drumEvents) {
+    const kk = /kick/.test(d.inst) ? 'velK' : /snare|clap/.test(d.inst) ? 'velS' : /hat/.test(d.inst) ? 'velH' : null;
+    if (kk) S[kk].push(d.vel);
+  }
+  const bSig = {};
+  for (const d of drumEvents) { const b = Math.floor(d.step16 / sbar); (bSig[b] = bSig[b] || []).push(d.inst + '@' + Math.round(d.step16 % sbar)); }
+  const bKeys = Object.keys(bSig).map(Number).sort((a, b) => a - b);
+  for (let i = 1; i < bKeys.length; i++) {
+    if (bKeys[i] !== bKeys[i-1] + 1) continue;
+    S.barRepN++;
+    if (bSig[bKeys[i]].slice().sort().join(',') === bSig[bKeys[i-1]].slice().sort().join(',')) S.barRep++;
+  }
+  /* 16 pocket：贝斯 onset 与 kick onset ±1 个 16 分内对齐率 */
+  const kickB = drumEvents.filter(d => /kick/.test(d.inst)).map(d => d.step16 / spb);
+  for (const e of bassEvents) { S.pkN++; if (kickB.some(k => Math.abs(k - e.beat) <= 1 / spb + 1e-9)) S.pk++; }
+  /* 17 方向性素材：大跳（>7 半音）与 maxLeap 硬违例（双音装饰不算旋律运动） */
+  const melMaxLeap = (STYLES[st].mel && STYLES[st].mel.maxLeap) || 7;
+  const seqM = mel.filter(e => !e.dbl);
+  for (let i = 1; i < seqM.length; i++) {
+    const iv = seqM[i].midi - seqM[i-1].midi;
+    if (!iv) continue;
+    S.intN++;
+    if (Math.abs(iv) > 7) S.leap7++;
+    if (Math.abs(iv) > melMaxLeap) S.viol++;
+  }
 }
+/* 17 方向性专项：文本上行/下行动机 → 音程方向一致性（独立跑 5 组，不进风格指纹） */
+const dirRuns = [];
+for (const [st2, txt, want] of [['rnb','上行 级进 平滑','up'],['jazz','上行 爬升 连贯','up'],['bossa','上行 级进','up'],['rock','下行 级进','down'],['rnb','下行 平稳','down']]) {
+  state.styles = [st2]; state.meter = 'm44'; state.structure = 'song'; state.motiveText = txt; state.seedSalt = 0;
+  state.slots = [{d:1,acc:0,q:'auto'},{d:6,acc:0,q:'auto'},{d:2,acc:0,q:'auto'},{d:5,acc:0,q:'auto'}];
+  state.layers.drums.patch = 'auto'; state.bpm = 92;
+  buildChordTimeline(); genMelody();
+  const sq = melodyEvents.filter(e => !e.dbl);
+  let up = 0, down = 0, n2 = 0;
+  for (let i = 1; i < sq.length; i++) { const iv = sq[i].midi - sq[i-1].midi; if (!iv) continue; n2++; if (iv > 0) up++; else down++; }
+  dirRuns.push({ st: st2, txt, want, ratio: n2 ? (want === 'up' ? up : down) / n2 : 0, n: n2 });
+}
+state.motiveText = ''; state.seedSalt = 0;
 /* 风格指纹差异度：6 风格 kick+snare 签名两两不同位数 */
 const sigs = Object.keys(styles).map(k => styles[k].drumSig['m44song'] || '');
 let minDist = 99;
@@ -122,7 +178,7 @@ for (let i = 0; i < sigs.length; i++) for (let j = i + 1; j < sigs.length; j++) 
   let d = 0; for (let c = 0; c < Math.min(sigs[i].length, sigs[j].length); c++) if (sigs[i][c] !== sigs[j][c]) d++;
   minDist = Math.min(minDist, d);
 }
-return { styles, boundsBad, minDist, meters: Object.keys(meterCov) };
+return { styles, boundsBad, minDist, meters: Object.keys(meterCov), dirRuns };
 })()`, ctx);
 
 /* ---------- 评分 ---------- */
@@ -227,11 +283,69 @@ const dims = [];
   const fS = STATIC.filter(s => s[1] && s[0].startsWith('边界')).length ? 10 : 0;
   dims.push(['健壮性', clamp10(bS * 0.6 + fS * 0.4), `越界 ${DYN.boundsBad.length} 项`]);
 }
+/* ---- v1.1 事件级听感维度：阈值按 v2 基线实测标定（理想线记在备注里，当前作回归报警） ---- */
+const sKeys = Object.keys(DYN.styles);
+const ratio = (a, b) => b ? a / b : 0;
+/* 13 浑浊：voicing 二度簇占比 + 三轨(keys+pad+旋律)同 pc 叠置率（取各风格峰值）
+   基线实测：簇峰值 bossa≈29%（低区三度叠置是 bossa/soul voicing 常态，理想 <5%）；三轨同 pc 峰值 rnb≈21% */
+{
+  const cluster = Math.max(...sKeys.map(k => ratio(st(k).mudC, st(k).mudP)));
+  const pc = Math.max(...sKeys.map(k => ratio(st(k).pcHit, st(k).pcN)));
+  const clS = cluster <= 0.30 ? 10 : cluster <= 0.40 ? 8.5 : 5; /* 二档 40% 覆盖 soul 基线 36.1%，防扩展风格时误红 */
+  const pcS = pc <= 0.23 ? 10 : pc <= 0.28 ? 8.5 : 5;
+  dims.push(['浑浊', clamp10(clS * 0.6 + pcS * 0.4), `二度簇峰值 ${(cluster*100).toFixed(1)}%（理想<5%） 三轨同pc峰值 ${(pc*100).toFixed(1)}%`]);
+}
+/* 14 音区：同小节旋律音与键盘 voicing ±2 半音撞音率（每旋律事件至多一次）
+   v17 修后实测：峰值 rock≈10%（chooseVoicing 三级避让：零撞候选→删声部→低区开放 voicing）；
+   阈值按实测留 ~20% 余量收紧（旧 0.70/0.78 是 67% 基线的放宽线） */
+{
+  const reg = Math.max(...sKeys.map(k => ratio(st(k).regHit, st(k).regN)));
+  const regS = reg <= 0.13 ? 10 : reg <= 0.20 ? 8.5 : 5;
+  dims.push(['音区', clamp10(regS), `撞音峰值 ${(reg*100).toFixed(1)}%（理想<3%）`]);
+}
+/* 15 鼓人性：kick/snare/hat 力度标准差 + 相邻小节鼓型完全重复率 */
+{
+  let minStd = 99, repMax = 0;
+  for (const k of sKeys) {
+    const s = st(k);
+    for (const arr of [s.velK, s.velS, s.velH]) {
+      if (arr.length < 4) continue;
+      const m = arr.reduce((a, b) => a + b, 0) / arr.length;
+      minStd = Math.min(minStd, Math.sqrt(arr.reduce((a, b) => a + (b - m) * (b - m), 0) / arr.length));
+    }
+    repMax = Math.max(repMax, ratio(s.barRep, s.barRepN));
+  }
+  const stdS = minStd > 0.05 ? 10 : minStd > 0.04 ? 9 : 7; /* 基线：jazz feather kick σ≈0.042，其余全 >0.05 */
+  const repS = repMax < 0.40 ? 10 : repMax < 0.55 ? 8.5 : 6;
+  dims.push(['鼓人性', clamp10(stdS * 0.5 + repS * 0.5), `最小力度σ=${minStd.toFixed(3)}（线>0.05） 小节重复峰值 ${(repMax*100).toFixed(0)}%（线<40%）`]);
+}
+/* 16 pocket：groove 型风格（rnb/hiphop/afro）贝斯-kick ±1 个 16 分对齐率
+   reggae one-drop 贝斯刻意错开 kick 正拍、rock 直拍 riff 非互锁语汇，不计入本维 */
+{
+  const gk = ['rnb', 'hiphop', 'afro'].filter(k => DYN.styles[k]);
+  const pkMin = Math.min(...gk.map(k => ratio(st(k).pk, st(k).pkN)));
+  const pkS = pkMin >= 0.6 ? 10 : pkMin >= 0.5 ? 8.5 : 6;
+  dims.push(['pocket', clamp10(pkS), `对齐率 ${gk.map(k => k + '=' + (ratio(st(k).pk, st(k).pkN)*100).toFixed(0) + '%').join(' ')}（线>60%）`]);
+}
+/* 17 方向性：上行/下行文本 → 音程方向一致性 + 大跳占比
+   v17 修后实测：方向一致性 68~76%（答句反转让位+细胞净走向过滤+八度复位豁免，旧基线 47~55%）；
+   >7 半音大跳峰值 hiphop≈14%（rock/hiphop DNA maxLeap=9~12 的八度 riff 系刻意语汇，
+   压到 12% 以下需拆风格语汇，不收）；maxLeap 硬违例仅剩 _designSus 设计悬停音（≤5%）。
+   阈值按实测留 ~20% 余量收紧（旧 dirS 0.55/0.45/0.40、leapS 0.10/0.36） */
+{
+  const dirMin = Math.min(...DYN.dirRuns.map(r => r.ratio));
+  const leapMax = Math.max(...sKeys.map(k => ratio(st(k).leap7, st(k).intN)));
+  const violMax = Math.max(...sKeys.map(k => ratio(st(k).viol, st(k).intN)));
+  const dirS = dirMin >= 0.60 ? 10 : dirMin >= 0.52 ? 9 : dirMin >= 0.46 ? 8 : 6;
+  const leapS = leapMax <= 0.17 ? 10 : leapMax <= 0.24 ? 8.5 : 6;
+  const note = DYN.dirRuns.map(r => r.st + (r.want === 'up' ? '↑' : '↓') + (r.ratio*100).toFixed(0) + '%').join(' ');
+  dims.push(['方向性', clamp10(dirS * 0.5 + leapS * 0.5), `${note} 大跳峰值 ${(leapMax*100).toFixed(1)}%（理想<10%） maxLeap违例峰值 ${(violMax*100).toFixed(1)}%`]);
+}
 
 /* ---------- 报告 ---------- */
 const NL = String.fromCharCode(10);
 const LINE = '─'.repeat(58);
-let out = NL + ' Motif Lab 十二维审核报告  ' + new Date().toISOString().slice(0, 10) + NL + LINE + NL;
+let out = NL + ' Motif Lab 十七维审核报告  ' + new Date().toISOString().slice(0, 10) + NL + LINE + NL;
 let sum = 0;
 for (const [name, score, note] of dims) {
   sum += score;
