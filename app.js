@@ -1544,6 +1544,123 @@ function genDrums() {
  * ============================================================ */
 const AE = { ready: false, nodes: {} };
 
+/* v21 根治"一播放就非常卡"：Tone.js MetalSynth 每次 triggerAttackRelease 要吃 ~14ms 主线程
+   （6 载波+6 调制器调频 + 包络重建），播放中 hats/rides 每秒触发 6-12 次 = 主线程被吃掉一大半，
+   排程回调整体迟到 → 音频爆卡（实测：20s 播放回调占主线程 17.6s，其中 MetalSynth 15.9s）。
+   方案：启动后用 Tone.Offline 把 8 个 MetalSynth 音色各自离线渲染成 AudioBuffer（只做一次），
+   之后每次触发 = buffer source（<0.1ms），与真实采样同路径。live synth 保留作渲染就绪前的兜底。
+   METAL_DEFS 是 live synth 与离线渲染共用的唯一参数源，保证两者音色一致。 */
+const METAL_DEFS = {
+  hat:        { opts: { envelope: { attack: 0.001, decay: 0.035, release: 0.02 }, harmonicity: 5.1, modulationIndex: 14, resonance: 3200, octaves: 0.8 },  note: 'G6', vol: -6,  sec: 2.2 },
+  ride:       { opts: { envelope: { attack: 0.001, decay: 0.22,  release: 0.05 }, harmonicity: 5.1, modulationIndex: 12, resonance: 2400, octaves: 0.5 },  note: 'G5', vol: -8,  sec: 2.6 },
+  crash:      { opts: { envelope: { attack: 0.001, decay: 0.8,   release: 0.1 },  harmonicity: 5.1, modulationIndex: 30, resonance: 4000, octaves: 1.5 },  note: 'B5', vol: -8,  sec: 3.2 },
+  hat808:     { opts: { envelope: { attack: 0.001, decay: 0.045, release: 0.02 }, harmonicity: 5.1, modulationIndex: 26, resonance: 7000, octaves: 1.2 },  note: 'G6', vol: -13, sec: 2.2 },
+  ohat808:    { opts: { envelope: { attack: 0.001, decay: 0.35,  release: 0.05 }, harmonicity: 5.1, modulationIndex: 20, resonance: 5200, octaves: 1 },    note: 'G5', vol: -15, sec: 2.6 },
+  rim808:     { opts: { envelope: { attack: 0.001, decay: 0.03,  release: 0.02 }, harmonicity: 5.1, modulationIndex: 30, resonance: 9000, octaves: 1 },    note: 'A5', vol: -12, sec: 1.6 },
+  cowbell808: { opts: { envelope: { attack: 0.001, decay: 0.5,   release: 0.1 },  harmonicity: 5.1, modulationIndex: 40, resonance: 780,  octaves: 1 },    note: 'A5', vol: -14, sec: 2.6 },
+  crash808:   { opts: { envelope: { attack: 0.001, decay: 1.4,   release: 0.2 },  harmonicity: 5.1, modulationIndex: 32, resonance: 3800, octaves: 1.5 },  note: 'B5', vol: -15, sec: 4.2 },
+};
+const SYNTH_BUF = { _started: false };
+/* FM tine（keysEP）共用参数源：PolySynth(FMSynth) 单音触发 ~40ms/次，同病同治 */
+const FM_EP_OPTS = {
+  harmonicity: 1,
+  modulationIndex: 9,
+  oscillator: { type: 'sine' },
+  modulation: { type: 'sine' },
+  envelope: { attack: 0.004, decay: 2.4, sustain: 0.32, release: 2.2 },
+  modulationEnvelope: { attack: 0.002, decay: 0.25, sustain: 0.1, release: 0.3 },
+};
+/* 离屏渲染逐个进行（每个之间让出主线程），失败静默回退 live synth，绝不影响播放 */
+async function renderMetalBufs() {
+  if (SYNTH_BUF._started || !AE.ready) return;
+  if (typeof Tone.Offline !== 'function') return;
+  SYNTH_BUF._started = true;
+  /* Tone.Offline 内部无 try/finally：回调抛异常会跳过全局 context 恢复，
+     主 context 被留在离线上下文 = 全站静音。这里兜底恢复。 */
+  const prevCtx = Tone.getContext();
+  try {
+    await renderMetalBufsInner();
+  } catch (e) { console.warn('合成器离屏渲染失败（回退 live synth）', e); }
+  finally {
+    try { if (Tone.getContext() !== prevCtx) Tone.setContext(prevCtx); } catch (e) {}
+  }
+}
+async function renderMetalBufsInner() {
+  try {
+    const raw = Tone.getContext().rawContext;
+    if (!SYNTH_BUF.bus) {
+      SYNTH_BUF.bus = raw.createGain();
+      SYNTH_BUF.bus.gain.value = 1;
+      SYNTH_BUF.bus.connect(nativeInputOf(AE.drumsVol));
+      SYNTH_BUF.epBus = raw.createGain(); /* keysEP 专用：走原 epLP 之后的 tremolo 链 */
+      SYNTH_BUF.epBus.gain.value = 1;
+      SYNTH_BUF.epBus.connect(nativeInputOf(AE.keysTremolo));
+    }
+    for (const [k, d] of Object.entries(METAL_DEFS)) {
+      try {
+        const rendered = await Tone.Offline(() => {
+          const s = new Tone.MetalSynth(JSON.parse(JSON.stringify(d.opts)));
+          s.volume.value = d.vol;
+          s.connect(Tone.getDestination());
+          s.triggerAttack(d.note, 0.15, 1);
+        }, d.sec);
+        const ab = raw.createBuffer(rendered.numberOfChannels, rendered.length, rendered.sampleRate);
+        for (let c = 0; c < rendered.numberOfChannels; c++) ab.copyToChannel(rendered.getChannelData(c), c);
+        SYNTH_BUF[k] = { buf: ab, midi: noteNameToMidi(d.note) };
+      } catch (e) { console.warn('MetalSynth 离屏渲染失败 ' + k + '（回退 live synth）', e); }
+      await new Promise(r => setTimeout(r, 0));
+    }
+    /* FM tine 电钢：渲染含 7.5k 低通（与原链一致），tremolo/合唱留在 live 链上继续调制 */
+    try {
+      const rendered = await Tone.Offline(() => {
+        const s = new Tone.PolySynth(Tone.FMSynth, JSON.parse(JSON.stringify(FM_EP_OPTS)));
+        s.volume.value = -5;
+        const lp = new Tone.Filter(7500, 'lowpass');
+        s.connect(lp); lp.connect(Tone.getDestination());
+        s.triggerAttackRelease('C4', 4.6, 0.05, 1);
+      }, 7.5);
+      const ab = raw.createBuffer(rendered.numberOfChannels, rendered.length, rendered.sampleRate);
+      for (let c = 0; c < rendered.numberOfChannels; c++) ab.copyToChannel(rendered.getChannelData(c), c);
+      SYNTH_BUF.keysEP = { buf: ab, midi: 60, bus: SYNTH_BUF.epBus };
+    } catch (e) { console.warn('FMSynth(keysEP) 离屏渲染失败（回退 live synth）', e); }
+  } catch (e) {}
+}
+/* 触发 = 采样播放：playbackRate 平移音高（金属/FM 音色平移干净），增益映射力度。
+   midi 传数组 = 和弦逐个放（PolySynth 等价）；durSec 给了就在其时值处淡出截断（键盘长音用） */
+function playSynthBuf(key, midi, t, vel, durSec) {
+  const ent = SYNTH_BUF[key];
+  if (!ent || !ent.buf) return false;
+  const bus = ent.bus || SYNTH_BUF.bus;
+  if (!bus) return false;
+  const raw = Tone.getContext().rawContext;
+  const notes = Array.isArray(midi) ? midi : [midi];
+  for (const m of notes) {
+    const src = raw.createBufferSource();
+    src.buffer = ent.buf;
+    src.playbackRate.value = Math.pow(2, (m - ent.midi) / 12);
+    const g = raw.createGain();
+    const v = Math.max(vel, 0.02);
+    g.gain.setValueAtTime(v, t);
+    if (durSec) {
+      g.gain.setValueAtTime(v, Math.max(t, t + durSec - 0.06));
+      g.gain.linearRampToValueAtTime(0.0001, t + durSec + 0.1);
+      src.start(t); src.stop(t + durSec + 0.15);
+    } else {
+      const end = t + ent.buf.duration - 0.1;
+      g.gain.setValueAtTime(v, Math.max(t, end - 0.04));
+      g.gain.linearRampToValueAtTime(0.0001, end + 0.02);
+      src.start(t); src.stop(end + 0.05);
+    }
+    src.connect(g); g.connect(bus);
+  }
+  return true;
+}
+/* MetalSynth 触发统一入口：buffer 就绪走采样（<0.1ms），未就绪回退 live synth（~14ms，仅渲染完成前） */
+function metalTrig(key, note, durStr, t, vel) {
+  if (playSynthBuf(key, noteNameToMidi(note), t, vel)) return;
+  AE[key].triggerAttackRelease(note, durStr, t, vel);
+}
+
 /* --- 效果器曲线与箱体脉冲响应 --- */
 function driveCurve(amount) {
   const n = 2048, curve = new Float32Array(n);
@@ -1653,14 +1770,7 @@ function buildAudio() {
   AE.keys.volume.value = -4;
   /* v12 DX7 式 FM 电钢（tine 物理建模）：carrier + harmonicity 1 调制器、调制快速衰减、低通 7.5k。
      取代 GM SoundFont 电钢——塑料感主犯；tremolo+chorus 链 = Rhodes 经典调味 */
-  AE.keysEP = new Tone.PolySynth(Tone.FMSynth, {
-    harmonicity: 1,
-    modulationIndex: 9,
-    oscillator: { type: 'sine' },
-    modulation: { type: 'sine' },
-    envelope: { attack: 0.004, decay: 2.4, sustain: 0.32, release: 2.2 },
-    modulationEnvelope: { attack: 0.002, decay: 0.25, sustain: 0.1, release: 0.3 },
-  });
+  AE.keysEP = new Tone.PolySynth(Tone.FMSynth, JSON.parse(JSON.stringify(FM_EP_OPTS)) /* v21 参数源自 FM_EP_OPTS，与离屏渲染一致 */);
   const epLP = new Tone.Filter(7500, 'lowpass');
   AE.keysEP.connect(epLP); epLP.connect(AE.keysTremolo);
   AE.keysEP.volume.value = -5;
@@ -1692,25 +1802,19 @@ function buildAudio() {
     pitchDecay: 0.02, octaves: 3,
     envelope: { attack: 0.001, decay: 0.12, sustain: 0 },
   }).connect(AE.drumsVol);
-  AE.hat = new Tone.MetalSynth({
-    envelope: { attack: 0.001, decay: 0.035, release: 0.02 },
-    harmonicity: 5.1, modulationIndex: 14, resonance: 3200, octaves: 0.8, /* v15 去金属味：降共振/调制/泛音数 */
-  }).connect(AE.drumsVol);
-  AE.hat.volume.value = -6; /* 兜底也要听得见 */
-  AE.ride = new Tone.MetalSynth({
-    envelope: { attack: 0.001, decay: 0.22, release: 0.05 },
-    harmonicity: 5.1, modulationIndex: 12, resonance: 2400, octaves: 0.5, /* v15 去金属味 */
-  }).connect(AE.drumsVol);
-  AE.ride.volume.value = -8;
+  AE.hat = new Tone.MetalSynth(JSON.parse(JSON.stringify(METAL_DEFS.hat.opts)) /* v21 参数源自 METAL_DEFS，与离屏渲染一致 */
+  ).connect(AE.drumsVol);
+  AE.hat.volume.value = METAL_DEFS.hat.vol; /* 兜底也要听得见 */
+  AE.ride = new Tone.MetalSynth(JSON.parse(JSON.stringify(METAL_DEFS.ride.opts))
+  ).connect(AE.drumsVol);
+  AE.ride.volume.value = METAL_DEFS.ride.vol;
   AE.conga = new Tone.MembraneSynth({
     pitchDecay: 0.02, octaves: 3,
     envelope: { attack: 0.001, decay: 0.18, sustain: 0 },
   }).connect(AE.drumsVol);
-  AE.crash = new Tone.MetalSynth({
-    envelope: { attack: 0.001, decay: 0.8, release: 0.1 },
-    harmonicity: 5.1, modulationIndex: 30, resonance: 4000, octaves: 1.5,
-  }).connect(AE.drumsVol);
-  AE.crash.volume.value = -8;
+  AE.crash = new Tone.MetalSynth(JSON.parse(JSON.stringify(METAL_DEFS.crash.opts))
+  ).connect(AE.drumsVol);
+  AE.crash.volume.value = METAL_DEFS.crash.vol;
 
   /* --- 合成器 Pad 兜底链（采样未就绪时用）：锯齿波 → 移相器 → 大混响 --- */
   AE.synthVol = new Tone.Volume(-9); /* v14：推子接入 pad 信号链，接线在 hpPad 创建后 */
@@ -1840,35 +1944,25 @@ function buildAudio() {
     noise: { type: 'pink' },
     envelope: { attack: 0.002, decay: 0.16, sustain: 0 },
   }).connect(AE.drumsVol);
-  AE.hat808 = new Tone.MetalSynth({
-    envelope: { attack: 0.001, decay: 0.045, release: 0.02 },
-    harmonicity: 5.1, modulationIndex: 26, resonance: 7000, octaves: 1.2,
-  }).connect(AE.drumsVol);
-  AE.hat808.volume.value = -13;
-  AE.ohat808 = new Tone.MetalSynth({
-    envelope: { attack: 0.001, decay: 0.35, release: 0.05 },
-    harmonicity: 5.1, modulationIndex: 20, resonance: 5200, octaves: 1,
-  }).connect(AE.drumsVol);
-  AE.ohat808.volume.value = -15;
-  AE.rim808 = new Tone.MetalSynth({
-    envelope: { attack: 0.001, decay: 0.03, release: 0.02 },
-    harmonicity: 5.1, modulationIndex: 30, resonance: 9000, octaves: 1,
-  }).connect(AE.drumsVol);
-  AE.rim808.volume.value = -12;
-  AE.cowbell808 = new Tone.MetalSynth({
-    envelope: { attack: 0.001, decay: 0.5, release: 0.1 },
-    harmonicity: 5.1, modulationIndex: 40, resonance: 780, octaves: 1,
-  }).connect(AE.drumsVol);
-  AE.cowbell808.volume.value = -14;
+  AE.hat808 = new Tone.MetalSynth(JSON.parse(JSON.stringify(METAL_DEFS.hat808.opts))
+  ).connect(AE.drumsVol);
+  AE.hat808.volume.value = METAL_DEFS.hat808.vol;
+  AE.ohat808 = new Tone.MetalSynth(JSON.parse(JSON.stringify(METAL_DEFS.ohat808.opts))
+  ).connect(AE.drumsVol);
+  AE.ohat808.volume.value = METAL_DEFS.ohat808.vol;
+  AE.rim808 = new Tone.MetalSynth(JSON.parse(JSON.stringify(METAL_DEFS.rim808.opts))
+  ).connect(AE.drumsVol);
+  AE.rim808.volume.value = METAL_DEFS.rim808.vol;
+  AE.cowbell808 = new Tone.MetalSynth(JSON.parse(JSON.stringify(METAL_DEFS.cowbell808.opts))
+  ).connect(AE.drumsVol);
+  AE.cowbell808.volume.value = METAL_DEFS.cowbell808.vol;
   AE.tom808 = new Tone.MembraneSynth({
     pitchDecay: 0.08, octaves: 2,
     envelope: { attack: 0.001, decay: 0.5, sustain: 0, release: 0.2 },
   }).connect(AE.drumsVol);
-  AE.crash808 = new Tone.MetalSynth({
-    envelope: { attack: 0.001, decay: 1.4, release: 0.2 },
-    harmonicity: 5.1, modulationIndex: 32, resonance: 3800, octaves: 1.5,
-  }).connect(AE.drumsVol);
-  AE.crash808.volume.value = -15;
+  AE.crash808 = new Tone.MetalSynth(JSON.parse(JSON.stringify(METAL_DEFS.crash808.opts))
+  ).connect(AE.drumsVol);
+  AE.crash808.volume.value = METAL_DEFS.crash808.vol;
 
   AE.ready = true;
   applyStyleFx(state.styles.length === 1 ? state.styles[0] : 'rnb');
@@ -1997,6 +2091,7 @@ function loadGuitarSamples() {
           const r = await fetch('guitar2/' + set + '/' + note + '.mp3');
           if (!r.ok) continue;
           const buf = await raw.decodeAudioData(await r.arrayBuffer());
+          
           GUITAR_SAMP.buffers[set][noteNameToMidi(note)] = buf;
         } catch (e) {}
         await new Promise(res => setTimeout(res, 0));
@@ -2218,6 +2313,7 @@ function loadDrumSamples(isRetry) {
         const r = await fetch('drums/' + name + '.mp3');
         if (!r.ok) throw new Error('404');
         let buf = await raw.decodeAudioData(await r.arrayBuffer());
+        
         const max = DRUM_MAXDUR[name] || 1.5;
         if (buf.duration > max) {
           const n = Math.floor(raw.sampleRate * max);
@@ -2578,6 +2674,8 @@ function createProgressiveSF(name, base, cacheKey) {
       const ab = new ArrayBuffer(bin.length);
       const u8 = new Uint8Array(ab);
       for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+
+      
       inst.buffers[noteName] = await raw.decodeAudioData(ab);
       inst._midiBuf[midi] = inst.buffers[noteName];
       if (!SAMP.cache[cacheKey]) SAMP.cache[cacheKey] = inst; /* 首音解码即上线 */
@@ -2726,27 +2824,10 @@ function loadInstruments() {
     done++;
     sampStatus(done < core.length ? `正在加载采样音色 ${done}/${core.length}…` : '✓ 核心采样音色已就绪');
   }));
-  /* v14 后台串行+空闲预载：一次只加载一个（解码风暴是播放卡顿根源），播放中整体挂起 */
-  const extraSet = new Set();
-  Object.values(SAMP_GUITAR).forEach(n => { if (!core.includes(n)) extraSet.add(n); });
-  const actStyles = state.styles.length ? state.styles : ['rnb'];
-  actStyles.forEach(k => {
-    const pc = PAD_BY_STYLE[k];
-    if (pc && SAMP_PAD[pc.bank]) extraSet.add(SAMP_PAD[pc.bank]);
-    const kn = SAMP_KEYS_BY_STYLE[k];
-    if (kn && kn !== '@vibes') extraSet.add(kn);
-  });
-  const queue = [...extraSet].filter(n => !core.includes(n) && !n.startsWith('@'));
-  let qi = 0;
-  /* v17 性能：extras 改走 requestIdleCallback——只在浏览器空闲帧解码，不再和首播抢主线程（兜底 200ms 轮询） */
-  const idle = (fn, t) => { if (typeof requestIdleCallback === 'function') requestIdleCallback(fn, { timeout: t }); else setTimeout(fn, 200); };
-  const step = () => {
-    if (qi >= queue.length) return;
-    if (state.playing) { idle(step, 5000); return; } /* 播放中挂起，停止后继续 */
-    const n = queue[qi++];
-    ensureSample(n).then(() => idle(step, 1200), () => idle(step, 1200));
-  };
-  idle(step, 4000);
+  /* v21：extras 全量预载（8 吉他+全部 pad/keys ≈ 11 个 SF×88 音）已退役——
+     每次打开页面都重演 ~1000 次 decode 的风暴是"一播放就卡"的第二根源。
+     改为 scheduleAll 按本曲实际用到的音色按需加载（见 scheduleAll 尾部），
+     未就绪音高走合成兜底、就绪后自动切上（v19 机制），切换风格/音色时自然触发。 */
 }
 
 function applyGuitarPatch() {
@@ -2810,6 +2891,7 @@ function t16(total16) {
 const secPer16 = () => 60 / state.bpm / 4;
 
 function scheduleAll() {
+  
   Tone.Transport.cancel(0);
   Tone.Transport.bpm.value = state.bpm;
   /* v4：swing 由排程层逐件计算（sharedSwingSec 共享网格 + drumTimeShift 鼓件专属偏移）。
@@ -2875,9 +2957,9 @@ function scheduleAll() {
         if (gInst) { sfBright('guitar', e.vel * kduck, tt); for (const n of e.notes) gPlayed = gInst.play(n, tt, { duration: dur, gain: e.vel * 1.0 * kduck, cents: sfRepeatCents('guitar', n, tt) }) !== false || gPlayed; }
         if (!gPlayed && ks === '@vibes') AE.keysVibes.triggerAttackRelease(names, dur, tt, e.vel * 0.85 * kduck);
         else if (!gPlayed && ks === '@fmrhodes') {
-          /* v13 优先级：smplr Wurlitzer 采样 → v12 FM tine 兜底 */
+          /* v13 优先级：smplr Wurlitzer 采样 → v12 FM tine 兜底（v21：FM tine 已离线渲染成采样，~40ms/次 → <0.5ms） */
           if (_wurli) { for (const n of e.notes) _wurli.start({ note: n, time: tt, duration: dur, velocity: Math.max(20, Math.round(e.vel * 118 * kduck)) }); }
-          else AE.keysEP.triggerAttackRelease(names, dur, tt, e.vel * 0.9 * kduck);
+          else if (!playSynthBuf('keysEP', e.notes, tt, e.vel * 0.9 * kduck, dur)) AE.keysEP.triggerAttackRelease(names, dur, tt, e.vel * 0.9 * kduck);
         }
         else if (!gPlayed) {
           const inst = ks && sampOf(ks, 'keys');
@@ -2964,42 +3046,61 @@ function scheduleAll() {
         if (smp(e.inst)) {
           /* B2 叠层：强 kick 叠 808 次低音 / rnb 军鼓叠 rimshot（采样命中时也叠） */
           if (e.sub) trig808kick(tt + 0.002, e.vel * 0.5);
-          if (e.rimLayer) AE.rim808.triggerAttackRelease('A5', '16n', tt + 0.004, e.vel * 0.5);
+          if (e.rimLayer) metalTrig('rim808', 'A5', '16n', tt + 0.004, e.vel * 0.5);
           return;
         }
-        if (e.inst === 'shekere' || e.inst === 'shaker') { AE.hat.triggerAttackRelease('G6', '32n', tt, e.vel * 0.5); return; }
+        if (e.inst === 'shekere' || e.inst === 'shaker') { metalTrig('hat', 'G6', '32n', tt, e.vel * 0.5); return; }
         if (e.inst === 'snap') { AE.clap808.triggerAttackRelease('16n', tt, e.vel * 0.8); return; }
         if (e.inst === 'clap') { AE.clap808.triggerAttackRelease('8n', tt, e.vel); return; }
         if (state.layers.drums.patch === '808') {
           switch (e.inst) {
             case 'kick': trig808kick(tt, e.vel); break;
             case 'snare': AE.snare808.triggerAttackRelease('C2', '8n', tt, e.vel); AE.snare.triggerAttackRelease('16n', tt, e.vel * 0.3); break;
-            case 'hat': AE.hat808.triggerAttackRelease('G6', '32n', tt, e.vel); break;
-            case 'ohat': AE.ohat808.triggerAttackRelease('G5', '8n', tt, e.vel); break;
-            case 'ride': AE.cowbell808.triggerAttackRelease('A5', '8n', tt, e.vel * 0.8); break;
+            case 'hat': metalTrig('hat808', 'G6', '32n', tt, e.vel); break;
+            case 'ohat': metalTrig('ohat808', 'G5', '8n', tt, e.vel); break;
+            case 'ride': metalTrig('cowbell808', 'A5', '8n', tt, e.vel * 0.8); break;
             case 'congaH': AE.tom808.triggerAttackRelease('G3', '8n', tt, e.vel); break;
             case 'congaL': AE.tom808.triggerAttackRelease('E3', '8n', tt, e.vel); break;
-            case 'crash': AE.crash808.triggerAttackRelease('B5', '1m', tt, e.vel); break;
+            case 'crash': metalTrig('crash808', 'B5', '1m', tt, e.vel); break;
           }
           return;
         }
         switch (e.inst) {
           case 'kick': AE.kick.triggerAttackRelease('C1', '8n', tt, e.vel); if (e.sub) trig808kick(tt + 0.002, e.vel * 0.5); break;
           case 'clave': AE.conga.triggerAttackRelease('G3', '16n', tt, e.vel); break;
-          case 'snare': AE.snare.triggerAttackRelease('16n', tt, e.vel); AE.snareBody.triggerAttackRelease('G2', '16n', tt, e.vel * 0.5); if (e.rimLayer) AE.rim808.triggerAttackRelease('A5', '16n', tt + 0.004, e.vel * 0.5); break;
-          case 'hat': AE.hat.triggerAttackRelease('G6', '32n', tt, e.vel); break;
-          case 'ohat': AE.ride.triggerAttackRelease('G5', '8n', tt, e.vel); break;
-          case 'ride': AE.ride.triggerAttackRelease('A5', '8n', tt, e.vel); break;
+          case 'snare': AE.snare.triggerAttackRelease('16n', tt, e.vel); AE.snareBody.triggerAttackRelease('G2', '16n', tt, e.vel * 0.5); if (e.rimLayer) metalTrig('rim808', 'A5', '16n', tt + 0.004, e.vel * 0.5); break;
+          case 'hat': metalTrig('hat', 'G6', '32n', tt, e.vel); break;
+          case 'ohat': metalTrig('ride', 'G5', '8n', tt, e.vel); break;
+          case 'ride': metalTrig('ride', 'A5', '8n', tt, e.vel); break;
           case 'congaH': AE.conga.triggerAttackRelease('A3', '16n', tt, e.vel); break;
           case 'congaL': AE.conga.triggerAttackRelease('F3', '16n', tt, e.vel); break;
-          case 'bell': AE.rim808.triggerAttackRelease('A5', '16n', tt, e.vel * 0.8); break;
-          case 'crash': AE.crash.triggerAttackRelease('B5', '1m', tt, e.vel); break;
+          case 'bell': metalTrig('rim808', 'A5', '16n', tt, e.vel * 0.8); break;
+          case 'crash': metalTrig('crash', 'B5', '1m', tt, e.vel); break;
         }
       }, t);
     }
   }
   Tone.Transport.setLoopPoints(0, `${totalBars()}:0:0`);
   Tone.Transport.loop = true;
+  /* v21 按需加载：只解码本曲实际用到的 SF 音色（单风格通常 4 个；旧 extras 全量预载是 ~11 个 ≈ 1000 次 decode）。
+     渐进加载器逐音让出主线程；未就绪音高 play 返回 false 走合成兜底，就绪后 sampOf 自动切上（v19 机制）。
+     换风格/音色/音色库 → 下一次 scheduleAll 自动带上新需求。 */
+  {
+    const need = new Set();
+    const add = n => { if (n && typeof n === 'string' && !n.startsWith('@')) need.add(n); };
+    add(SAMP_GUITAR[state.layers.guitar.patch]);
+    add(SAMP_BASS);
+    add(SAMP_PAD[state.layers.synth.patch]);
+    const actStyles = state.styles.length ? state.styles : ['rnb'];
+    for (const k of actStyles) {
+      add(SAMP_KEYS_BY_STYLE[k]);
+      const pc = PAD_BY_STYLE[k];
+      if (pc && SAMP_PAD[pc.bank]) add(SAMP_PAD[pc.bank]);
+      if ((GUITAR_SRC_BY_STYLE[k] || 'samp') === 'sf') add(SAMP_GUITAR[state.layers.guitar.patch]);
+    }
+    if (hornEvents.length) add(SAMP_PAD.warm); /* horn 的 brass_section 采样不存在，实际兜底走 warm pad */
+    for (const n of need) ensureSample(n);
+  }
 }
 
 /* v14 页面加载即预热：suspended 状态的 AudioContext 也能 fetch+decode，
@@ -3019,12 +3120,13 @@ function warmupAudio() {
     loadInstruments();
     const idleW = (fn) => { if (typeof requestIdleCallback === 'function') requestIdleCallback(fn, { timeout: 8000 }); else setTimeout(fn, 200); };
     idleW(() => loadWurli()); /* 后台预热，fire-and-forget，不阻塞任何路径 */
+    idleW(() => renderMetalBufs()); /* v21：MetalSynth 离屏渲染成采样，播放中触发从 14ms → <0.1ms */
   } catch (e) { console.warn('音频预热失败（不影响播放手势路径）', e); }
 }
 
 async function ensureAudio() {
   if (typeof Tone === 'undefined') return false;
-  if (!state.audioReady) { buildAudio(); state.audioReady = true; const gp = SAMP_GUITAR[state.layers.guitar.patch]; if (gp) ensureSample(gp); loadGuitarSamples(); loadDrumSamples(); loadInstruments(); loadWurli(); /* v17：与 warmupAudio 同优先级序；v13 后台预热 Wurli 采样电钢 */ }
+  if (!state.audioReady) { buildAudio(); state.audioReady = true; const gp = SAMP_GUITAR[state.layers.guitar.patch]; if (gp) ensureSample(gp); loadGuitarSamples(); loadDrumSamples(); loadInstruments(); loadWurli(); renderMetalBufs(); /* v17：与 warmupAudio 同优先级序；v13 后台预热 Wurli 采样电钢 */ }
   try {
     await Tone.start();
     if (Tone.context.state !== 'running') await Tone.context.resume();
@@ -3591,7 +3693,7 @@ function exportMidi() {
   a.href = URL.createObjectURL(blob);
   a.download = `motif_${pcName(state.keyRoot)}${state.mode}_${state.bpm}bpm.mid`;
   a.click();
-  URL.revokeObjectURL(a.href);
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000); /* v21：立即 revoke 会在部分浏览器取消下载 */
 }
 
 /* ============================================================
@@ -3634,7 +3736,7 @@ async function exportAudio() {
         a.href = URL.createObjectURL(wav);
         a.download = `motif_${pcName(state.keyRoot)}${state.mode}_${state.bpm}bpm.wav`;
         a.click();
-        URL.revokeObjectURL(a.href);
+        setTimeout(() => URL.revokeObjectURL(a.href), 60000); /* v21：立即 revoke 会在部分浏览器取消下载 */
         try {
           studioHealthCheck(ab);
           const stEl = document.getElementById('studio-status');
@@ -3645,7 +3747,7 @@ async function exportAudio() {
         a.href = URL.createObjectURL(blob);
         a.download = `motif_${pcName(state.keyRoot)}${state.mode}_${state.bpm}bpm.webm`;
         a.click();
-        URL.revokeObjectURL(a.href);
+        setTimeout(() => URL.revokeObjectURL(a.href), 60000); /* v21：立即 revoke 会在部分浏览器取消下载 */
       }
       if (btn) btn.textContent = '⬇ 导出音频（WAV）';
     })();

@@ -90,3 +90,5 @@ node audit.js     # 十七维审核，≥8.0 才允许推送
 - **v18**：Service Worker 离线缓存、音色门 4→2、播放中零解码。
 - **v19**：播放防弹（门禁容错、错误可见、加载失败看门狗自救）。
 - **v20**：按下即播 + 渐进式 SoundFont 加载器，根治"出一声卡死"。
+- **v21**：根治"一播放就非常卡"——实测定位 Tone.js MetalSynth 每次触发吃 ~14ms 主线程（播放中 hats/rides 高频触发 = 主线程被吃掉 80%+），改为 Tone.Offline 离线渲染成 AudioBuffer 走采样播放（<0.1ms/次，live synth 保留兜底）；FM tine（keysEP）同病同治；SF 加载从"全量预载 11 音色×88 音（~1000 次 decode）"改 scheduleAll 按本曲实际音色按需加载（-60% 解码量）。播放回调主线程占用 17.6s→0.6s/20s。诊断用 ?perf=1 HUD 已随任务拆除。
+- **v22**：加固——Tone.Offline 无 try/finally，回调异常会把全局 context 留在离线上下文（全站静音隐患），加 finally 强制恢复；修复"导出 WAV/MIDI 点击后立即 revokeObjectURL 在部分浏览器会取消下载"的竞态；移除性能诊断面板。
