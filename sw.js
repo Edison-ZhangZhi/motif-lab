@@ -1,0 +1,76 @@
+/* MotifLab Service Worker — v17 性能：预缓存静态资源 + 鼓采样，二次访问秒开 */
+'use strict';
+var CACHE = 'motiflab-v18';
+var PRECACHE = [
+  './',
+  'index.html',
+  'theory.js',
+  'cells.js',
+  'specs.js',
+  'rules.js',
+  'app.js',
+  'style.css',
+  'lib/Tone.js',
+  'lib/soundfont-player.min.js',
+  'drums/brush_snare.mp3',
+  'drums/clap.mp3',
+  'drums/clave.mp3',
+  'drums/conga_h.mp3',
+  'drums/conga_l.mp3',
+  'drums/crash.mp3',
+  'drums/hat_808.mp3',
+  'drums/hat_closed.mp3',
+  'drums/kick_808.mp3',
+  'drums/kick_room.mp3',
+  'drums/rim_click.mp3',
+  'drums/shaker.mp3',
+  'drums/shekere.mp3',
+  'drums/snap.mp3',
+  'drums/snare_room.mp3'
+];
+
+self.addEventListener('install', function (e) {
+  e.waitUntil(
+    caches.open(CACHE).then(function (c) { return c.addAll(PRECACHE); }).then(function () {
+      return self.skipWaiting();
+    })
+  );
+});
+
+self.addEventListener('activate', function (e) {
+  e.waitUntil(
+    caches.keys().then(function (keys) {
+      return Promise.all(keys.map(function (k) {
+        if (k !== CACHE) return caches.delete(k);
+      }));
+    }).then(function () { return self.clients.claim(); })
+  );
+});
+
+self.addEventListener('fetch', function (e) {
+  var req = e.request;
+  if (req.method !== 'GET') return;
+  var url;
+  try { url = new URL(req.url); } catch (err) { return; }
+  if (url.origin !== self.location.origin) return;
+  e.respondWith(
+    caches.match(req, { ignoreSearch: false }).then(function (hit) {
+      if (hit) {
+        // 后台刷新缓存（stale-while-revalidate 的轻量版）
+        fetch(req).then(function (res) {
+          if (res && res.ok) {
+            caches.open(CACHE).then(function (c) { c.put(req, res.clone()); });
+          }
+        }).catch(function () {});
+        return hit;
+      }
+      return fetch(req).then(function (res) {
+        if (res && res.ok) {
+          var clone = res.clone();
+          caches.open(CACHE).then(function (c) { c.put(req, clone); });
+        }
+        return res;
+      });
+    })
+  );
+});

@@ -1596,8 +1596,8 @@ function makeCabImpulse() {
 
 function buildAudio() {
   if (AE.ready) return;
-  /* v17 性能：lookAhead 0.1→0.2s——事件密集（峰值 30+ 回调/s）时默认 0.1s 排程余量不足易爆 */
-  try { Tone.context.lookAhead = 0.2; } catch (e) {}
+  /* v17 性能：lookAhead 0.1→0.3s——事件密集（峰值 30+ 回调/s）时默认 0.1s 排程余量不足易爆；采样解码/GC 抖动下 0.3s 才稳 */
+  try { Tone.context.lookAhead = 0.3; } catch (e) {}
   /* v4 Logic 级母带链：音量 → 三段EQ → 压缩 → 限制器 → 输出。
      v14 降 CPU：饱和 0.06→0.015（波形整形是过采样大户）；删除 AGC 呼吸环（每 3.5s 写 volume 的定时器是卡顿嫌疑）。
      v17 降 CPU：MultibandCompressor（3 段分频+3 个动态单元，Tone 最贵节点之一）→ 单段 Compressor，
@@ -2237,6 +2237,11 @@ function loadDrumSamples(isRetry) {
     }
   }, 6000);
 }
+/* v17 性能：音色门只核"当前鼓组 kick/snare/hat 是否已解码"——鼓是律动轴，缺了首播就哑 */
+function drumsReady() {
+  const k = DRUM_KITS[state.layers.drums.patch === '808' ? 's808' : state.layers.drums.patch === 'beach' ? 'beach' : state.styles[0]] || DRUM_KITS.rnb;
+  return ['kick', 'snare', 'hat'].every(role => !k[role] || !!DRUM_SAMP.buffers[k[role]]);
+}
 const DRUM_GAIN = { shekere: 1.3, shaker: 0.9, snap: 1.1, clap: 1.3, hat_808: 0.9, kick_808: 1.25, crash: 0.95, rim_click: 1.1, kick_room: 1.45, snare_room: 1.2, brush_snare: 1.1, conga_h: 1.25, conga_l: 1.25, clave: 1.2 };
 function playDrumSample(name, t, vel, opts) {
   const buf = DRUM_SAMP.buffers[name];
@@ -2380,7 +2385,7 @@ function chordAtBar(bar) { return chordTimeline[bar % chordTimeline.length]; }
  * 采样音源（真实乐器录音，SoundFont / FluidR3_GM，CC 协议免费库）
  * 按需加载：核心音色立即加载，其余后台预载
  * ============================================================ */
-const SAMP = { cache: {}, pending: {}, bus: null, padBus: null,
+const SAMP = { cache: {}, pending: {}, bus: null, padBus: null, deferred: [], _defKeys: {},
   roleBank: (typeof localStorage !== 'undefined' && JSON.parse(localStorage.getItem('motif_rolebank') || '{}')) || {} };
 const SAMP_GUITAR = {
   clean: 'electric_guitar_clean', crunch: 'overdriven_guitar', dist: 'distortion_guitar',
@@ -2471,10 +2476,22 @@ function roleOfName(name) {
   if (name && (name.startsWith('pad_') || name === 'synth_strings_1')) return 'pad';
   return 'guitar';
 }
+/* v17 性能：播放中不发起新的采样下载/解码（decodeAudioData 抢主线程=爆音/卡顿源），
+   登记进 SAMP.deferred，停止播放后由 flushDeferred 统一补载 */
+function deferLoad(key, fn) {
+  if (SAMP._defKeys[key]) return;
+  SAMP._defKeys[key] = 1;
+  SAMP.deferred.push(fn);
+}
+function flushDeferred() {
+  const dq = SAMP.deferred; SAMP.deferred = []; SAMP._defKeys = {};
+  dq.forEach(fn => { try { fn(); } catch (e) {} });
+}
 function ensureSample(name) {
   if (!AE.ready) return Promise.resolve(null);
   const key = state.sfBase + ':' + name;
   if (SAMP.cache[key]) return Promise.resolve(SAMP.cache[key]);
+  if (state.playing && !SAMP.pending[key]) { deferLoad('s:' + key, () => ensureSample(name)); return Promise.resolve(null); }
   if (!SAMP.pending[key]) {
     if (typeof Soundfont === 'undefined') return Promise.resolve(null);
     ensureBuses();
@@ -2552,6 +2569,7 @@ const STYLE_TIMBRE = {
 function ensureSampleBank(name, base) {
   const key = base + ':' + name;
   if (SAMP.cache[key]) return Promise.resolve(SAMP.cache[key]);
+  if (state.playing && !SAMP.pending[key]) { deferLoad('b:' + key, () => ensureSampleBank(name, base)); return Promise.resolve(null); } /* v17：播放中挂起 */
   if (!SAMP.pending[key]) {
     if (!AE.ready || typeof Soundfont === 'undefined') return Promise.resolve(null);
     ensureBuses();
@@ -2564,6 +2582,7 @@ function ensureSampleBank(name, base) {
 async function autoAlignTimbres(styleKey) {
   const targets = STYLE_TIMBRE[styleKey];
   if (!targets || !AE.ready) return;
+  if (state.playing) { deferLoad('align:' + styleKey, () => autoAlignTimbres(styleKey)); return; } /* v17 性能：对齐会触发 cancel+全量重排，播放中挂起，停止后补 */
   const roles = {
     guitar: SAMP_GUITAR[state.layers.guitar.patch],
     keys: SAMP_KEYS,
@@ -2622,13 +2641,15 @@ function loadInstruments() {
   });
   const queue = [...extraSet].filter(n => !core.includes(n) && !n.startsWith('@'));
   let qi = 0;
+  /* v17 性能：extras 改走 requestIdleCallback——只在浏览器空闲帧解码，不再和首播抢主线程（兜底 200ms 轮询） */
+  const idle = (fn, t) => { if (typeof requestIdleCallback === 'function') requestIdleCallback(fn, { timeout: t }); else setTimeout(fn, 200); };
   const step = () => {
     if (qi >= queue.length) return;
-    if (state.playing) { setTimeout(step, 5000); return; } /* 播放中挂起，停止后继续 */
+    if (state.playing) { idle(step, 5000); return; } /* 播放中挂起，停止后继续 */
     const n = queue[qi++];
-    ensureSample(n).then(() => setTimeout(step, 1200), () => setTimeout(step, 1200));
+    ensureSample(n).then(() => idle(step, 1200), () => idle(step, 1200));
   };
-  setTimeout(step, 3000);
+  idle(step, 4000);
 }
 
 function applyGuitarPatch() {
@@ -2887,16 +2908,21 @@ function warmupAudio() {
   try {
     buildAudio(); /* 建图不依赖 running state */
     state.audioReady = true;
-    loadInstruments();
-    loadDrumSamples();
+    /* v17 性能：预热按首播优先级排序——吉他采样最先（播放闸硬等它+主角音色），鼓第二（律动轴），
+       贝斯/键盘/pad 由 loadInstruments 紧随其后；Wurli 闲时再载 */
+    const gp = SAMP_GUITAR[state.layers.guitar.patch];
+    if (gp) ensureSample(gp);
     loadGuitarSamples();
-    loadWurli(); /* 后台预热，fire-and-forget，不阻塞任何路径 */
+    loadDrumSamples();
+    loadInstruments();
+    const idleW = (fn) => { if (typeof requestIdleCallback === 'function') requestIdleCallback(fn, { timeout: 8000 }); else setTimeout(fn, 200); };
+    idleW(() => loadWurli()); /* 后台预热，fire-and-forget，不阻塞任何路径 */
   } catch (e) { console.warn('音频预热失败（不影响播放手势路径）', e); }
 }
 
 async function ensureAudio() {
   if (typeof Tone === 'undefined') return false;
-  if (!state.audioReady) { buildAudio(); state.audioReady = true; loadInstruments(); loadDrumSamples(); loadGuitarSamples(); loadWurli(); /* v13 后台预热 Wurli 采样电钢 */ }
+  if (!state.audioReady) { buildAudio(); state.audioReady = true; const gp = SAMP_GUITAR[state.layers.guitar.patch]; if (gp) ensureSample(gp); loadGuitarSamples(); loadDrumSamples(); loadInstruments(); loadWurli(); /* v17：与 warmupAudio 同优先级序；v13 后台预热 Wurli 采样电钢 */ }
   try {
     await Tone.start();
     if (Tone.context.state !== 'running') await Tone.context.resume();
@@ -2919,17 +2945,21 @@ async function togglePlay() {
     Tone.Transport.stop();
     silenceSampleBuses();
     state.playing = false;
+    flushDeferred(); /* v17：播放中挂起的采样加载/音色对齐，停止后补载 */
   } else {
     restoreSampleBuses();
     applyMix();
     (async () => {
-      /* 播放闸：仅会话首次等待核心采样（6s 封顶），之后直接播；v14 页面加载即预热，多数情况此门秒过 */
-      const need = [SAMP_GUITAR[state.layers.guitar.patch], SAMP_KEYS, SAMP_BASS, SAMP_PAD[state.layers.synth.patch]].filter(Boolean);
+      /* 播放闸：仅会话首次等待（6s 封顶），之后直接播；v14 页面加载即预热，多数情况此门秒过。
+         v17 性能：门槛 4→2——只硬等主角吉他采样 + 当前鼓组（律动轴）；
+         键盘/贝斯/pad 有合成兜底先发声，采样就绪后 sampOf 自动切换 */
+      const gName = SAMP_GUITAR[state.layers.guitar.patch];
       const t0 = Date.now();
-      while (!state._gateDone && need.some(n => !SAMP.cache[state.sfBase + ':' + n]) && Date.now() - t0 < 6000) {
-        need.forEach(n => ensureSample(n));
-        const done = need.filter(n => SAMP.cache[state.sfBase + ':' + n]).length;
-        sampStatus('正在准备音色 ' + done + '/' + need.length + '…'); /* v14：显示具体进度 */
+      while (!state._gateDone && ((gName && !SAMP.cache[state.sfBase + ':' + gName]) || !drumsReady()) && Date.now() - t0 < 6000) {
+        if (gName) ensureSample(gName);
+        if (!DRUM_SAMP.started && AE.ready) loadDrumSamples();
+        const done = (gName && SAMP.cache[state.sfBase + ':' + gName] ? 1 : 0) + (drumsReady() ? 1 : 0);
+        sampStatus('正在准备音色 ' + done + '/2…'); /* v14：显示具体进度 */
         await new Promise(r => setTimeout(r, 250));
         if (state.playing) return; /* 等待中被再次点击则取消 */
       }
@@ -3137,6 +3167,7 @@ async function browserGenerateChunk(prompt, temperature, onStatus) {
 let _wurli = null, _wurliFailed = false;
 async function loadWurli() {
   if (_wurli || _wurliFailed) return _wurli;
+  if (state.playing) { deferLoad('wurli', () => loadWurli()); return null; } /* v17 性能：播放中不发起 CDN 拉取+采样解码 */
   try {
     const raw = Tone.getContext().rawContext;
     /* v14：jsdelivr 国内常长时间挂起——import 加 8s 超时快切 unpkg；本函数永远 fire-and-forget，不阻塞播放 */
