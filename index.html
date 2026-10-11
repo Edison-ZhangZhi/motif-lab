@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Motif Lab · 电吉他动机旋律生成器</title>
-<link rel="stylesheet" href="style.css?v=18">
+<link rel="stylesheet" href="style.css?v=19">
 <script src="lib/Tone.js"></script>
 <script src="lib/soundfont-player.min.js"></script>
 </head>
@@ -16,7 +16,7 @@
     <div class="brand">
       <div class="logo">🎸</div>
       <div>
-        <h1>Motif Lab <span style="font-size:11px;font-weight:400;opacity:.45;vertical-align:middle">v18</span></h1>
+        <h1>Motif Lab <span style="font-size:11px;font-weight:400;opacity:.45;vertical-align:middle">v19</span></h1>
         <p>电吉他动机旋律 · 和弦驱动编曲工作台</p>
       </div>
     </div>
@@ -292,11 +292,11 @@
     </footer>
   </main>
 </div>
-<script src="theory.js?v=18"></script>
-<script src="cells.js?v=18"></script>
-<script src="specs.js?v=18"></script>
-<script src="rules.js?v=18"></script>
-<script src="app.js?v=18"></script>
+<script src="theory.js?v=19"></script>
+<script src="cells.js?v=19"></script>
+<script src="specs.js?v=19"></script>
+<script src="rules.js?v=19"></script>
+<script src="app.js?v=19"></script>
 <script>
 /* v17 性能：注册 Service Worker，预缓存静态资源与鼓采样，二次访问秒开 */
 try {
@@ -304,6 +304,23 @@ try {
     navigator.serviceWorker.register('sw.js').catch(function () {});
   }
 } catch (e) {}
+</script>
+<script>
+/* v19 自救看门狗：app.js 加载失败（网络重置/坏缓存）时按钮全死、用户无任何反馈。
+   8 秒后检测到核心函数缺失 → 清 SW 缓存 + 强制刷新一次（sessionStorage 防刷新循环） */
+window.addEventListener('load', function () {
+  setTimeout(function () {
+    if (typeof window.togglePlay === 'function') return;
+    if (sessionStorage.getItem('motif_recovered')) return;
+    sessionStorage.setItem('motif_recovered', '1');
+    var done = function () { location.reload(true); };
+    if ('caches' in window) {
+      caches.keys().then(function (ks) {
+        return Promise.all(ks.map(function (k) { return caches.delete(k); }));
+      }).then(done).catch(done);
+    } else { done(); }
+  }, 8000);
+});
 </script>
 </body>
 </html>

@@ -2939,7 +2939,10 @@ async function togglePlay() {
     alert('音频引擎加载失败，请检查网络后刷新页面');
     return;
   }
-  if (!(await ensureAudio())) return;
+  if (!(await ensureAudio())) {
+    sampStatus('⚠ 音频引擎未唤醒，请再点一次播放（浏览器自动播放限制）'); /* v19：原静默 return，用户以为按钮坏了 */
+    return;
+  }
   applyMix();
   if (state.playing) {
     Tone.Transport.stop();
@@ -2953,6 +2956,7 @@ async function togglePlay() {
       /* 播放闸：仅会话首次等待（6s 封顶），之后直接播；v14 页面加载即预热，多数情况此门秒过。
          v17 性能：门槛 4→2——只硬等主角吉他采样 + 当前鼓组（律动轴）；
          键盘/贝斯/pad 有合成兜底先发声，采样就绪后 sampOf 自动切换 */
+      try {
       const gName = SAMP_GUITAR[state.layers.guitar.patch];
       const t0 = Date.now();
       while (!state._gateDone && ((gName && !SAMP.cache[state.sfBase + ':' + gName]) || !drumsReady()) && Date.now() - t0 < 6000) {
@@ -2963,13 +2967,24 @@ async function togglePlay() {
         await new Promise(r => setTimeout(r, 250));
         if (state.playing) return; /* 等待中被再次点击则取消 */
       }
+      } catch (gateErr) {
+        /* v19 防弹：门内任何异常（采样 404/解码失败/网络重置）都不能让播放死掉——合成兜底照播 */
+        console.warn('音色门异常，降级合成音色播放', gateErr);
+        sampStatus('⚠ 部分音色加载失败，已用合成音色开播');
+      }
       state._gateDone = true;
-      sampStatus('');
-      restoreSampleBuses();
-      scheduleAll();
-      Tone.Transport.start();
-      state.playing = true;
-      updatePlayBtn();
+      try {
+        sampStatus('');
+        restoreSampleBuses();
+        scheduleAll();
+        Tone.Transport.start();
+        state.playing = true;
+        updatePlayBtn();
+      } catch (playErr) {
+        /* v19 防弹：排程/启动失败要可见，不能按钮静默失灵 */
+        console.error('播放启动失败', playErr);
+        sampStatus('⚠ 播放启动失败：' + (playErr && playErr.message ? playErr.message : playErr));
+      }
     })();
   }
   updatePlayBtn();

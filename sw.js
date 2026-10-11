@@ -1,6 +1,6 @@
 /* MotifLab Service Worker — v17 性能：预缓存静态资源 + 鼓采样，二次访问秒开 */
 'use strict';
-var CACHE = 'motiflab-v18';
+var CACHE = 'motiflab-v19';
 var PRECACHE = [
   './',
   'index.html',
@@ -31,7 +31,13 @@ var PRECACHE = [
 
 self.addEventListener('install', function (e) {
   e.waitUntil(
-    caches.open(CACHE).then(function (c) { return c.addAll(PRECACHE); }).then(function () {
+    /* v19：国内网络抖动时 addAll 任一失败则整个 SW 安装失败（等于没装）。
+       改为逐个缓存、允许部分失败——装上一个不完整的缓存也比没有强 */
+    caches.open(CACHE).then(function (c) {
+      return Promise.all(PRECACHE.map(function (u) {
+        return c.add(u).catch(function () { return null; });
+      }));
+    }).then(function () {
       return self.skipWaiting();
     })
   );
