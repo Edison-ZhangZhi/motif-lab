@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Motif Lab · 电吉他动机旋律生成器</title>
-<link rel="stylesheet" href="style.css?v=22">
+<link rel="stylesheet" href="style.css?v=23">
 <script src="lib/Tone.js"></script>
 <script src="lib/soundfont-player.min.js"></script>
 </head>
@@ -16,7 +16,7 @@
     <div class="brand">
       <div class="logo">🎸</div>
       <div>
-        <h1>Motif Lab <span style="font-size:11px;font-weight:400;opacity:.45;vertical-align:middle">v22</span></h1>
+        <h1>Motif Lab <span style="font-size:11px;font-weight:400;opacity:.45;vertical-align:middle">v23</span></h1>
         <p>电吉他动机旋律 · 和弦驱动编曲工作台</p>
       </div>
     </div>
@@ -292,18 +292,40 @@
     </footer>
   </main>
 </div>
-<script src="theory.js?v=22"></script>
-<script src="cells.js?v=22"></script>
-<script src="specs.js?v=22"></script>
-<script src="rules.js?v=22"></script>
-<script src="app.js?v=22"></script>
+<script src="theory.js?v=23"></script>
+<script src="cells.js?v=23"></script>
+<script src="specs.js?v=23"></script>
+<script src="rules.js?v=23"></script>
+<script src="app.js?v=23"></script>
 <script>
 /* v17 性能：注册 Service Worker，预缓存静态资源与鼓采样，二次访问秒开 */
 try {
   if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
     navigator.serviceWorker.register('sw.js').catch(function () {});
+    /* v23 缓存幽灵根治①：新版 SW 接管（controllerchange）→ 自动刷新一次拿新页面。
+       只在本页已被旧 SW 控制时才刷新（首装不刷）；sessionStorage 防循环。 */
+    var _hadCtrl = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', function () {
+      if (!_hadCtrl || sessionStorage.getItem('ml_ctrl_reloaded')) return;
+      sessionStorage.setItem('ml_ctrl_reloaded', '1');
+      location.reload();
+    });
   }
 } catch (e) {}
+/* v23 缓存幽灵根治②：版本探测兜底——拿线上 sw.js 缓存名对比本页版本（?bust 强制走网络、
+   绕开旧 SW 的缓存优先），不一致说明本页是旧 SW 端的旧版 → 强制刷新一次。 */
+(function () {
+  var PAGE_VER = 'v23'; /* 发版三件套：?v=N + 徽章 + 这里 */
+  try {
+    fetch('sw.js?bust=' + Date.now()).then(function (r) { return r.text(); }).then(function (t) {
+      var m = /motiflab-(v\d+)/.exec(t);
+      if (m && m[1] !== PAGE_VER && !sessionStorage.getItem('ml_vcheck_' + m[1])) {
+        sessionStorage.setItem('ml_vcheck_' + m[1], '1');
+        location.reload();
+      }
+    }).catch(function () {});
+  } catch (e) {}
+})();
 </script>
 <script>
 /* v19 自救看门狗：app.js 加载失败（网络重置/坏缓存）时按钮全死、用户无任何反馈。

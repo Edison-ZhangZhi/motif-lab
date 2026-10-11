@@ -1,6 +1,6 @@
 /* MotifLab Service Worker — v17 性能：预缓存静态资源 + 鼓采样，二次访问秒开 */
 'use strict';
-var CACHE = 'motiflab-v22';
+var CACHE = 'motiflab-v23';
 var PRECACHE = [
   './',
   'index.html',
@@ -59,6 +59,25 @@ self.addEventListener('fetch', function (e) {
   var url;
   try { url = new URL(req.url); } catch (err) { return; }
   if (url.origin !== self.location.origin) return;
+  if (url.search.indexOf('bust=') >= 0) return; /* v23：版本探测请求穿透网络，不进缓存 */
+  /* v23：页面导航与 sw.js 改网络优先——缓存优先会把旧版 index.html 一直端给用户（"这还是旧版"根源）。
+     离线时回退缓存，保住离线可用。 */
+  if (req.mode === 'navigate' || /\/sw\.js$/.test(url.pathname)) {
+    e.respondWith(
+      fetch(req).then(function (res) {
+        if (res && res.ok) {
+          var clone = res.clone();
+          caches.open(CACHE).then(function (c) { c.put(req, clone); });
+        }
+        return res;
+      }).catch(function () {
+        return caches.match(req, { ignoreSearch: false }).then(function (hit) {
+          return hit || Response.error();
+        });
+      })
+    );
+    return;
+  }
   e.respondWith(
     caches.match(req, { ignoreSearch: false }).then(function (hit) {
       if (hit) {
