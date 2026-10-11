@@ -234,8 +234,8 @@ const STYLES = {
 
 /* ---------- 鼓型 v4（16 步进；谱面实测校准 §B1.5，来源见方案文档） ---------- */
 const DRUM_PATTERNS = {
-  rock: { /* 实测 Teen Spirit 主歌：kick 1010000010100000 */
-    kick:  [1,0,1,0, 0,0,0,0, 1,0,1,0, 0,0,0,0],
+  rock: { /* Back in Black 式标准 backbeat：kick 1/9 步，snare 5/13，hat 8 分 */
+    kick:  [1,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0],
     snare: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
     ghost: [0,0,0,0, 0,0,1,0, 0,0,0,0, 0,0,1,0],
     hat:   [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0],
@@ -248,57 +248,60 @@ const DRUM_PATTERNS = {
     hat:   [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0],
     crash: [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0],
   },
-  rnb: { /* 实测 D'Angelo {1,3&} + Ocean {1,2&}；hat 后半留空 */
-    kick:  [1,0,0,0, 0,0,1,0, 0,0,1,0, 0,0,0,0],
+  rnb: { /* Best Part/Get You 实测：kick 1 + "3 的 e"(11步)，ghost 7/12 步，hat 8 分连续拖拍 */
+    kick:  [1,0,0,0, 0,0,0,0, 0,0,1,0, 0,0,0,0],
     snare: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
-    ghost: [0,0,0,0, 0,0,0,1, 0,0,0,0, 0,0,0,1],
-    hat:   [1,0,1,0, 1,0,1,0, 1,0,1,0, 0,0,0,0],
+    ghost: [0,0,0,0, 0,0,1,0, 0,0,0,1, 0,0,0,0],
+    hat:   [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0],
     ohat:  [0,0,0,0, 0,0,0,0, 0,0,1,0, 0,0,0,0],
   },
-  jazz: { /* ride spang-a-lang + 四拍 feather + 反拍 comping */
-    ride:  [1,0,1,1, 1,0,1,0, 1,0,1,1, 1,0,1,1],
-    kick:  [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0], /* 四拍 feathering，力度轻 */
+  jazz: { /* ride spang-a-lang（1/5/8轻/9/13/16轻）+ hat 脚踏 2/4 拍 + kick 1/3 拍 feathering */
+    ride:  [1,0,0,0, 1,0,0,1, 1,0,0,0, 1,0,0,1],
+    kick:  [1,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0], /* 1/3 拍 feathering，力度极轻 */
     snare: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
-    hat:   [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0],
+    hat:   [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0], /* 脚踏 2/4 拍 "chick" */
   },
-  bossa: { /* 实测 Ipanema：shaker X.X...X.X.X...X.，rim 反拍切分 */
-    kick:  [1,0,0,0, 0,0,1,0, 0,1,0,0, 1,0,0,0],
-    snare: [0,0,0,1, 1,0,1,0, 0,0,0,1, 1,0,1,0],
-    hat:   [1,0,1,0, 0,0,1,0, 1,0,1,0, 0,0,1,0],
+  bossa: { /* Ipanema：surdo kick 1/9 重 + 8/16 轻前导；bossa clave 两小节侧击（snareB=第二小节）；cabasa 16 分 */
+    kick:  [1,0,0,0, 0,0,0,1, 1,0,0,0, 0,0,0,1],
+    snare: [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,0,0], /* clave 小节 A：3/7/11 步 */
+    snareB:[0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0], /* clave 小节 B：5/13 步 */
+    hat:   [1,0,1,1, 1,0,1,1, 1,0,1,1, 1,0,1,1],
   },
   beach: { /* 陶喆《沙滩》式：无鼓组，shaker 16分 + 偶尔 rimshot */
     kick:  [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0],
     snare: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
     hat:   [1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1],
   },
-  funk: {
-    kick:  [1,0,0,0, 0,0,1,0, 0,1,0,0, 1,0,0,0],
-    snare: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,1],
-    hat:   [1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1],
-    ghost: [0,0,1,0, 0,1,0,1, 0,0,1,0, 0,1,0,0],
-  },
-  soul: {
-    kick:  [1,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0],
+  funk: { /* Funky Drummer 实测：kick 1/3/11/14，snare 5/13 + ghost 8/10/12/16，hat 全 16 分 + 6/14 步开镲 */
+    kick:  [1,0,1,0, 0,0,0,0, 0,0,1,0, 0,1,0,0],
     snare: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
-    hat:   [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0],
-    ghost: [0,0,0,0, 0,0,0,1, 0,0,0,0, 0,0,0,1],
+    hat:   [1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1],
+    ohat:  [0,0,0,0, 0,1,0,0, 0,0,0,0, 0,1,0,0],
+    ghost: [0,0,0,0, 0,0,0,1, 0,1,0,1, 0,0,0,1],
   },
-  reggae: { /* one-drop：kick 与军鼓同落第 3 拍 */
+  soul: { /* Lovely Day 系：kick 1/7/9 步，重 backbeat + 拍手，ghost 7/15 步，hat 16 分带开闭 */
+    kick:  [1,0,0,0, 0,0,1,0, 1,0,0,0, 0,0,0,0],
+    snare: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
+    hat:   [1,0,1,1, 1,0,1,1, 1,0,1,1, 1,0,1,1],
+    ghost: [0,0,0,0, 0,0,1,0, 0,0,0,0, 0,0,1,0],
+  },
+  reggae: { /* one-drop：kick 与军鼓同落第 3 拍（第 1 拍必须空），hat 全反拍（3/7/11/15 步） */
     kick:  [0,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0],
     snare: [0,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0],
-    hat:   [1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1],
-    ghost: [0,0,0,1, 0,0,1,0, 0,0,0,1, 0,0,1,0],
+    hat:   [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0],
+    ghost: [0,0,0,1, 0,0,0,0, 0,0,0,1, 0,0,0,0],
   },
-  afrobeats: {
-    kick:  [1,0,0,0, 0,0,1,1, 0,0,1,0, 0,0,0,0],
-    snare: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
-    hat:   [1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1],
-  },
-  hiphop: { /* trap 标准：snare 上 3，开镲 2/4 拍的 and */
-    kick:  [1,0,0,0, 0,0,0,0, 0,0,1,0, 0,0,0,1],
+  afrobeats: { /* Essence/Water 系：tresillo kick 1/4/9/12，clap 只在第 3 拍（half-time），shaker 16 分 */
+    kick:  [1,0,0,1, 0,0,0,0, 1,0,0,1, 0,0,0,0],
     snare: [0,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0],
-    ohat:  [0,0,0,0, 0,1,0,0, 0,0,0,0, 0,1,0,0],
-    hat:   [1,0,1,0, 1,0,1,1, 1,0,1,0, 1,1,1,1],
+    hat:   [1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1],
+    ohat:  [1,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0],
+  },
+  hiphop: { /* trap 标准（SICKO MODE/Bad and Boujee）：snare 只打第 3 拍，kick 1+11/14 步切分，hat 全 16 分 + 开镲叠 1 拍 */
+    kick:  [1,0,0,0, 0,0,0,0, 0,0,1,0, 0,1,0,0],
+    snare: [0,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0],
+    ohat:  [1,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0],
+    hat:   [1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1],
     ghost: [0,0,0,0, 0,0,0,0, 0,0,0,1, 0,0,0,0],
     crash: [1,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0],
   },
@@ -314,11 +317,11 @@ const DRUM_PATTERNS = {
     hat:   [1,0,1,0, 1,0,1,0, 1,0,1,0],
     ohat:  [0,0,0,0, 0,0,0,0, 0,0,1,0],
   },
-  afro: { /* 实测 Fela《Expensive Shit》：kick 忙、clave、bell 反拍 8 分、conga 互锁 */
-    kick:  [1,1,0,0, 1,1,0,1, 0,0,1,0, 1,1,0,0],
-    kickB: [1,1,0,0, 1,1,0,1, 0,0,1,0, 1,0,0,1], /* 第二小节变体（现代 afrobeats 工作流） */
+  afro: { /* Tony Allen（Zombie）：kick 1/4/9/12 步类 clave 骨架 + backbeat snare + 16 分 ghost 网 */
+    kick:  [1,0,0,1, 0,0,0,0, 1,0,0,1, 0,0,0,0],
+    kickB: [1,0,0,1, 0,0,0,0, 1,0,0,1, 0,1,0,0], /* 第二小节变体（现代 afrobeats 工作流） */
     snare: [1,0,0,1, 0,0,1,0, 1,0,0,1, 0,0,1,0], /* son clave 音型 */
-    ghost: [0,0,1,0, 0,1,0,0, 0,0,1,0, 0,1,0,0],
+    ghost: [0,0,1,0, 0,1,0,0, 1,0,0,1, 0,0,1,0],
     bell:  [0,0,1,1, 0,0,1,1, 0,0,1,1, 0,0,1,1], /* cowbell 反拍 8 分（谱面实测） */
     ride:  [0,0,0,1, 0,0,1,0, 0,0,0,1, 0,0,1,0],
     congaH:[0,0,0,1, 0,0,1,0, 0,0,0,1, 0,0,1,0],
@@ -350,8 +353,8 @@ const PRESETS = [
             { d: 2, q: 'min9' }, { d: 5, q: '13' }, { d: 1, q: 'maj9' }, { d: 6, q: '7' }] },
   { id: 'bossa-min', name: 'Bossa 小调 iiø-V-i', styles: ['bossa', 'jazz'],
     desc: 'ⅱø–Ⅴ7(b9)–ⅰm9：小调巴萨，半减和弦 + 降九属，忧郁拉丁味。建议切到自然小调。',
-    slots: [{ d: 2, q: 'm7b5' }, { d: 5, q: '7b9' }, { d: 1, q: 'min9' }, { d: 6, q: 'maj7' },
-            { d: 2, q: 'm7b5' }, { d: 5, q: '7b9' }, { d: 1, q: 'min9' }, { d: 6, q: 'maj7' }], mode: 'minor' },
+    slots: [{ d: 2, q: 'm7b5' }, { d: 5, q: '7b9' }, { d: 1, q: 'min9' }, { d: 6, acc: -1, q: 'maj7' },
+            { d: 2, q: 'm7b5' }, { d: 5, q: '7b9' }, { d: 1, q: 'min9' }, { d: 6, acc: -1, q: 'maj7' }], mode: 'minor' },
   { id: 'blues-12', name: '12 小节布鲁斯', styles: ['rock', 'jazz'],
     desc: '全属七和弦：Ⅰ7–Ⅳ7–Ⅴ7 的 12 小节框架，摇滚/爵士布鲁斯基石。可切混合利底亚。',
     slots: [
@@ -384,10 +387,10 @@ const PRESETS = [
     desc: 'ⅰm–♭Ⅵ–♭Ⅶ：2020s TikTok/流行朋克/说唱通用小调型，情绪张力大、极易跟唱。建议切自然小调。',
     slots: [{ d: 1, q: 'min' }, { d: 6, acc: -1, q: 'maj' }, { d: 7, acc: -1, q: 'maj' }, { d: 1, q: 'min' },
             { d: 1, q: 'min7' }, { d: 6, acc: -1, q: 'maj7' }, { d: 7, acc: -1, q: '7' }, { d: 5, q: '7' }], mode: 'minor' },
-  { id: 'trap-min', name: 'Trap 小调 i-♭VI-iv-♭VII', styles: ['hiphop'],
-    desc: 'ⅰm9–♭Ⅵ△7–ⅳm7–♭Ⅶ7：当代 Trap 招牌黑暗循环（Metro Boomin/Future 系），配 Rap 风格 + 滑音 808。',
-    slots: [{ d: 1, q: 'min9' }, { d: 6, acc: -1, q: 'maj7' }, { d: 4, q: 'min7' }, { d: 7, acc: -1, q: '7' },
-            { d: 1, q: 'min9' }, { d: 6, acc: -1, q: 'maj7' }, { d: 4, q: 'min7' }, { d: 7, acc: -1, q: '7' }], mode: 'minor' },
+  { id: 'trap-min', name: 'Trap 小调 i-♭VI-♭III-♭VII（SICKO MODE 式）', styles: ['hiphop'],
+    desc: 'ⅰm9–♭Ⅵ△7–♭Ⅲ△7–♭Ⅶ7：当代 Trap 招牌暗色下行循环（SICKO MODE / Metro Boomin 系），配 Rap 风格 + 滑音 808。',
+    slots: [{ d: 1, q: 'min9' }, { d: 6, acc: -1, q: 'maj7' }, { d: 3, acc: -1, q: 'maj7' }, { d: 7, acc: -1, q: '7' },
+            { d: 1, q: 'min9' }, { d: 6, acc: -1, q: 'maj7' }, { d: 3, acc: -1, q: 'maj7' }, { d: 7, acc: -1, q: '7' }], mode: 'minor' },
   { id: 'pop-1564', name: '流行 1-5-6-4', styles: ['rnb', 'rock'],
     desc: 'Ⅰ–Ⅴ–ⅵ–Ⅳ：全球最知名走向，RnB 化可加 9/13 延伸音。',
     slots: [{ d: 1, q: 'add9' }, { d: 5, q: '9' }, { d: 6, q: 'min9' }, { d: 4, q: 'add9' },
@@ -424,6 +427,46 @@ const PRESETS = [
     desc: 'Ⅰmaj9–♯Ⅰ°7–ⅱm9–Ⅴ13：高半音减七经过和弦，陶喆《十点半的飞机》式滑接语法，方大同《Love Song》同款离调感。',
     slots: [{ d: 1, q: 'maj9' }, { d: 1, acc: 1, q: 'dim7' }, { d: 2, q: 'min9' }, { d: 5, q: '13' },
             { d: 1, q: 'maj9' }, { d: 1, acc: 1, q: 'dim7' }, { d: 2, q: 'min9' }, { d: 5, q: '9' }] },
+  { id: 'rnb-redbone', name: 'RnB 小调 i-iv-♭VII-♭III（Redbone 式）', styles: ['rnb'],
+    desc: 'ⅰm9–ⅳm9–♭Ⅶ9–♭Ⅲ△9：Childish Gambino《Redbone》小调 loop，暗色 neo-soul 招牌。建议切自然小调。',
+    slots: [{ d: 1, q: 'min9' }, { d: 4, q: 'min9' }, { d: 7, acc: -1, q: '9' }, { d: 3, acc: -1, q: 'maj9' },
+            { d: 1, q: 'min9' }, { d: 4, q: 'min9' }, { d: 7, acc: -1, q: '9' }, { d: 3, acc: -1, q: 'maj9' }], mode: 'minor' },
+  { id: 'bossa-ipanema', name: 'Bossa Ipanema 进行', styles: ['bossa'],
+    desc: 'Ⅰ△7–Ⅱ9–ⅱm9–♭Ⅱ7(♯11)：《Girl from Ipanema》Fmaj7–G7–Gm7–G♭7，副属 Ⅱ7 + 半音经过属和弦。',
+    slots: [{ d: 1, q: 'maj7' }, { d: 2, q: '9' }, { d: 2, q: 'min9' }, { d: 2, acc: -1, q: '7#11' },
+            { d: 1, q: 'maj9' }, { d: 2, q: '13' }, { d: 2, q: 'min9' }, { d: 2, acc: -1, q: '7' }] },
+  { id: 'afro-dorian', name: 'Afro Dorian 双和弦 i-iv（Fela 式）', styles: ['afro'],
+    desc: 'ⅰm9–ⅳm7 无限往返：《Water No Get Enemy》式 Dorian vamp，和声极简、靠节奏复层推进。建议切多利亚。',
+    slots: [{ d: 1, q: 'min9' }, { d: 4, q: 'min7' }, { d: 1, q: 'min9' }, { d: 4, q: 'min7' },
+            { d: 1, q: 'min9' }, { d: 4, q: 'min7' }, { d: 1, q: 'min9' }, { d: 4, q: 'min7' }], mode: 'dorian' },
+  { id: 'funk-vamp', name: 'Funk 单和弦 I9 vamp（Sex Machine 式）', styles: ['funk'],
+    desc: 'Ⅰ9 一个和弦玩到底：James Brown 式放克常态，节奏即和声。建议切混合利底亚。',
+    slots: [{ d: 1, q: '9' }, { d: 1, q: '9' }, { d: 1, q: '9' }, { d: 1, q: '13' },
+            { d: 1, q: '9' }, { d: 1, q: '9' }, { d: 1, q: '13' }, { d: 1, q: '9' }], mode: 'mixolydian' },
+  { id: 'funk-min9', name: 'Funk 小九双和弦 i9-iv9（Superstition 式）', styles: ['funk'],
+    desc: 'ⅰm9–ⅳm9：Stevie Wonder《Superstition》clavinet vamp，小九和弦往返。建议切多利亚。',
+    slots: [{ d: 1, q: 'min9' }, { d: 4, q: 'min9' }, { d: 1, q: 'min9' }, { d: 4, q: 'min9' },
+            { d: 1, q: 'min9' }, { d: 4, q: 'min9' }, { d: 1, q: 'min9' }, { d: 4, q: 'min9' }], mode: 'dorian' },
+  { id: 'soul-lovely', name: 'Soul I-vi-IV（Lovely Day 式）', styles: ['soul'],
+    desc: 'Ⅰ△7–ⅵm7–Ⅳ△7：Bill Withers《Lovely Day》主歌进行，明亮里带一点怅然。',
+    slots: [{ d: 1, q: 'maj7' }, { d: 6, q: 'min7' }, { d: 4, q: 'maj7' }, { d: 4, q: 'maj7' },
+            { d: 1, q: 'maj9' }, { d: 6, q: 'min9' }, { d: 4, q: 'maj7' }, { d: 4, q: 'maj7' }] },
+  { id: 'soul-gospel', name: 'Gospel 招牌 IV-IVm-I', styles: ['soul'],
+    desc: 'Ⅳ△7–ⅳm7–Ⅰ△7：同根大小调切换的福音招牌解决，唱诗班式回落。',
+    slots: [{ d: 4, q: 'maj7' }, { d: 4, q: 'min7' }, { d: 1, q: 'maj7' }, { d: 1, q: 'maj7' },
+            { d: 4, q: 'maj9' }, { d: 4, q: 'min9' }, { d: 1, q: 'maj9' }, { d: 1, q: 'maj7' }] },
+  { id: 'reggae-vamp', name: 'Reggae 双和弦 i-♭VII', styles: ['reggae'],
+    desc: 'ⅰm7–♭Ⅶ：roots reggae 最常见双和弦 vamp，one-drop 鼓 + 反拍 skank 的土壤。建议切自然小调。',
+    slots: [{ d: 1, q: 'min7' }, { d: 7, acc: -1, q: 'maj7' }, { d: 1, q: 'min7' }, { d: 7, acc: -1, q: 'maj7' },
+            { d: 1, q: 'min7' }, { d: 7, acc: -1, q: 'maj7' }, { d: 1, q: 'min7' }, { d: 7, acc: -1, q: 'maj7' }], mode: 'minor' },
+  { id: 'reggae-145', name: 'Reggae 大调 I-IV-V（Three Little Birds 式）', styles: ['reggae'],
+    desc: 'Ⅰ–Ⅳ–Ⅴ：Bob Marley《Three Little Birds》阳光三和弦，rocksteady 骨架。',
+    slots: [{ d: 1, q: 'maj7' }, { d: 4, q: 'maj7' }, { d: 1, q: 'maj7' }, { d: 5, q: '7' },
+            { d: 1, q: 'maj7' }, { d: 4, q: 'maj7' }, { d: 1, q: 'maj7' }, { d: 5, q: '7' }] },
+  { id: 'afrobeats-min', name: 'Afrobeats 暗色 i-♭VI-♭III-♭VII（Essence 式）', styles: ['afrobeats'],
+    desc: 'ⅰm9–♭Ⅵ△7–♭Ⅲ△7–♭Ⅶ7：Wizkid/Tems《Essence》系小调循环，m7/maj7 色彩 + log-drum 律动。建议切自然小调。',
+    slots: [{ d: 1, q: 'min9' }, { d: 6, acc: -1, q: 'maj7' }, { d: 3, acc: -1, q: 'maj7' }, { d: 7, acc: -1, q: '7' },
+            { d: 1, q: 'min9' }, { d: 6, acc: -1, q: 'maj7' }, { d: 3, acc: -1, q: 'maj7' }, { d: 7, acc: -1, q: '7' }], mode: 'minor' },
 ];
 
 /* ---------- 级数显示 ---------- */
@@ -466,6 +509,9 @@ const DEG_FUNCTION = {
 
 /* 调内升降级名 → 色块（半音提示） */
 function slotRootPC(slot, keyRootPC, mode) {
-  const off = MODES[slot.modeOverride || mode].offsets[slot.d - 1] + (slot.acc || 0);
+  /* 罗马数字惯例：级数按大调音阶定位，acc 在其上叠加升降（♭Ⅶ = 大调 7 级降半音 = 10）。
+     旧实现按当前调式取级——自然小调里 6/7 级本身已是 ♭6/♭7，预设再写 acc:-1 就被二次降级
+     （小调 "♭Ⅵ" 实际落到了 Ⅴ 根音上），这是小调预设和声诡异的根因 */
+  const off = MODES.major.offsets[slot.d - 1] + (slot.acc || 0);
   return (keyRootPC + off) % 12;
 }

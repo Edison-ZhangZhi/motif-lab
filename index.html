@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Motif Lab · 电吉他动机旋律生成器</title>
-<link rel="stylesheet" href="style.css?v=16">
+<link rel="stylesheet" href="style.css?v=17">
 <script src="lib/Tone.js"></script>
 <script src="lib/soundfont-player.min.js"></script>
 </head>
@@ -16,7 +16,7 @@
     <div class="brand">
       <div class="logo">🎸</div>
       <div>
-        <h1>Motif Lab <span style="font-size:11px;font-weight:400;opacity:.45;vertical-align:middle">v16</span></h1>
+        <h1>Motif Lab <span style="font-size:11px;font-weight:400;opacity:.45;vertical-align:middle">v17</span></h1>
         <p>电吉他动机旋律 · 和弦驱动编曲工作台</p>
       </div>
     </div>
@@ -243,6 +243,20 @@
       <div class="prog-explain" id="prog-explain"></div>
     </section>
 
+    <!-- ===================== 轨道编辑 ===================== -->
+    <section class="card">
+      <details class="ted" id="track-editor">
+        <summary>🎚 轨道编辑 · 点击音符开关/修改</summary>
+        <div class="ted-toolbar">
+          <button id="ted-prev" class="btn small">◀ 前 4 小节</button>
+          <span class="ted-barlabel" id="ted-bar-label"></span>
+          <button id="ted-next" class="btn small">后 4 小节 ▶</button>
+          <span class="ted-hint">旋律/贝斯：点格子加删音 · 鼓：连点循环 强→弱→删 · 键盘：点=触发本小节和弦 · Pad：点=本小节开关</span>
+        </div>
+        <div id="ted-tracks"></div>
+      </details>
+    </section>
+
     <!-- ===================== 旋律 ===================== -->
     <section class="card">
       <h2><span class="step">5</span> 生成结果 <em>钢琴卷帘 · 可直接编辑旋律 · 改和弦后自动重配</em></h2>
@@ -258,14 +272,11 @@
         <div class="exports">
           <button id="btn-midi" class="btn">⬇ 导出 MIDI（全编配）</button>
           <button id="btn-audio" class="btn" title="录下完整混音并自动转 WAV，同时输出频谱体检——把 WAV 发给 AI 可做根因分析">⬇ 导出音频（WAV·含体检）</button>
-          <button id="btn-copy-prog" class="btn">📋 复制和弦走向</button>
         </div>
         <div class="studio-row">
           <input type="password" id="replicate-token" placeholder="Replicate API Token（仅存本机浏览器）" autocomplete="off">
           <button id="btn-studio" class="btn btn-primary">🎙 渲染成唱片</button>
-          <button id="btn-studio3" class="btn" title="同一引导带渲染三个温度变体，盲听挑最好的">🎲 渲染 3 变体对比</button>
-          <button id="btn-melody-wav" class="btn" title="这是给 AI 看的正弦波图纸（无鼓无音色），用于上传到 HuggingFace 免费生成——不要用它评判成品音质！">⬇ AI 引导带（给 MusicGen·非成品）</button>
-          <button id="btn-neural" class="btn" title="浏览器本地跑 MusicGen 神经网络生成（Suno 同路线，免费，需 WebGPU）">🧠 生成式渲染（本地·免费）</button>
+          <button id="btn-copy-prog" class="btn small">📋 复制和弦走向</button>
         </div>
         <p class="studio-status" id="studio-status"></p>
         <div class="studio-variants" id="studio-variants" hidden></div>
@@ -281,10 +292,10 @@
     </footer>
   </main>
 </div>
-<script src="theory.js?v=16"></script>
-<script src="cells.js?v=16"></script>
-<script src="specs.js?v=16"></script>
-<script src="rules.js?v=16"></script>
-<script src="app.js?v=16"></script>
+<script src="theory.js?v=17"></script>
+<script src="cells.js?v=17"></script>
+<script src="specs.js?v=17"></script>
+<script src="rules.js?v=17"></script>
+<script src="app.js?v=17"></script>
 </body>
 </html>
