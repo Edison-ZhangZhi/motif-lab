@@ -2529,6 +2529,11 @@ function playDrumSample(name, t, vel, opts) {
     const lp = raw.createBiquadFilter();
     lp.type = 'lowpass'; lp.frequency.value = 2800;
     g.connect(lp); lp.connect(DRUM_SAMP.bus);
+  } else if (opts && opts.pillow) {
+    /* v33：Neo-Soul 枕头鼓——软、圆、闷但不糊（3.6k 低通） */
+    const lp = raw.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = 3600;
+    g.connect(lp); lp.connect(DRUM_SAMP.bus);
   } else if (vel < 0.45 && (name === 'snare_room' || name === 'snare808' || name === 'snap')) {
     /* 幽灵音/轻击：低通变暗 = 真实轻击鼓皮音色（非仅调音量） */
     const lp = raw.createBiquadFilter();
@@ -3215,6 +3220,10 @@ function scheduleAll() {
           const n = kit[inst]; if (!n) return false;
           /* v15：jazz ride 无采样——复用 crash 低力度+低通变暗+缩短衰减模拟 ride 叮声 */
           if (inst === 'ride' && n === 'crash') return playDrumSample(n, tt, e.vel * 0.55, { dark: true, short: 0.5 });
+          /* v33：Neo-Soul 枕头底鼓——rnb/soul 的 kick 软/圆/闷（Best Part/Lovely Day 式），
+             真采样低通 3.6k+短衰减+减力度；房间鼓的摇滚 punch 是"rnb 不像 Neo-Soul"的主音色原因 */
+          if (inst === 'kick' && (dStyle === 'rnb' || dStyle === 'soul')) return playDrumSample(n, tt, e.vel * 0.7, { pillow: true, short: 0.35 });
+          if (inst === 'snare' && (dStyle === 'rnb' || dStyle === 'soul')) return playDrumSample(n, tt, e.vel * 0.85); /* 军鼓稍收，让位律动呼吸 */
           return playDrumSample(n, tt, e.vel);
         };
         if (smp(e.inst)) {
