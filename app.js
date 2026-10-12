@@ -2329,22 +2329,34 @@ function trig808kick(t, vel) {
  * 真实鼓/打击乐采样（Freesound CC0）——风格辨识度的地基
  * ============================================================ */
 const DRUM_SAMP = { buffers: {}, started: false, bus: null };
-const DRUM_FILES = ['kick_room','snare_room','hat_closed','crash','brush_snare','rim_click',
-  'shaker','shekere','conga_h','conga_l','clave','kick_808','snap','hat_808','clap'];
+const DRUM_FILES = [
+  /* v29 Salamander 录音室鼓组（48k/24bit FLAC，Alexander Holm 开源 CC）——真实鼓组主力，排前优先加载 */
+  'kick_OH_FF_1.flac','kick_OH_FF_2.flac','kick_OH_F_1.flac','kick_OH_P_1.flac',
+  'kick2_OH_FF_1.flac','kick2_OH_F_1.flac',
+  'snare_OH_FF_1.flac','snare_OH_FF_2.flac','snare_OH_F_1.flac','snare_OH_F_2.flac','snare_OH_Ghost_1.flac','snare_OH_Ghost_2.flac',
+  'snare2_OH_FF_1.flac','snare2_OH_F_1.flac',
+  'hihatClosed_OH_F_1.flac','hihatClosed_OH_F_2.flac','hihatClosed_OH_F_3.flac','hihatClosed_OH_P_1.flac','hihatClosed_OH_P_2.flac',
+  'hihatOpen_OH_F_1.flac','hihatOpen_OH_F_2.flac','hihatOpen_OH_P_1.flac',
+  'ride1_OH_FF_1.flac','ride1_OH_FF_2.flac','ride1_OH_MP_1.flac','ride1_OH_MP_2.flac',
+  'crash1_OH_FF_1.flac','crash1_OH_FF_2.flac','ride2Crash_OH_FF_1.flac',
+  /* 旧鼓件（打击乐/808/备用，仍为 mp3） */
+  'brush_snare.mp3','rim_click.mp3','shaker.mp3','shekere.mp3','conga_h.mp3','conga_l.mp3','clave.mp3',
+  'kick_808.mp3','snap.mp3','hat_808.mp3','clap.mp3','crash.mp3','snare_room.mp3','kick_room.mp3','hat_closed.mp3',
+];
 /* 每风格鼓件映射：值=采样名，null=用合成鼓回退 */
 const DRUM_KITS = {
-  rock:  { kick:'kick_room', snare:'snare_room', hat:'hat_closed', ohat:'hat_closed', ride:'hat_closed', crash:'crash', congaH:null, congaL:null, ghost:'snare_room' },
-  jazz:  { kick:'kick_room', snare:'brush_snare', hat:'hat_closed', ohat:'hat_closed', ride:'crash', crash:'crash', congaH:null, congaL:null, ghost:'brush_snare' }, /* v15：ride 用 crash 采样低力度+低通+短衰减模拟（播放层特判），kick/hat 复用房间采样，告别金属合成兜底 */
-  bossa: { kick:'kick_room', snare:'rim_click', hat:'hat_closed', ohat:'shaker', ride:'shaker', crash:'crash', congaH:null, congaL:null, ghost:'rim_click' }, /* v15：kick/hat 复用真实采样 */
-  afro:  { kick:'kick_room', snare:'clave', hat:'shekere', ohat:'shekere', ride:'shekere', bell:'clave', crash:null, congaH:'conga_h', congaL:'conga_l', ghost:null },
-  rnb:   { kick:'kick_room', snare:'snare_room', hat:'hat_closed', ohat:'hat_closed', ride:'hat_closed', crash:'crash', congaH:null, congaL:null, ghost:'snare_room' }, /* v27：真实采样；v28：军鼓 snap→snare_room（snap 采样低码率脆裂=用户反馈的"炸麦"） */
+  rock:  { kick:'sal_kick2', snare:'sal_snare2', hat:'sal_hat', ohat:'sal_ohat', ride:'sal_ride', crash:'sal_crash', congaH:null, congaL:null, ghost:'sal_snare2' }, /* v29：Salamander 真鼓（kick2/snare2 更冲的备用件） */
+  jazz:  { kick:'sal_kick', snare:'brush_snare', hat:'sal_hat', ohat:'sal_ohat', ride:'sal_ride', crash:'sal_crash', congaH:null, congaL:null, ghost:'brush_snare' }, /* v29：ride 终于用真叮镲（sal_ride），brush 保留爵士刷 */
+  bossa: { kick:'sal_kick', snare:'rim_click', hat:'sal_hat', ohat:'sal_ohat', ride:'sal_ride', crash:'sal_crash', congaH:null, congaL:null, ghost:'rim_click' }, /* v29：Salamander 真鼓；rim/shaker 保留原打击乐 */
+  afro:  { kick:'sal_kick', snare:'clave', hat:'shekere', ohat:'shekere', ride:'shekere', bell:'clave', crash:null, congaH:'conga_h', congaL:'conga_l', ghost:null }, /* v29：kick 换真鼓，Fela 打击乐群不动 */
+  rnb:   { kick:'sal_kick', snare:'sal_snare', hat:'sal_hat', ohat:'sal_ohat', ride:'sal_ride', crash:'sal_crash', congaH:null, congaL:null, ghost:'sal_snare' }, /* v29：Salamander 48k/24bit 真鼓组（力度分层+轮询）；节奏型/律动不变 */
   s808:  { kick:'kick_808', snare:null, hat:'hat_808', ohat:'hat_808', ride:'hat_808', crash:'crash', congaH:null, congaL:null, ghost:null },
   hiphop:{ kick:'kick_808', snare:'clap', hat:'hat_808', ohat:'hat_808', ride:null, crash:'crash', congaH:null, congaL:null, ghost:null },
   beach: { kick:null, snare:'rim_click', hat:'shaker', ohat:'shaker', ride:null, crash:null, congaH:null, congaL:null, ghost:null },
-  funk:     { kick:'kick_room', snare:'snare_room', hat:'hat_closed', ohat:'hat_closed', ride:'hat_closed', crash:'crash', ghost:'snare_room' },
-  soul:     { kick:'kick_room', snare:'snare_room', hat:'shaker', ohat:'shaker', ride:'shaker', crash:'crash', congaH:null, congaL:null, ghost:'snare_room' }, /* v27：弃合成 808 底鼓 → 真实采样；v28：军鼓 snap→snare_room */
-  reggae:   { kick:'kick_room', snare:'rim_click', hat:'hat_closed', ohat:'hat_closed', ride:'hat_closed', crash:'crash', congaH:null, congaL:null, ghost:'rim_click' },
-  afrobeats:{ kick:'kick_808', snare:'clap', hat:'shaker', ohat:'shaker', ride:'shaker', crash:'crash', congaH:null, congaL:null, ghost:null },
+  funk:     { kick:'sal_kick', snare:'sal_snare', hat:'sal_hat', ohat:'sal_ohat', ride:'sal_ride', crash:'sal_crash', ghost:'sal_snare' }, /* v29：ghost 用 Salamander 真实 ghost 录音 */
+  soul:     { kick:'sal_kick', snare:'sal_snare', hat:'shaker', ohat:'shaker', ride:'shaker', crash:'sal_crash', congaH:null, congaL:null, ghost:'sal_snare' },
+  reggae:   { kick:'sal_kick', snare:'rim_click', hat:'sal_hat', ohat:'sal_ohat', ride:'sal_ride', crash:'sal_crash', congaH:null, congaL:null, ghost:'rim_click' },
+  afrobeats:{ kick:'kick_808', snare:'clap', hat:'shaker', ohat:'shaker', ride:'shaker', crash:'sal_crash', congaH:null, congaL:null, ghost:null }, /* v29：kick 808=log drum 语汇保留，镲换真采样 */
 };
 function loadDrumSamples(isRetry) {
   if ((!isRetry && DRUM_SAMP.started) || DRUM_SAMP.loading || !AE.ready) return;
@@ -2354,21 +2366,28 @@ function loadDrumSamples(isRetry) {
   DRUM_SAMP.bus.gain.value = 1;
   DRUM_SAMP.bus.connect(nativeInputOf(AE.drumsVol));
   /* 单次击打最大时长（秒）：防止把 loop/长采样整段叠放 */
-  const DRUM_MAXDUR = { hat_closed: 0.8, hat_808: 1.2, shaker: 2.2, shekere: 2.0, snare_room: 1.5, snap: 1.0, rim_click: 1.0, clap: 1.3, brush_snare: 1.8, kick_room: 1.1, kick_808: 1.3, crash: 2.8, conga_h: 1.6, conga_l: 1.6, clave: 1.0 }; /* v26：kick_808 1.6→1.3s 收敛长尾——808 尾巴与贝斯叠糊是"鼓糊"主因之一 */
+  const DRUM_MAXDUR = { hat_closed: 0.8, hat_808: 1.2, shaker: 2.2, shekere: 2.0, snare_room: 1.5, snap: 1.0, rim_click: 1.0, clap: 1.3, brush_snare: 1.8, kick_room: 1.1, kick_808: 1.3, crash: 2.8, conga_h: 1.6, conga_l: 1.6, clave: 1.0,
+    /* v29 Salamander 长尾采样截断（原片 8-11.5s，只留击打+自然衰减段） */
+    'crash1_OH_FF_1': 3.0, 'crash1_OH_FF_2': 3.0, 'ride2Crash_OH_FF_1': 3.0,
+    'ride1_OH_FF_1': 2.2, 'ride1_OH_FF_2': 2.2, 'ride1_OH_MP_1': 2.2, 'ride1_OH_MP_2': 2.2,
+    'hihatOpen_OH_F_1': 1.6, 'hihatOpen_OH_F_2': 1.6, 'hihatOpen_OH_P_1': 1.6,
+    'snare_OH_FF_1': 1.4, 'snare_OH_FF_2': 1.4, 'snare_OH_F_1': 1.4, 'snare_OH_F_2': 1.4, 'snare2_OH_FF_1': 1.4, 'snare2_OH_F_1': 1.4 }; /* v26：kick_808 1.6→1.3s 收敛长尾——808 尾巴与贝斯叠糊是"鼓糊"主因之一 */
   /* v28：采样起始点校正——这些是长录音，开头常是静音/弱段（用 MP3 帧 global_gain 剖面实测选段）：
      hat_closed 152s 录音，开头 gain≈56-67（≈静音，这就是"镲片没声音"的根因）→ 取 28.0s 处孤立击打(gain 168)；
      kick_room 4.6s 录音，开头 gain≈55 → 取 3.9s 处最响一击(gain 81)。截断从起点改为按 offset 切段。 */
   const DRUM_OFFSETS = { hat_closed: 28.0, kick_room: 3.9 };
-  /* v19 防风暴：15 个 mp3 全并发 fetch+decode 与排程抢主线程——改逐个 await + 每个之间让出主线程 */
+  /* v19 防风暴：全并发 fetch+decode 与排程抢主线程——改逐个 await + 每个之间让出主线程 */
   DRUM_SAMP.promise = (async () => { /* v24：promise 外暴露，离线渲染前可等全 */
     for (const name of DRUM_FILES) {
       try {
-        const r = await fetch('drums/' + name + '.mp3');
+        const key = name.replace(/\.(mp3|flac)$/i, ''); /* v29：文件名自带扩展名，缓存键用裸名（与 kit/GAIN/MAXDUR 一致） */
+        if (DRUM_SAMP.buffers[key]) continue; /* v29：重试只补缺，不重复下载 */
+        const r = await fetch('drums/' + name);
         if (!r.ok) throw new Error('404');
         let buf = await raw.decodeAudioData(await r.arrayBuffer());
         
-        const max = DRUM_MAXDUR[name] || 1.5;
-        const offSec = DRUM_OFFSETS[name] || 0; /* v28：长录音从实测的击打位置切段 */
+        const max = DRUM_MAXDUR[key] || 1.5;
+        const offSec = DRUM_OFFSETS[key] || 0; /* v28：长录音从实测的击打位置切段 */
         if (buf.duration > offSec + max) {
           const n = Math.floor(raw.sampleRate * max);
           const start = Math.floor(raw.sampleRate * offSec);
@@ -2376,30 +2395,58 @@ function loadDrumSamples(isRetry) {
           for (let ch = 0; ch < buf.numberOfChannels; ch++) nb.getChannelData(ch).set(buf.getChannelData(ch).subarray(start, start + n));
           buf = nb;
         }
-        DRUM_SAMP.buffers[name] = buf;
+        DRUM_SAMP.buffers[key] = buf;
       } catch (e) { DRUM_SAMP.fail = (DRUM_SAMP.fail || 0) + 1; }
       await new Promise(res => setTimeout(res, 0));
     }
   })();
-  /* 6s 后清点：缺失自动重试一次，仍失败明确提示（网络差时鼓会无声，必须可见） */
+  /* 12s 后清点（v29：44 个文件逐个下载，6s 太短）：缺失自动重试一次，仍失败明确提示（网络差时鼓会无声，必须可见） */
   setTimeout(() => {
     DRUM_SAMP.loading = false;
-    const missing = DRUM_FILES.filter(n => !DRUM_SAMP.buffers[n]).length;
+    const total = DRUM_FILES.length;
+    const missing = DRUM_FILES.filter(n => !DRUM_SAMP.buffers[n.replace(/\.(mp3|flac)$/i, '')]).length;
     if (missing && !DRUM_SAMP.retried) {
       DRUM_SAMP.retried = true;
-      sampStatus('鼓采样 ' + missing + '/15 未加载，重试中…');
+      sampStatus('鼓采样 ' + missing + '/' + total + ' 未加载，重试中…');
       loadDrumSamples(true);
     } else if (missing) {
-      sampStatus('鼓采样 ' + missing + '/15 加载失败（网络），已用合成鼓兜底');
+      sampStatus('鼓采样 ' + missing + '/' + total + ' 加载失败（网络），已用合成鼓兜底');
     } else {
-      sampStatus('鼓采样 15/15 ✓ 真实鼓组就绪'); /* v7：正常状态也可见——"有没有鼓"从此不用猜 */
+      sampStatus('鼓采样 ' + total + '/' + total + ' ✓ Salamander 真实鼓组就绪'); /* v7：正常状态也可见——"有没有鼓"从此不用猜 */
     }
-  }, 6000);
+  }, 12000);
 }
 /* v19：drumsReady() 已随音色门一起删除——鼓采样缺失时 playDrumSample 返回 false，scheduleAll 走合成鼓兜底 */
-const DRUM_GAIN = { shekere: 1.3, shaker: 0.9, snap: 1.1, clap: 1.3, hat_808: 0.9, kick_808: 1.25, crash: 0.95, rim_click: 1.1, kick_room: 1.45, snare_room: 1.2, brush_snare: 1.1, conga_h: 1.25, conga_l: 1.25, clave: 1.2 };
+/* v29：Salamander 逻辑件——力度分层（FF/F/P，P 层用真实 ghost 录音）+ 层内轮询（真人鼓手手感）。
+   律动/节奏型完全不动，只换发声采样。 */
+const DRUM_SETS = {
+  sal_kick:  { ff: ['kick_OH_FF_1', 'kick_OH_FF_2'], f: ['kick_OH_F_1'], p: ['kick_OH_P_1'] },
+  sal_kick2: { ff: ['kick2_OH_FF_1'], f: ['kick2_OH_F_1'], p: ['kick_OH_P_1'] },
+  sal_snare: { ff: ['snare_OH_FF_1', 'snare_OH_FF_2'], f: ['snare_OH_F_1', 'snare_OH_F_2'], p: ['snare_OH_Ghost_1', 'snare_OH_Ghost_2'] },
+  sal_snare2:{ ff: ['snare2_OH_FF_1'], f: ['snare2_OH_F_1', 'snare_OH_F_1'], p: ['snare_OH_Ghost_1', 'snare_OH_Ghost_2'] },
+  sal_hat:   { ff: ['hihatClosed_OH_F_1', 'hihatClosed_OH_F_2', 'hihatClosed_OH_F_3'], f: ['hihatClosed_OH_F_1', 'hihatClosed_OH_F_2', 'hihatClosed_OH_F_3'], p: ['hihatClosed_OH_P_1', 'hihatClosed_OH_P_2'] },
+  sal_ohat:  { ff: ['hihatOpen_OH_F_1', 'hihatOpen_OH_F_2'], f: ['hihatOpen_OH_F_1', 'hihatOpen_OH_F_2'], p: ['hihatOpen_OH_P_1'] },
+  sal_ride:  { ff: ['ride1_OH_FF_1', 'ride1_OH_FF_2'], f: ['ride1_OH_MP_1', 'ride1_OH_MP_2'], p: ['ride1_OH_MP_1', 'ride1_OH_MP_2'] },
+  sal_crash: { ff: ['crash1_OH_FF_1', 'crash1_OH_FF_2', 'ride2Crash_OH_FF_1'], f: ['crash1_OH_FF_1', 'crash1_OH_FF_2'], p: ['crash1_OH_FF_2'] },
+};
+const DRUM_GAIN = { shekere: 1.3, shaker: 0.9, snap: 1.1, clap: 1.3, hat_808: 0.9, kick_808: 1.25, crash: 0.95, rim_click: 1.1, kick_room: 1.45, snare_room: 1.2, brush_snare: 1.1, conga_h: 1.25, conga_l: 1.25, clave: 1.2,
+  /* v29：Salamander 头顶麦克风录音偏轻，增益补偿 */
+  sal_kick: 1.6, sal_kick2: 1.6, sal_snare: 1.5, sal_snare2: 1.5, sal_hat: 1.7, sal_ohat: 1.6, sal_ride: 1.5, sal_crash: 1.5 };
 function playDrumSample(name, t, vel, opts) {
-  const buf = DRUM_SAMP.buffers[name];
+  /* v29：逻辑件按力度选层 + 层内轮询；旧名单文件直查 */
+  let buf;
+  if (DRUM_SETS[name]) {
+    const set = DRUM_SETS[name];
+    const pool = vel >= 0.72 ? (set.ff || set.f || set.p) : vel >= 0.4 ? (set.f || set.ff || set.p) : (set.p || set.f || set.ff);
+    DRUM_SETS._rr = DRUM_SETS._rr || {};
+    DRUM_SETS._rr[name] = ((DRUM_SETS._rr[name] || 0) + 1);
+    for (let i = 0; i < pool.length; i++) {
+      const cand = DRUM_SAMP.buffers[pool[(DRUM_SETS._rr[name] + i) % pool.length]];
+      if (cand) { buf = cand; break; }
+    }
+  } else {
+    buf = DRUM_SAMP.buffers[name];
+  }
   if (!buf || !DRUM_SAMP.bus) return false;
   t = Math.max(0, t + Math.random() * 0.016 - 0.008); /* v17 人性化加强：±4ms→±8ms；v24 钳负（离线渲染 t 从 0 起） */
   vel *= 1 + (Math.random() * 0.2 - 0.1); /* v17：±6%→±10% 力度抖动 */
