@@ -2201,7 +2201,8 @@ function playBassReal(midi, t, dur, vel) {
    各生成器彼此独立、节奏互不参照 = "各播各的"的根因；此 pass 在调度前统一对齐。 */
 function interlockPass() {
   const spb = SPB();
-  const WIN = 0.06; /* ±60ms 内视为"撞车/该吸合" */
+  const WIN = 0.25; /* v32：锁鼓窗口=十六分音符——诊断实测贝斯距底鼓均值 148ms（≈1/4拍），两张节奏图是"各弹各的"主因；
+     当代制作标准：贝斯 onset 在十六分容差内必须吸到底鼓上（低音区=一个整体），reggae/afro 的刻意错位（>1/16）保留 */
   const kickBeats = drumEvents.filter(d => d.inst === 'kick' || d.inst === 'kick_808').map(d => d.step16 / spb);
   const snareBeats = drumEvents.filter(d => /snare|clap/.test(d.inst)).map(d => d.step16 / spb);
   const maxBeat = totalBars() * BPB();
@@ -2216,9 +2217,10 @@ function interlockPass() {
   for (const e of bassEvents) {
     if (snareBeats.some(s => Math.abs(e.beat - s) <= 0.04)) e.beat += 0.25;
   }
-  /* 3) 键盘避让旋律：comping 撞旋律 onset → 后移 1/16 成应答（撞=糊；让=call-response） */
+  /* 3) 键盘避让旋律：comping 撞旋律 onset → 后移 1/16 成应答（撞=糊；让=call-response）
+        v32：窗口保持 ±60ms（贝斯锁鼓的 0.25 窗口太激进——会把差 0.1 拍的键盘挪到下一个十六分，反而撞上新旋律音） */
   for (const e of keysEvents) {
-    if (melodyEvents.some(m => Math.abs(m.beat - e.beat) <= WIN)) e.beat += 0.25;
+    if (melodyEvents.some(m => Math.abs(m.beat - e.beat) <= 0.06)) e.beat += 0.25;
   }
   /* 4) 吸合去重 + 边界回收 */
   const bseen = {};
@@ -2507,7 +2509,7 @@ function playDrumSample(name, t, vel, opts) {
     buf = DRUM_SAMP.buffers[name];
   }
   if (!buf || !DRUM_SAMP.bus) return false;
-  t = Math.max(0, t + Math.random() * 0.016 - 0.008); /* v17 人性化加强：±4ms→±8ms；v24 钳负（离线渲染 t 从 0 起） */
+  t = Math.max(0, t + Math.random() * 0.01 - 0.005); /* v17 人性化 ±8ms → v32 ±5ms：真鼓采样瞬态偏慢，抖动再收，贴当代量化 */
   vel *= 1 + (Math.random() * 0.2 - 0.1); /* v17：±6%→±10% 力度抖动 */
   const raw = Tone.getContext().rawContext;
   const src = raw.createBufferSource();
@@ -2551,16 +2553,16 @@ function restoreSampleBuses() {
  * MIDI 导出）共享的"swing 后网格"；drumTimeShift = 共享网格 + 鼓件专属偏移叠加。
  */
 const GROOVE = {
-  rnb:   { hatSwing: 0.62, snareLag: 0.028, kickP: -0.004 }, /* v5 醉拍：12→28ms */ /* 重音在 3&，军鼓大拖后 */
-  jazz:  { hatSwing: 0.66, snareLag: 0.018, kickP: -0.003 }, /* behind-the-beat */
-  rock:  { hatSwing: 0.10, snareLag: 0.002, kickP: 0      }, /* 实测修正：几乎不摆 */
-  bossa: { hatSwing: 0.22, snareLag: 0.004, kickP: 0      },
-  hiphop:{ hatSwing: 0.55, snareLag: 0.014, kickP: -0.004 },
-  afro:  { hatSwing: 0.12, snareLag: 0.004, kickP: 0      },
-  funk:     { hatSwing: 0.18, snareLag: 0.006, kickP: -0.006 }, /* 紧：kick 微提前、hat 小幅推拉 */
-  soul:     { hatSwing: 0.58, snareLag: 0.024, kickP: 0.004  }, /* 慵懒：军鼓大拖后、底鼓也躺 */
-  reggae:   { hatSwing: 0.30, snareLag: 0.008, kickP: 0.002  }, /* 反拍强调：hat 反拍中等推拉 */
-  afrobeats:{ hatSwing: 0.26, snareLag: 0.006, kickP: -0.003 }, /* 轻微推拉 */
+  rnb:   { hatSwing: 0.62, snareLag: 0.014, kickP: -0.002 }, /* v5 醉拍：12→28ms→v32 14ms（真鼓采样瞬态偏慢，旧 28ms 听感"对不上"） */
+  jazz:  { hatSwing: 0.66, snareLag: 0.010, kickP: -0.002 }, /* behind-the-beat */
+  rock:  { hatSwing: 0.10, snareLag: 0.001, kickP: 0      }, /* 实测修正：几乎不摆 */
+  bossa: { hatSwing: 0.22, snareLag: 0.003, kickP: 0      },
+  hiphop:{ hatSwing: 0.55, snareLag: 0.008, kickP: -0.002 },
+  afro:  { hatSwing: 0.12, snareLag: 0.002, kickP: 0      },
+  funk:     { hatSwing: 0.18, snareLag: 0.004, kickP: -0.003 }, /* 紧：kick 微提前、hat 小幅推拉 */
+  soul:     { hatSwing: 0.58, snareLag: 0.012, kickP: 0.002  }, /* v32：24→12ms */
+  reggae:   { hatSwing: 0.30, snareLag: 0.005, kickP: 0.001  },
+  afrobeats:{ hatSwing: 0.26, snareLag: 0.004, kickP: -0.002 },
 };
 const HAT_FAMILY = new Set(['hat', 'ohat', 'ride', 'shekere', 'shaker', 'bell', 'clave']);
 /* B3 互锁：Afro 打击乐错位时间（Tony Allen 式多层前后错开） */
@@ -2601,18 +2603,19 @@ function duckMulAt(beat, mul) {
   for (const k of _ksStepsCache) { const d = s - k; if (d > 0 && d <= win) return mul; }
   return 1;
 }
-/* 微时值引擎：每轨独立的 timing profile（真实演奏各声部前后不一）+ 乐句内 rubato */
+/* 微时值引擎：每轨独立的 timing profile（真实演奏各声部前后不一）+ 乐句内 rubato
+   v32：偏移整体减半——真鼓头顶麦采样自带瞬态延迟，叠加旧偏移后听感"鼓点对不上"；保留符号=保留风格性格，收紧=贴当代流行量化标准 */
 const TIMING_PROFILE = {
-  rnb:   { drums: 0.010, hat: -0.006, bass: 0.012, keys: 0.020, melody: 0.018, pad: 0.008 }, /* 推-拉：鼓抢拍/和声躺（D'Angelo 系） */
-  jazz:  { drums: 0.006, hat: -0.004, bass: 0.008, keys: 0.010, melody: 0.016, pad: 0.004 }, /* 独奏在镲后：behind the beat */
-  rock:  { drums: -0.002, hat: 0.0, bass: 0.0, keys: 0.0, melody: 0.0, pad: 0.0 },
-  bossa: { drums: 0.004, hat: -0.003, bass: 0.006, keys: 0.003, melody: 0.006, pad: 0.002 },
-  afro:  { drums: 0.006, hat: 0.002, bass: 0.0, keys: 0.0, melody: 0.004, pad: 0.002 }, /* 论文：Afrobeat 鼓略早于网格 */
-  hiphop:{ drums: 0.004, hat: -0.005, bass: 0.0, keys: 0.003, melody: 0.012, pad: 0.003 },
-  funk:    { drums: 0.004, hat: -0.004, bass: 0.002, keys: 0.004, melody: 0.010, pad: 0.002 },
-  soul:    { drums: 0.008, hat: -0.002, bass: 0.006, keys: 0.010, melody: 0.014, pad: 0.004 },
-  reggae:  { drums: -0.002, hat: -0.004, bass: 0.004, keys: 0.002, melody: 0.008, pad: 0.002 },
-  afrobeats:{ drums: 0.004, hat: -0.004, bass: 0.0, keys: 0.002, melody: 0.008, pad: 0.002 },
+  rnb:   { drums: 0.005, hat: -0.003, bass: 0.006, keys: 0.010, melody: 0.009, pad: 0.004 },
+  jazz:  { drums: 0.003, hat: -0.002, bass: 0.004, keys: 0.005, melody: 0.008, pad: 0.002 },
+  rock:  { drums: -0.001, hat: 0.0, bass: 0.0, keys: 0.0, melody: 0.0, pad: 0.0 },
+  bossa: { drums: 0.002, hat: -0.002, bass: 0.003, keys: 0.002, melody: 0.003, pad: 0.001 },
+  afro:  { drums: 0.003, hat: 0.001, bass: 0.0, keys: 0.0, melody: 0.002, pad: 0.001 },
+  hiphop:{ drums: 0.002, hat: -0.003, bass: 0.0, keys: 0.002, melody: 0.006, pad: 0.002 },
+  funk:    { drums: 0.002, hat: -0.002, bass: 0.001, keys: 0.002, melody: 0.005, pad: 0.001 },
+  soul:    { drums: 0.004, hat: -0.001, bass: 0.003, keys: 0.005, melody: 0.007, pad: 0.002 },
+  reggae:  { drums: -0.001, hat: -0.002, bass: 0.002, keys: 0.001, melody: 0.004, pad: 0.001 },
+  afrobeats:{ drums: 0.002, hat: -0.002, bass: 0.0, keys: 0.001, melody: 0.004, pad: 0.001 },
 };
 function voiceOff(styleKey, voice, beat) {
   const p = TIMING_PROFILE[styleKey];
