@@ -1823,10 +1823,10 @@ function buildAudio() {
 
   /* --- 鼓组 --- */
   AE.drumsVol = new Tone.Volume(-3.5); /* 路由在音色链创建后建立；v7 再前置：用户反馈"感受不到鼓点"，律动必须有肉体存在感 */
-  AE.drumsComp = new Tone.Compressor(-16, 3.5); /* v2：全鼓挤进同一动态包络，一起呼吸 */
-  /* v4.1 NY 并行压缩：重压缩副本 0.4 混入——kick/snare 永远顶穿混音 */
-  AE.drumsPar = new Tone.Compressor(-32, 10); /* v4.2 更重：底鼓军鼓压平混音 */
-  AE.drumsParGain = new Tone.Gain(0.55);
+  AE.drumsComp = new Tone.Compressor({ threshold: -14, ratio: 3, attack: 0.004, release: 0.2 }); /* v2：全鼓挤进同一动态包络；v28：-16/3.5→-14/3 温和化——重压是军鼓"炸麦"感来源之一 */
+  /* v4.1 NY 并行压缩：重压缩副本 0.4 混入——kick/snare 永远顶穿混音；v28：-32/10/0.55→-26/6/0.35——重度碾碎副本=失真"炸麦"，减量保真 */
+  AE.drumsPar = new Tone.Compressor({ threshold: -26, ratio: 6, attack: 0.004, release: 0.18 });
+  AE.drumsParGain = new Tone.Gain(0.35);
   AE.kick = new Tone.MembraneSynth({
     pitchDecay: 0.045, octaves: 6,
     envelope: { attack: 0.001, decay: 0.38, sustain: 0, release: 0.1 },
@@ -2337,12 +2337,12 @@ const DRUM_KITS = {
   jazz:  { kick:'kick_room', snare:'brush_snare', hat:'hat_closed', ohat:'hat_closed', ride:'crash', crash:'crash', congaH:null, congaL:null, ghost:'brush_snare' }, /* v15：ride 用 crash 采样低力度+低通+短衰减模拟（播放层特判），kick/hat 复用房间采样，告别金属合成兜底 */
   bossa: { kick:'kick_room', snare:'rim_click', hat:'hat_closed', ohat:'shaker', ride:'shaker', crash:'crash', congaH:null, congaL:null, ghost:'rim_click' }, /* v15：kick/hat 复用真实采样 */
   afro:  { kick:'kick_room', snare:'clave', hat:'shekere', ohat:'shekere', ride:'shekere', bell:'clave', crash:null, congaH:'conga_h', congaL:'conga_l', ghost:null },
-  rnb:   { kick:'kick_room', snare:'snap', hat:'hat_closed', ohat:'hat_closed', ride:'hat_closed', crash:'crash', congaH:null, congaL:null, ghost:'snap' }, /* v27：弃合成 808 底鼓/镲 → 真实房间采样（塑料感主犯）；snap 保留 RnB 签名 */
+  rnb:   { kick:'kick_room', snare:'snare_room', hat:'hat_closed', ohat:'hat_closed', ride:'hat_closed', crash:'crash', congaH:null, congaL:null, ghost:'snare_room' }, /* v27：真实采样；v28：军鼓 snap→snare_room（snap 采样低码率脆裂=用户反馈的"炸麦"） */
   s808:  { kick:'kick_808', snare:null, hat:'hat_808', ohat:'hat_808', ride:'hat_808', crash:'crash', congaH:null, congaL:null, ghost:null },
   hiphop:{ kick:'kick_808', snare:'clap', hat:'hat_808', ohat:'hat_808', ride:null, crash:'crash', congaH:null, congaL:null, ghost:null },
   beach: { kick:null, snare:'rim_click', hat:'shaker', ohat:'shaker', ride:null, crash:null, congaH:null, congaL:null, ghost:null },
   funk:     { kick:'kick_room', snare:'snare_room', hat:'hat_closed', ohat:'hat_closed', ride:'hat_closed', crash:'crash', ghost:'snare_room' },
-  soul:     { kick:'kick_room', snare:'snap', hat:'shaker', ohat:'shaker', ride:'shaker', crash:'crash', congaH:null, congaL:null, ghost:'snap' }, /* v27：弃合成 808 底鼓 → 真实采样 */
+  soul:     { kick:'kick_room', snare:'snare_room', hat:'shaker', ohat:'shaker', ride:'shaker', crash:'crash', congaH:null, congaL:null, ghost:'snare_room' }, /* v27：弃合成 808 底鼓 → 真实采样；v28：军鼓 snap→snare_room */
   reggae:   { kick:'kick_room', snare:'rim_click', hat:'hat_closed', ohat:'hat_closed', ride:'hat_closed', crash:'crash', congaH:null, congaL:null, ghost:'rim_click' },
   afrobeats:{ kick:'kick_808', snare:'clap', hat:'shaker', ohat:'shaker', ride:'shaker', crash:'crash', congaH:null, congaL:null, ghost:null },
 };
@@ -2355,6 +2355,10 @@ function loadDrumSamples(isRetry) {
   DRUM_SAMP.bus.connect(nativeInputOf(AE.drumsVol));
   /* 单次击打最大时长（秒）：防止把 loop/长采样整段叠放 */
   const DRUM_MAXDUR = { hat_closed: 0.8, hat_808: 1.2, shaker: 2.2, shekere: 2.0, snare_room: 1.5, snap: 1.0, rim_click: 1.0, clap: 1.3, brush_snare: 1.8, kick_room: 1.1, kick_808: 1.3, crash: 2.8, conga_h: 1.6, conga_l: 1.6, clave: 1.0 }; /* v26：kick_808 1.6→1.3s 收敛长尾——808 尾巴与贝斯叠糊是"鼓糊"主因之一 */
+  /* v28：采样起始点校正——这些是长录音，开头常是静音/弱段（用 MP3 帧 global_gain 剖面实测选段）：
+     hat_closed 152s 录音，开头 gain≈56-67（≈静音，这就是"镲片没声音"的根因）→ 取 28.0s 处孤立击打(gain 168)；
+     kick_room 4.6s 录音，开头 gain≈55 → 取 3.9s 处最响一击(gain 81)。截断从起点改为按 offset 切段。 */
+  const DRUM_OFFSETS = { hat_closed: 28.0, kick_room: 3.9 };
   /* v19 防风暴：15 个 mp3 全并发 fetch+decode 与排程抢主线程——改逐个 await + 每个之间让出主线程 */
   DRUM_SAMP.promise = (async () => { /* v24：promise 外暴露，离线渲染前可等全 */
     for (const name of DRUM_FILES) {
@@ -2364,10 +2368,12 @@ function loadDrumSamples(isRetry) {
         let buf = await raw.decodeAudioData(await r.arrayBuffer());
         
         const max = DRUM_MAXDUR[name] || 1.5;
-        if (buf.duration > max) {
+        const offSec = DRUM_OFFSETS[name] || 0; /* v28：长录音从实测的击打位置切段 */
+        if (buf.duration > offSec + max) {
           const n = Math.floor(raw.sampleRate * max);
+          const start = Math.floor(raw.sampleRate * offSec);
           const nb = raw.createBuffer(buf.numberOfChannels, n, raw.sampleRate);
-          for (let ch = 0; ch < buf.numberOfChannels; ch++) nb.getChannelData(ch).set(buf.getChannelData(ch).subarray(0, n));
+          for (let ch = 0; ch < buf.numberOfChannels; ch++) nb.getChannelData(ch).set(buf.getChannelData(ch).subarray(start, start + n));
           buf = nb;
         }
         DRUM_SAMP.buffers[name] = buf;
@@ -4081,7 +4087,7 @@ function applyTone(layer) {
   } else if (layer === 'drums' && AE.toneEqDrums) {
     AE.toneEqDrums.high.value = brightDb;
     AE.toneEqDrums.low.value = -2 + t.b * 5; /* v4.3 kick 低频权重随风格 */
-    AE.toneDistDrums.distortion = Math.max(0.12, t.t * 0.07); /* v2：饱和常开底线=鼓皮粘合感 */
+    AE.toneDistDrums.distortion = Math.max(0.06, t.t * 0.05); /* v2：饱和常开底线=鼓皮粘合感；v28：0.12→0.06 减失真毛刺（"炸麦"来源之一） */
     AE.sendDrums.gain.value = t.s * 0.5 * perfMul; /* v4.3 鼓房发送收敛 */
   }
 }
