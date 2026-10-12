@@ -896,13 +896,13 @@ function genBass() {
         push(bn, n, 0.45, i % 2 === 0 ? 0.8 : 0.6);
       }
     } else if (pat === 'groove') {
-      push(0, r, 0.9, 0.9);
-      push(1.5, r, 0.4, 0.7);
-      push(2.25, oct, 0.3, 0.65);
-      /* N3 rnb 贝斯旋律化：50% 把第 3 拍五音换成趋向下一和弦根的趋近音（D'Angelo 式歌唱性） */
-      if (styleKey === 'rnb' && rng() < 0.5) push(3, approach, 0.4, 0.7);
-      else push(3, fifth, 0.4, 0.7);
-      push(3.75, r, 0.2, 0.5);
+      /* v34 Neo-Soul 贝斯（rnb 专用）：sub 本位、少而沉——根音长音 + 可选 1& 轻重复 + 3& 五音（后置=躺感）+ 4& 趋近下一和弦。
+         3-4 音/小节；删除旧版 2.25 拍八度弹跳（流行贝斯语汇，Neo-Soul 要"躺在下面"） */
+      push(0, r, 1.9, 0.78);
+      if (rng() < 0.6) push(1.5, r, 0.3, 0.45);
+      push(2.5, fifth, 0.8, 0.6);
+      if (rng() < 0.65) push(3.5, approach, 0.4, 0.55);
+      else push(3.5, r, 0.3, 0.45);
     } else if (pat === 'bossa') {
       /* root-5 二分音符 two-feel（Ipanema）：1 拍根音长音、3 拍五音，偶发半音经过 */
       push(0, r, 1.9, 0.85);
@@ -1203,8 +1203,15 @@ function genKeys() {
         for (const s of [4, 12]) ev.push({ beat: bar * BPB() + s / SPB(), notes: voicing, dur: 0.22, vel: 0.5 + rng() * 0.1, inst: 'guitar:clean' });
         for (const s of [2, 6, 10, 14]) ev.push({ beat: bar * BPB() + s / SPB(), notes: voicing.slice(0, 3), dur: 0.14, vel: 0.3 + rng() * 0.08, inst: 'keys' });
       } else {
-        /* rnb/jazz comping + 答句填空 */
-        let hits = pick(rng, COMP_PATTERNS).slice();
+        /* rnb/jazz comping + 答句填空；v34：rnb 专用反拍 comp（Rhodes 在"&"上呼吸，正拍留给贝斯/鼓）。
+           NEO_COMP 结构与 COMP_PATTERNS 同：每个"型"=若干 [拍, 时值] 对 */
+        const NEO_COMP = [
+          [[1.5, 1.5], [2.5, 1.5], [3.5, 1.2]],
+          [[1.5, 1], [3.5, 1.5]],
+          [[2.5, 1], [3.75, 1]],
+          [[2.5, 1.5], [3.5, 1.2]],
+        ];
+        let hits = styleKey === 'rnb' ? pick(rng, NEO_COMP).slice() : pick(rng, COMP_PATTERNS).slice();
         if (styleKey === 'rnb' || styleKey === 'jazz') hits = melodyGapAnswer(bar, hits);
         for (const [b, d] of hits) {
           const vel = 0.46 + rng() * 0.13;
@@ -1229,6 +1236,18 @@ function genKeys() {
       /* reggae 默认伴奏 = skank：2/4 拍反拍 chop + 八分反拍 bubble 轻垫（同 auto 分支语汇） */
       for (const s of [4, 12]) ev.push({ beat: bar * BPB() + s / SPB(), notes: voicing, dur: 0.22, vel: 0.5 + rng() * 0.1, inst: 'keys' });
       for (const s of [2, 6, 10, 14]) ev.push({ beat: bar * BPB() + s / SPB(), notes: voicing.slice(0, 3), dur: 0.14, vel: 0.3 + rng() * 0.08, inst: 'keys' });
+    } else if (patch === 'comp' && styleKey === 'rnb') {
+      /* v34：Neo-Soul Rhodes 反拍 comp——在"&"上呼吸，正拍留给贝斯/鼓（patch=comp 路径）。
+         NEO_COMP2 结构与 COMP_PATTERNS 同：每个"型"=若干 [拍, 时值] 对，pick 返回一个型 */
+      const NEO_COMP2 = [
+        [[1.5, 1.5], [2.5, 1.5], [3.5, 1.2]],
+        [[1.5, 1], [3.5, 1.5]],
+        [[2.5, 1], [3.75, 1]],
+        [[2.5, 1.5], [3.5, 1.2]],
+        [[1.5, 1.5], [3.5, 1]],
+        [[2.5, 1], [3.5, 1.5], [3.75, 1]],
+      ];
+      for (const [b, d] of pick(rng, NEO_COMP2)) ev.push({ beat: bar * BPB() + b, notes: voicing, dur: Math.min(d, BPB() - b), vel: 0.44 + rng() * 0.12, inst: 'keys' });
     } else if (patch === 'pad') {
       ev.push({ beat: bar * BPB(), notes: voicing, dur: Math.max(1, BPB() - 0.2), vel: 0.42, inst: 'keys' });
     } else {
@@ -1248,7 +1267,7 @@ function genKeys() {
  *   hiphop polysynth 暗黑长铺主角（trap 氛围核心）
  */
 const PAD_BY_STYLE = {
-  rnb:   { bank: 'choir',     presence: 0.42, attack: 'slow', lpf: 5200, mode: 'pad',  vol: 0.90 }, /* v4.3 密度 0.50→0.42 */
+  rnb:   { bank: 'choir',     presence: 0.26, attack: 'slow', lpf: 4600, mode: 'pad',  vol: 0.7 }, /* v34：Neo-Soul pad 再收（0.42→0.26）——空间感来自留白不是垫子 */
   jazz:  { bank: 'strings',   presence: 0.12, attack: 'slow', lpf: 6200, mode: 'air',  vol: 0.60 },
   rock:  { bank: 'sweep',     presence: 0.18, attack: 'gate', lpf: 3800, mode: 'gate', vol: 0.70 },
   bossa: { bank: 'strings',   presence: 0.10, attack: 'slow', lpf: 6200, mode: 'air',  vol: 0.55 },
@@ -3200,7 +3219,7 @@ function scheduleAll() {
           }
           return;
         }
-        if (playBassReal(e.midi, tt, dur, e.vel * 1.1 * duckMul)) return; /* v31：真实电贝斯采样优先 */
+        if (playBassReal(e.midi, tt, dur, e.vel * 0.9 * duckMul)) return; /* v31：真实电贝斯采样优先；v34：增益 1.1→0.9（贝斯太响，Neo-Soul 要"感到"而不是"听到"） */
         const inst = sampOf(SAMP_BASS, 'bass'); /* v19：回调内现查（渐进加载中途就绪即时切上） */
         if (inst) { sfBright('bass', e.vel * duckMul, tt); if (inst.play(e.midi, tt, { duration: dur, gain: e.vel * 1.3 * duckMul, cents: sfRepeatCents('bass', e.midi, tt) }) !== false) return; }
         AE.bass.triggerAttackRelease(midiName(e.midi), dur, tt, e.vel * duckMul);
@@ -4155,7 +4174,7 @@ const $ = sel => document.querySelector(sel);
 
 /* 语义音色目标（方案2: 语义化EQ，MDPI 2016）：每层 亮度bright/空间space/厚度thick 0~1 */
 const STYLE_TONE = {
-  rnb:   { guitar:{b:0.46,s:0.48,t:0.10}, keys:{b:0.30,s:0.50,t:0.0}, bass:{b:0.30,s:0.15,t:0.0}, pad:{b:0.25,s:0.70,t:0.0}, drums:{b:0.45,s:0.15,t:0.2} }, /* v4.3 吉他提亮+收湿声 → v8: 吉他空间发送 0.30→0.48（deca joins 超大空间感） */
+  rnb:   { guitar:{b:0.46,s:0.40,t:0.10}, keys:{b:0.30,s:0.50,t:0.0}, bass:{b:0.22,s:0.12,t:0.0}, pad:{b:0.25,s:0.60,t:0.0}, drums:{b:0.45,s:0.15,t:0.2} }, /* v34：贝斯更暗更贴地（b 0.30→0.22=低通更闷=sub 感）、吉他空间发送收敛 */
   jazz:  { guitar:{b:0.44,s:0.26,t:0.10}, keys:{b:0.35,s:0.40,t:0.0}, bass:{b:0.35,s:0.10,t:0.0}, pad:{b:0.30,s:0.50,t:0.0}, drums:{b:0.50,s:0.20,t:0.1} },
   rock:  { guitar:{b:0.70,s:0.20,t:0.50}, keys:{b:0.50,s:0.20,t:0.2}, bass:{b:0.55,s:0.10,t:0.3}, pad:{b:0.40,s:0.30,t:0.2}, drums:{b:0.60,s:0.25,t:0.35} },
   bossa: { guitar:{b:0.58,s:0.30,t:0.05}, keys:{b:0.40,s:0.35,t:0.0}, bass:{b:0.35,s:0.10,t:0.0}, pad:{b:0.30,s:0.40,t:0.0}, drums:{b:0.50,s:0.20,t:0.1} },
@@ -4245,7 +4264,7 @@ function applyStyleFx(styleKey) {
 const STYLE_SETUP = {
   /* swing 字段量纲 = 奇数 16 分后移量（sharedSwingSec 的 state.swing×100）：
      记谱 swing% = (1+swing/100)/2×100，即 字段值 = (swing% − 50) × 2。下列为热歌实测换算值 */
-  rnb:   { guitar: 'clean',  keys: 'comp',  drums: 'full',  swing: 10, bpm: 78,  synth: 'choir',  preset: 'rnb-drift' }, /* Best Part 75 BPM / 55% */
+  rnb:   { guitar: 'clean',  keys: 'comp',  drums: 'full',  swing: 12, bpm: 78,  synth: 'choir',  preset: 'rnb-drift' }, /* v34：swing 10→12（57% 摇摆 16 分=Neo-Soul 律动核心） */
   jazz:  { guitar: 'jazz',   keys: 'comp',  drums: 'auto',  swing: 24, bpm: 120, synth: 'warm',   preset: 'jazz-2516' }, /* Fly Me to the Moon ~120 / 62% */
   rock:  { guitar: 'dist',   keys: 'auto',  drums: 'drive', swing: 0,  bpm: 115, synth: 'sweep',  preset: 'rock-min' }, /* Back in Black~Teen Spirit 115 / 直拍 */
   bossa: { guitar: 'nylon',  keys: 'auto',  drums: 'auto',  swing: 4,  bpm: 126, synth: 'warm',   preset: 'bossa-251' }, /* Ipanema ~126 / 52% 近直拍 */

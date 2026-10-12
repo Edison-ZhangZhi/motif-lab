@@ -112,14 +112,15 @@ function scalePCsForChord(rootPC, qKey, keyRootPC, mode) {
 const STYLES = {
   rnb: {
     name: 'RnB', scaleBias: 'pentMinor',
-    mel: { stepP: 0.66, density: 0.72, durBias: 0.55, rep: 0.5, synco: 0.85, blue: false, regLo: 64, regHi: 88, maxLeap: 9 }, /* 目标 4±0.5 音/小节 */
+    /* v34 完全 Neo-Soul 化：旋律密度 0.72→0.64（留白=呼吸感）、长音比例↑（0.60=歌唱性）、blue↑（布鲁斯弯音=Neo-Soul 嗓音真身） */
+    mel: { stepP: 0.66, density: 0.66, durBias: 0.55, rep: 0.45, synco: 0.85, blue: false, regLo: 64, regHi: 88, maxLeap: 9 },
     rhythm: [
       [[0, 4], [6, 2], [8, 4], [14, 2]],
       [[0, 2], [3, 2], [8, 4], [11, 2], [14, 2]],
       [[4, 4], [10, 2], [12, 4]],
       [[0, 2], [6, 2], [8, 2], [11, 2], [14, 2]],
     ],
-    ext: { maj: ['maj9', 'add9', 'maj13'], min: ['min9', 'min11', 'min13'], dom: ['13', '9', '13sus4'], dim: ['m7b5'], sus: ['9sus4'] },
+    ext: { maj: ['maj9', 'add9', 'maj13'], min: ['min9', 'min11', 'min13'], dom: ['13', '9', '13sus4', '7#9'], dim: ['m7b5', 'm9b5'], sus: ['9sus4'] }, /* v34：属和弦加 7#9（Hendrix 和弦=Neo-Soul 转调签名） */
     bass: 'groove', drums: 'rnb',
   },
   jazz: {
@@ -248,10 +249,10 @@ const DRUM_PATTERNS = {
     hat:   [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0],
     crash: [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0],
   },
-  rnb: { /* Best Part/Get You 实测：kick 1 + "3 的 e"(11步)，ghost 7/12 步，hat 8 分连续拖拍 */
-    kick:  [1,0,0,0, 0,0,0,0, 0,0,1,0, 0,0,0,0],
+  rnb: { /* v34 Neo-Soul 完全版：kick 1+2&+3e（0/7/10 步，Questlove/D'Angelo 切分），ghost 网加密（6/9/14/15 步），hat 8 分摇摆 */
+    kick:  [1,0,0,0, 0,0,0,1, 0,0,1,0, 0,0,0,0],
     snare: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
-    ghost: [0,0,0,0, 0,0,1,0, 0,0,0,1, 0,0,0,0],
+    ghost: [0,0,0,0, 0,0,1,0, 0,1,0,0, 0,0,1,1],
     hat:   [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0],
     ohat:  [0,0,0,0, 0,0,0,0, 0,0,1,0, 0,0,0,0],
   },
