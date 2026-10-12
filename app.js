@@ -1337,12 +1337,12 @@ function genHorns() {
 const DRUM_PRESENCE = { /* v4.2 再提一档 +1dB */
   afro:   { kick: +1,   snare: +3, perc: +4 }, /* Fela 打击乐群前置 */
   hiphop: { kick: +4.5, snare: +2, perc: +2 },
-  rnb:    { kick: +3.5, snare: +2, perc: +2 },
+  rnb:    { kick: +2.5, snare: +2, perc: +2 }, /* v27：kick_room 采样增益本就高，presence 3.5→2.5 防过热爆音 */
   rock:   { kick: +3,   snare: +3, perc: +1 },
   jazz:   { kick: 0,    snare: +2, perc: +2 },
   bossa:  { kick: +2,   snare: +2, perc: +3 },
   funk:     { kick: +2.5, snare: +3,   perc: +2   }, /* 紧而干：kick/snare 顶前咬律动，ghost 音群已有余量 */
-  soul:     { kick: +2,   snare: +3.5, perc: +1.5 }, /* 大 backbeat 慢灵魂：军鼓最前，击掌/沙锤退后 */
+  soul:     { kick: +1.5, snare: +3.5, perc: +1.5 }, /* v27：kick_room 采样增益高，presence 2→1.5 防过热 */
   reggae:   { kick: +2.5, snare: +2.5, perc: +2   }, /* one-drop：第 3 拍 kick+rim 同落必须是全曲最重一击 */
   afrobeats:{ kick: +3.5, snare: +2,   perc: +3.5 }, /* log-drum 式切分 kick 前置 + shaker/clap 群前置 */
 };
@@ -1747,18 +1747,26 @@ function buildAudio() {
   /* v25 母带链升级：低频暖（+1.5dB 搁架）+ 1k 收敛（-0.5dB 去纸箱感）+ 高频空气感（+1.5dB 搁架）——
      整体更饱满、更贴"商业混音"听感（仍是引擎A天花板内，非网易云级） */
   AE.masterEq = new Tone.EQ3({ low: 1.5, mid: -0.5, high: 1.5, lowFrequency: 110, highFrequency: 7500 });
-  AE.masterMB = new Tone.Compressor({ threshold: -18, ratio: 2.5, attack: 0.03, release: 0.2 });
+  AE.masterMB = new Tone.Compressor({ threshold: -16, ratio: 2.5, attack: 0.015, release: 0.2 }); /* v27：attack 30→15ms 更早抓住瞬态峰值 */
   /* 回退用：AE.masterMB = new Tone.MultibandCompressor({ lowFrequency: 250, highFrequency: 2600,
      low: { threshold:-20, ratio:3, attack:0.02, release:0.15 }, mid: { threshold:-16, ratio:2.5, attack:0.015, release:0.12 },
      high:{ threshold:-13, ratio:3, attack:0.01, release:0.1 } }); */
   AE.masterSat = new Tone.Distortion(0.02); /* v14：仅留染色底线，CPU 优先；v25 微增谐波暖度 */
   AE.masterMakeup = new Tone.Gain(1.3); /* v25：限制器前 makeup ≈+2.3dB，提升整体响度（商业响度逼近） */
+  /* v27 防爆音：tanh 软削波在限幅器前把瞬时峰值圆滑压住——DAC 硬削波 = "一炸一炸"的根源 */
+  AE.masterClip = new Tone.WaveShaper((() => {
+    const n = 2048, c = new Float32Array(n);
+    for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; c[i] = Math.tanh(x * 1.6) / Math.tanh(1.6); }
+    return c;
+  })(), 1024);
+  AE.masterClip.oversample = '2x';
   AE.limiterRef = new Tone.Limiter(-0.5);
   AE.master.connect(AE.masterEq);
   AE.masterEq.connect(AE.masterMB);
   AE.masterMB.connect(AE.masterSat);
   AE.masterSat.connect(AE.masterMakeup);
-  AE.masterMakeup.connect(AE.limiterRef);
+  AE.masterMakeup.connect(AE.masterClip);
+  AE.masterClip.connect(AE.limiterRef);
   AE.limiterRef.toDestination();
   AE.masterMeter = new Tone.Meter({ normalRange: false, smoothing: 0.85 });
   if (!Tone.getContext().isOffline) { /* v24：离线渲染建图时无 MediaStreamDestination（导出走录音的实时路径不需要它） */
@@ -1974,7 +1982,7 @@ function buildAudio() {
   /* --- 808 鼓组（经典 TR-808 合成复刻，808 本身就是合成鼓机） --- */
   AE.kick808 = new Tone.Synth({
     oscillator: { type: 'sine' },
-    envelope: { attack: 0.001, decay: 1.5, sustain: 0, release: 0.2 },
+    envelope: { attack: 0.004, decay: 1.5, sustain: 0, release: 0.2 }, /* v27：attack 1→4ms，削掉起音爆点 */
   }).connect(AE.drumsVol);
   AE.snare808 = new Tone.MembraneSynth({
     pitchDecay: 0.02, octaves: 1.5,
@@ -2299,7 +2307,8 @@ function play808(midi, t, dur, vel, slideTo) {
   if (slideTo) src.playbackRate.exponentialRampToValueAtTime(Math.pow(2, (slideTo - 36) / 12), t + dur);
   const g = raw.createGain();
   const v = vel * 1.25;
-  g.gain.setValueAtTime(v, t);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(v, t + 0.004); /* v27：4ms 软起防爆点 */
   g.gain.setValueAtTime(v, t + dur * 0.55);
   g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
   src.connect(g); g.connect(DRUM_SAMP.bus);
@@ -2328,12 +2337,12 @@ const DRUM_KITS = {
   jazz:  { kick:'kick_room', snare:'brush_snare', hat:'hat_closed', ohat:'hat_closed', ride:'crash', crash:'crash', congaH:null, congaL:null, ghost:'brush_snare' }, /* v15：ride 用 crash 采样低力度+低通+短衰减模拟（播放层特判），kick/hat 复用房间采样，告别金属合成兜底 */
   bossa: { kick:'kick_room', snare:'rim_click', hat:'hat_closed', ohat:'shaker', ride:'shaker', crash:'crash', congaH:null, congaL:null, ghost:'rim_click' }, /* v15：kick/hat 复用真实采样 */
   afro:  { kick:'kick_room', snare:'clave', hat:'shekere', ohat:'shekere', ride:'shekere', bell:'clave', crash:null, congaH:'conga_h', congaL:'conga_l', ghost:null },
-  rnb:   { kick:'kick_808', snare:'snap', hat:'hat_808', ohat:'hat_808', ride:'hat_808', crash:'crash', congaH:null, congaL:null, ghost:'snap' },
+  rnb:   { kick:'kick_room', snare:'snap', hat:'hat_closed', ohat:'hat_closed', ride:'hat_closed', crash:'crash', congaH:null, congaL:null, ghost:'snap' }, /* v27：弃合成 808 底鼓/镲 → 真实房间采样（塑料感主犯）；snap 保留 RnB 签名 */
   s808:  { kick:'kick_808', snare:null, hat:'hat_808', ohat:'hat_808', ride:'hat_808', crash:'crash', congaH:null, congaL:null, ghost:null },
   hiphop:{ kick:'kick_808', snare:'clap', hat:'hat_808', ohat:'hat_808', ride:null, crash:'crash', congaH:null, congaL:null, ghost:null },
   beach: { kick:null, snare:'rim_click', hat:'shaker', ohat:'shaker', ride:null, crash:null, congaH:null, congaL:null, ghost:null },
   funk:     { kick:'kick_room', snare:'snare_room', hat:'hat_closed', ohat:'hat_closed', ride:'hat_closed', crash:'crash', ghost:'snare_room' },
-  soul:     { kick:'kick_808', snare:'snap', hat:'shaker', ohat:'shaker', ride:'shaker', crash:'crash', congaH:null, congaL:null, ghost:'snap' },
+  soul:     { kick:'kick_room', snare:'snap', hat:'shaker', ohat:'shaker', ride:'shaker', crash:'crash', congaH:null, congaL:null, ghost:'snap' }, /* v27：弃合成 808 底鼓 → 真实采样 */
   reggae:   { kick:'kick_room', snare:'rim_click', hat:'hat_closed', ohat:'hat_closed', ride:'hat_closed', crash:'crash', congaH:null, congaL:null, ghost:'rim_click' },
   afrobeats:{ kick:'kick_808', snare:'clap', hat:'shaker', ohat:'shaker', ride:'shaker', crash:'crash', congaH:null, congaL:null, ghost:null },
 };
@@ -2395,7 +2404,8 @@ function playDrumSample(name, t, vel, opts) {
   if (name === 'conga_l') src.playbackRate.value *= 0.84; /* conga_l 与 conga_h 是同一文件：播放层降 ~3 半音，听起来才是真低康加 */
   const g = raw.createGain();
   const v = vel * (DRUM_GAIN[name] || 1);
-  g.gain.setValueAtTime(v, t);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(Math.max(v, 0.01), t + 0.002); /* v27：2ms 软起防爆点（不软击打感） */
   /* opts.short：缩短衰减（crash 采样模拟 ride 等场景） */
   const tail = opts && opts.short ? Math.min(buf.duration * 0.85, opts.short) : Math.min(buf.duration * 0.85, 1.8);
   g.gain.exponentialRampToValueAtTime(0.0001, t + tail);
@@ -2600,7 +2610,7 @@ function sfBright(role, vel, t) {
   if (!f) return;
   const r = SF_CUT_RANGE[role] || SF_CUT_RANGE.keys;
   const cut = r[0] + Math.min(1, Math.max(0, vel)) * (r[1] - r[0]);
-  try { f.frequency.setTargetAtTime(cut, Math.max(0, t - 0.015), 0.025); } catch (e) {}
+  try { f.frequency.setTargetAtTime(cut, Math.max(0, t - 0.015), 0.06); } catch (e) {} /* v27：平滑 0.025→0.06s——快速跳频的拉链噪声是爆破来源之一 */
 }
 /* v17 同音连击微差：同音高 0.6s 内连击给 ±17 音分（≈±1% playbackRate）微差——soundfont-player 支持 cents 选项 */
 const _sfLastHit = {};
@@ -2686,8 +2696,9 @@ function createProgressiveSF(name, base, cacheKey) {
       const g = rawNow.createGain();
       const gv = opts.gain !== undefined ? opts.gain : 1;
       const end = t + Math.min(opts.duration || buf.duration, buf.duration) + 0.25; /* 尾段留白 */
-      g.gain.setValueAtTime(gv, t);
-      g.gain.setValueAtTime(gv, Math.max(t, end - 0.06));
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(Math.max(gv, 0.001), t + 0.006); /* v27：6ms 软起，根治起音爆点 */
+      g.gain.setValueAtTime(Math.max(gv, 0.001), Math.max(t, end - 0.06));
       g.gain.linearRampToValueAtTime(0.0001, end); /* 60ms 淡出防咔哒 */
       src.connect(g); g.connect(destNow);
       src.start(t); src.stop(end + 0.05);
@@ -2913,7 +2924,7 @@ function applyGuitarPatch() {
 
 function applyMix() {
   if (!AE.ready) return;
-  AE.master.volume.value = Tone.gainToDb(state.master * state.master);
+  AE.master.volume.value = Tone.gainToDb(state.master * state.master) + 1.5; /* v27：整体响度 +1.5dB（软削波兜底，不再有爆音） */
   AE.guitarVol.mute = !state.layers.guitar.on;
   AE.keysVol.mute = !state.layers.keys.on;
   AE.bassVol.mute = !state.layers.bass.on;
@@ -3313,7 +3324,7 @@ async function ensureAudio() {
   let guard = 0;
   while (_arrSwapped && guard++ < 20) await new Promise(r => setTimeout(r, 300));
   if (_arrSwapped) { sampStatus('🎧 正在后台渲染编曲，稍等一下下…'); return false; }
-  if (!state.audioReady) { buildAudio(); state.audioReady = true; const gp = SAMP_GUITAR[state.layers.guitar.patch]; if (gp) ensureSample(gp); loadGuitarSamples(); loadDrumSamples(); loadInstruments(); loadWurli(); renderMetalBufs(); /* v17：与 warmupAudio 同优先级序；v13 后台预热 Wurli 采样电钢 */ }
+  if (!state.audioReady) { buildAudio(); state.audioReady = true; ensureBuses(); /* v27：建图即建采样总线——游戏垫/试听不依赖 SF 加载才出声 */ const gp = SAMP_GUITAR[state.layers.guitar.patch]; if (gp) ensureSample(gp); loadGuitarSamples(); loadDrumSamples(); loadInstruments(); loadWurli(); renderMetalBufs(); /* v17：与 warmupAudio 同优先级序；v13 后台预热 Wurli 采样电钢 */ }
   try {
     await Tone.start();
     if (Tone.context.state !== 'running') await Tone.context.resume();
@@ -4741,9 +4752,9 @@ async function tedAudition(track, midi, inst) {
       const bi = sampOf(SAMP_BASS, 'bass');
       if (!bi || bi.play(midi, t, { duration: 0.3, gain: 0.9 }) === false) AE.bass.triggerAttackRelease(midiName(midi), 0.3, t, 0.85);
     } else if (track === 'keys') {
-      if (!playSynthBuf('keysEP', [midi, midi + 7, midi + 12], t, 0.7, 0.4)) AE.keys.triggerAttackRelease([midiName(midi), midiName(midi + 7), midiName(midi + 12)], 0.4, t, 0.7);
+      if (!playSynthBuf('keysEP', [midi, midi + 7, midi + 12], t, 0.85, 0.4)) AE.keys.triggerAttackRelease([midiName(midi), midiName(midi + 7), midiName(midi + 12)], 0.4, t, 0.85);
     } else if (track === 'pad') {
-      AE.synthPad.triggerAttackRelease([midiName(midi), midiName(midi + 7), midiName(midi + 12)], 0.5, t, 0.5);
+      AE.synthPad.triggerAttackRelease([midiName(midi), midiName(midi + 7), midiName(midi + 12)], 0.5, t, 0.6);
     }
   } catch (e) {}
 }
@@ -4930,7 +4941,7 @@ function gameChordHit(bar) {
       if (typeof Tone === 'undefined' || !(await ensureAudio())) return;
       const t = Tone.now() + 0.04;
       const pcs = chord.pcs.slice(0, 3).map(p => 60 + p);
-      if (!playSynthBuf('keysEP', pcs, t, 0.7, 0.5)) AE.keys.triggerAttackRelease(pcs.map(midiName), 0.5, t, 0.7);
+      if (!playSynthBuf('keysEP', pcs, t, 0.85, 0.5)) AE.keys.triggerAttackRelease(pcs.map(midiName), 0.5, t, 0.85);
     } catch (e) {}
   })();
   if (GAME.running) gameScore();
@@ -4983,12 +4994,13 @@ function startGameMetro() {
   (async () => {
     if (!(await ensureAudio())) { sampStatus('⚠ 音频引擎未唤醒，再点一次（浏览器限制）'); return; }
     stopPlayback(); /* 与主播放互斥，避免叠音 */
+    restoreSampleBuses(); /* v27：stopPlayback 会静音采样总线——游戏垫要靠它们发声，必须恢复 */
     GAME.running = true; GAME.hits = 0; GAME.combo = 0; GAME.step = 0;
     const btn = document.getElementById('btn-game-metro');
     if (btn) btn.textContent = '⏹ 停止节拍器';
     if (AE.metro) { try { AE.metro.dispose(); } catch (e) {} }
     AE.metro = new Tone.Synth({ oscillator: { type: 'square' }, envelope: { attack: 0.001, decay: 0.06, sustain: 0, release: 0.02 } });
-    AE.metro.volume.value = -16;
+    AE.metro.volume.value = -10; /* v27：-16→-10，节拍器要听得清 */
     AE.metro.connect(AE.master);
     const ms = 60000 / state.bpm / 4; /* 16 分一步 */
     const dots = document.querySelectorAll('#game-beat i');
