@@ -321,3 +321,12 @@ footer {
 .ted-c.on:hover { filter: brightness(1.15); }
 .ted-c.on.gh { border-radius: 50%; transform: scale(.72); }
 .ted-c.barcell { height: 18px; border-radius: 4px; }
+/* v25 小白化：操作反馈条 + 轨道人话提示 */
+.ted-feedback {
+  font-size: 12px; line-height: 1.5; color: var(--ink); background: #F3EFE2;
+  border: 1px solid var(--line-2); border-radius: 8px;
+  padding: 8px 12px; margin: 0 0 12px;
+  transition: background .18s;
+}
+.ted-feedback.flash { background: #FBE3C4; }
+.ted-thint { font-size: 10.5px; color: var(--ink-3); letter-spacing: .03em; }

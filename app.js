@@ -1743,18 +1743,22 @@ function buildAudio() {
      v17 降 CPU：MultibandCompressor（3 段分频+3 个动态单元，Tone 最贵节点之一）→ 单段 Compressor，
      参数沿用低频段（-20/3）；动态塑形交给下游 Limiter。回退：换回调用处的注释块即可。
      各层推子仍汇入 AE.master；导出音频从限制器后分流（与听到的一致） */
-  AE.master = new Tone.Volume(-2);
-  AE.masterEq = new Tone.EQ3({ low: 0, mid: 0, high: 0.5, lowFrequency: 120, highFrequency: 7500 });
-  AE.masterMB = new Tone.Compressor({ threshold: -20, ratio: 3, attack: 0.02, release: 0.15 });
+  AE.master = new Tone.Volume(-1.5);
+  /* v25 母带链升级：低频暖（+1.5dB 搁架）+ 1k 收敛（-0.5dB 去纸箱感）+ 高频空气感（+1.5dB 搁架）——
+     整体更饱满、更贴"商业混音"听感（仍是引擎A天花板内，非网易云级） */
+  AE.masterEq = new Tone.EQ3({ low: 1.5, mid: -0.5, high: 1.5, lowFrequency: 110, highFrequency: 7500 });
+  AE.masterMB = new Tone.Compressor({ threshold: -18, ratio: 2.5, attack: 0.03, release: 0.2 });
   /* 回退用：AE.masterMB = new Tone.MultibandCompressor({ lowFrequency: 250, highFrequency: 2600,
      low: { threshold:-20, ratio:3, attack:0.02, release:0.15 }, mid: { threshold:-16, ratio:2.5, attack:0.015, release:0.12 },
      high:{ threshold:-13, ratio:3, attack:0.01, release:0.1 } }); */
-  AE.masterSat = new Tone.Distortion(0.015); /* v14：仅留染色底线，CPU 优先 */
-  AE.limiterRef = new Tone.Limiter(-1);
+  AE.masterSat = new Tone.Distortion(0.02); /* v14：仅留染色底线，CPU 优先；v25 微增谐波暖度 */
+  AE.masterMakeup = new Tone.Gain(1.3); /* v25：限制器前 makeup ≈+2.3dB，提升整体响度（商业响度逼近） */
+  AE.limiterRef = new Tone.Limiter(-0.5);
   AE.master.connect(AE.masterEq);
   AE.masterEq.connect(AE.masterMB);
   AE.masterMB.connect(AE.masterSat);
-  AE.masterSat.connect(AE.limiterRef);
+  AE.masterSat.connect(AE.masterMakeup);
+  AE.masterMakeup.connect(AE.limiterRef);
   AE.limiterRef.toDestination();
   AE.masterMeter = new Tone.Meter({ normalRange: false, smoothing: 0.85 });
   if (!Tone.getContext().isOffline) { /* v24：离线渲染建图时无 MediaStreamDestination（导出走录音的实时路径不需要它） */
@@ -1900,7 +1904,12 @@ function buildAudio() {
   AE.keysVol.connect(nativeInputOf(AE.hpKeys)); /* v14：键盘层推子（合成回退+采样总线共用）→ 分工表链 */
   /* 频率分工表（系统级频谱编排）：每件乐器一个工位，挖掉侵占别人工位的频段
      贝斯 30-700 · Pad 150-5k(400以下全权让给贝斯) · EP 100-9.5k(350挖泥) · 吉他 90-13.5k(300挖泥) · 鼓 28-11k(11k以上洗剪) */
-  AE.toneFilterBass = new Tone.Filter(9000, 'lowpass').connect(AE.master);
+  AE.toneFilterBass = new Tone.Filter(9000, 'lowpass');
+  /* v25：贝斯定义感——低通砍掉泛音后，在 1.5kHz 补一个宽峰(+2.5dB)把拨弦/弦齿咬合捞回来，
+     既不恢复 GM 采样的全频抢戏，又让贝斯不再"只有轰没有形" */
+  AE.bassPres = new Tone.Filter(1500, 'peaking'); AE.bassPres.Q.value = 0.7; AE.bassPres.gain.value = 2.5;
+  AE.toneFilterBass.connect(AE.bassPres);
+  AE.bassPres.connect(AE.master);
   AE.hpBass = new Tone.Filter(30, 'highpass'); /* 30Hz 以下亚音切除：防轰头，房间感让给 kick */
   AE.hpBass.connect(AE.toneFilterBass);
   AE.bassVol.connect(AE.hpBass); /* 合成贝斯并入同一条滤波链 */
@@ -2522,7 +2531,7 @@ const SAMP_KEYS = 'electric_piano_1';
    bossa=电钢（原钢采样 404 回退）/afro=原钢稀疏顿奏/hiphop=暗黑 polysynth stab */
 const SAMP_KEYS_BY_STYLE = {
   rnb: '@fmrhodes', jazz: '@vibes', rock: null,
-  bossa: 'electric_piano_1', afro: '@fmrhodes', hiphop: 'pad_3_polysynth', /* v15：acoustic_grand_piano 两库都 404 → electric_piano_1（soundfont/soundfont2 均有） */
+  bossa: '@fmrhodes', afro: '@fmrhodes', hiphop: 'pad_3_polysynth', /* v25：bossa 弃 GM 电钢采样 → FM tine（GM 电钢是塑料感重灾区） */ /* v15：acoustic_grand_piano 两库都 404 → electric_piano_1（soundfont/soundfont2 均有） */
   funk: '@fmrhodes', soul: '@fmrhodes', reggae: 'pad_3_polysynth', afrobeats: '@fmrhodes',
   /* funk/soul/afrobeats = FM tine 顿奏（clav/Rhodes/亮色琴键的最近近似）；reggae = polysynth 短 stab 拼 organ 咬感（无风琴采样可用） */
 }; /* v12: GM 电钢采样退出和声层——换 DX7 式 FM tine 合成（塑料感主犯） */
@@ -4498,6 +4507,14 @@ function renderStats() {
 const TED = { page: 0, per: 4 }; /* per = 每页小节数 */
 const TED_DRUM_ROWS = ['kick', 'snare', 'clap', 'hat', 'ohat', 'ride', 'shaker', 'shekere', 'congaH', 'congaL', 'bell', 'crash'];
 const TED_DRUM_NAMES = { kick: '底鼓', snare: '军鼓', clap: '拍手', hat: '闭镲', ohat: '开镲', ride: '叮镲', shaker: '沙锤', shekere: '沙铃', congaH: '康加高', congaL: '康加低', bell: '铃', crash: '吊镲' };
+/* v25 小白化：每轨一句人话提示 */
+const TED_HINTS = {
+  melody: '点格子加/删音 · 点一下马上响',
+  keys: '点 = 触发本小节和弦',
+  bass: '点格子加/删音 · 点一下马上响',
+  synth: '点 = 本小节长音开关',
+  drums: '点 = 鼓点 · 连点 强→弱→删',
+};
 
 function tedStyAt(bar) { return state.styles.length > 1 ? state.styles[bar % state.styles.length] : state.styles[0]; }
 function tedKitAt(bar) {
@@ -4563,6 +4580,7 @@ function editorRefresh() {
     const t = tedEl('div', 'ted-track');
     const head = tedEl('div', 'ted-track-head');
     head.appendChild(tedEl('span', 'ted-tname', name));
+    head.appendChild(tedEl('span', 'ted-thint', TED_HINTS[trackKey] || ''));
     const rst = tedEl('button', 'ted-reset', '↺ 重置本轨');
     rst.onclick = () => tedResetTrack(trackKey);
     head.appendChild(rst);
@@ -4655,16 +4673,58 @@ function editorRefresh() {
 }
 
 /* --- 网格编辑操作 --- */
+/* v25 小白化：点格子后立刻响 + 顶部反馈条告诉你刚才做了什么（像玩鼓垫，有即时反馈） */
+async function tedAudition(track, midi, inst) {
+  try {
+    if (typeof Tone === 'undefined' || !(await ensureAudio())) return;
+    const t = Tone.now() + 0.04;
+    if (track === 'drums') {
+      const kit = tedKitAt(0);
+      const n = kit && kit[inst];
+      if (n && playDrumSample(n, t, 0.9)) return;
+      switch (inst) {
+        case 'kick': AE.kick.triggerAttackRelease('C1', '8n', t, 0.9); break;
+        case 'snare': AE.snare.triggerAttackRelease('16n', t, 0.9); AE.snareBody.triggerAttackRelease('G2', '16n', t, 0.5); break;
+        case 'clap': AE.clap808.triggerAttackRelease('8n', t, 0.9); break;
+        case 'hat': metalTrig('hat', 'G6', '32n', t, 0.8); break;
+        case 'ohat': metalTrig('ride', 'G5', '8n', t, 0.8); break;
+        case 'ride': metalTrig('ride', 'A5', '8n', t, 0.8); break;
+        case 'shaker': case 'shekere': metalTrig('hat', 'G6', '32n', t, 0.55); break;
+        case 'congaH': AE.conga.triggerAttackRelease('A3', '16n', t, 0.9); break;
+        case 'congaL': AE.conga.triggerAttackRelease('F3', '16n', t, 0.9); break;
+        case 'bell': metalTrig('rim808', 'A5', '16n', t, 0.7); break;
+        case 'crash': metalTrig('crash', 'B5', '1m', t, 0.85); break;
+      }
+    } else if (track === 'melody') {
+      if (!playGuitarReal(state.layers.guitar.patch, midi, t, 0.3, 0.9, null, false, state.styles[0])) AE.guitar.triggerAttackRelease(midiName(midi), 0.3, t, 0.85);
+    } else if (track === 'bass') {
+      const bi = sampOf(SAMP_BASS, 'bass');
+      if (!bi || bi.play(midi, t, { duration: 0.3, gain: 0.9 }) === false) AE.bass.triggerAttackRelease(midiName(midi), 0.3, t, 0.85);
+    } else if (track === 'keys') {
+      if (!playSynthBuf('keysEP', [midi, midi + 7, midi + 12], t, 0.7, 0.4)) AE.keys.triggerAttackRelease([midiName(midi), midiName(midi + 7), midiName(midi + 12)], 0.4, t, 0.7);
+    } else if (track === 'pad') {
+      AE.synthPad.triggerAttackRelease([midiName(midi), midiName(midi + 7), midiName(midi + 12)], 0.5, t, 0.5);
+    }
+  } catch (e) {}
+}
+function tedFeedback(msg, track, midi, inst, play) {
+  const el = document.getElementById('ted-feedback');
+  if (el) { el.textContent = msg; el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
+  if (play !== false) tedAudition(track, midi, inst); /* 异步：点一下马上响 */
+}
 function tedTogglePitch(track, midi, gstep) {
   const arr = track === 'melody' ? melodyEvents : bassEvents;
   const exact = arr.find(e => Math.round(e.beat * SPB()) === gstep && e.midi === midi);
+  const barNo = Math.floor(gstep / SBAR()) + 1;
   if (exact) {
     arr.splice(arr.indexOf(exact), 1);
+    tedFeedback('🗑 删掉了第 ' + barNo + ' 小节音符 ' + midiName(midi), track, midi, null, false);
   } else {
     const sameStep = arr.find(e => Math.round(e.beat * SPB()) === gstep && !e.dbl && !e.ghost);
     if (sameStep) sameStep.midi = midi; /* 同步已有音符 → 改音高 */
     else arr.push({ beat: gstep / SPB(), midi, dur: track === 'melody' ? 0.25 : 0.45, vel: 0.8 });
     arr.sort((a, b) => a.beat - b.beat);
+    tedFeedback((track === 'melody' ? '🎸' : '🎻') + ' 第 ' + barNo + ' 小节加了 ' + midiName(midi) + ' · 再点删掉', track, midi);
   }
   if (track === 'melody') { state.melodyEdited = true; renderRoll(); renderStats(); }
   reScheduleIfPlaying();
@@ -4672,8 +4732,10 @@ function tedTogglePitch(track, midi, gstep) {
 }
 function tedToggleKeys(gstep) {
   const at = keysEvents.filter(e => Math.round(e.beat * SPB()) === gstep);
+  const barNo = Math.floor(gstep / SBAR()) + 1; /* 显示用，1 起 */
   if (at.length) {
     for (const e of at) keysEvents.splice(keysEvents.indexOf(e), 1);
+    tedFeedback('🗑 取消第 ' + barNo + ' 小节的和弦', 'keys', 60, null, false);
   } else {
     const bar = Math.floor(gstep / SBAR());
     const chord = chordAtBar(bar);
@@ -4684,14 +4746,17 @@ function tedToggleKeys(gstep) {
       : chooseVoicing(styleVoicingPcs(chord.pcs, sty), null, melodyEvents.filter(m => Math.floor(m.beat / BPB()) === bar).map(m => m.midi));
     keysEvents.push({ beat: gstep / SPB(), notes, dur: 0.5, vel: 0.5, inst: inBar ? inBar.inst : 'keys' });
     keysEvents.sort((a, b) => a.beat - b.beat);
+    tedFeedback('🎹 第 ' + barNo + ' 小节触发和弦 · 点一下听听', 'keys', 60 + (chord.rootPC % 12));
   }
   reScheduleIfPlaying();
   editorRefresh();
 }
 function tedTogglePad(bar) {
   const at = synthEvents.filter(e => Math.floor(e.beat / BPB()) === bar);
+  const barNo = bar + 1;
   if (at.length) {
     for (const e of at) synthEvents.splice(synthEvents.indexOf(e), 1);
+    tedFeedback('🗑 关掉第 ' + barNo + ' 小节的 Pad 长音', 'pad', 60, null, false);
   } else {
     const chord = chordAtBar(bar);
     if (!chord) return;
@@ -4701,15 +4766,21 @@ function tedTogglePad(bar) {
     if (voicing.length >= 3) voicing = voicing.slice(-3).map(n => Math.min(n + 12, 84)); /* 与 genSynthPad 同规则的色彩声部音区 */
     synthEvents.push({ beat: bar * BPB(), notes: voicing, dur: Math.max(1.2, BPB() - 0.1), vel: 0.3 });
     synthEvents.sort((a, b) => a.beat - b.beat);
+    tedFeedback('🎛 第 ' + barNo + ' 小节打开 Pad 长音 · 再点关掉', 'pad', 60 + (chord.rootPC % 12));
   }
   reScheduleIfPlaying();
   editorRefresh();
 }
 function tedToggleDrum(inst, gstep) {
   const ev = drumEvents.find(e => Math.round(e.step16) === gstep && e.inst === inst);
-  if (!ev) drumEvents.push({ step16: gstep, inst, vel: 0.9, kit: tedKitAt(Math.floor(gstep / SBAR())) });
-  else if (ev.vel > 0.6) ev.vel = 0.38; /* 二次点击 → ghost 力度 */
-  else drumEvents.splice(drumEvents.indexOf(ev), 1); /* 三次点击 → 删除 */
+  const name = TED_DRUM_NAMES[inst] || inst;
+  const barNo = Math.floor(gstep / SBAR()) + 1;
+  if (!ev) {
+    drumEvents.push({ step16: gstep, inst, vel: 0.9, kit: tedKitAt(Math.floor(gstep / SBAR())) });
+    tedFeedback('🥁 第 ' + barNo + ' 小节加了「' + name + '」· 连点变弱→删', 'drums', null, inst);
+  }
+  else if (ev.vel > 0.6) { ev.vel = 0.38; tedFeedback('🥁 「' + name + '」变弱音（幽灵音）· 再点删除', 'drums', null, inst); } /* 二次点击 → ghost 力度 */
+  else { drumEvents.splice(drumEvents.indexOf(ev), 1); tedFeedback('🗑 删掉了「' + name + '」', 'drums', null, inst, false); } /* 三次点击 → 删除 */
   drumEvents.sort((a, b) => a.step16 - b.step16);
   reScheduleIfPlaying();
   editorRefresh();
