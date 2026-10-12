@@ -1823,10 +1823,10 @@ function buildAudio() {
 
   /* --- 鼓组 --- */
   AE.drumsVol = new Tone.Volume(-3.5); /* 路由在音色链创建后建立；v7 再前置：用户反馈"感受不到鼓点"，律动必须有肉体存在感 */
-  AE.drumsComp = new Tone.Compressor({ threshold: -14, ratio: 3, attack: 0.004, release: 0.2 }); /* v2：全鼓挤进同一动态包络；v28：-16/3.5→-14/3 温和化——重压是军鼓"炸麦"感来源之一 */
+  AE.drumsComp = new Tone.Compressor({ threshold: -12, ratio: 2.5, attack: 0.005, release: 0.2 }); /* v30：再温和化——律动靠动态对比，压太平=只剩响度没有律动 */
   /* v4.1 NY 并行压缩：重压缩副本 0.4 混入——kick/snare 永远顶穿混音；v28：-32/10/0.55→-26/6/0.35——重度碾碎副本=失真"炸麦"，减量保真 */
   AE.drumsPar = new Tone.Compressor({ threshold: -26, ratio: 6, attack: 0.004, release: 0.18 });
-  AE.drumsParGain = new Tone.Gain(0.35);
+  AE.drumsParGain = new Tone.Gain(0.3); /* v30：并行碾碎副本再减量，保瞬态=保律动 */
   AE.kick = new Tone.MembraneSynth({
     pitchDecay: 0.045, octaves: 6,
     envelope: { attack: 0.001, decay: 0.38, sustain: 0, release: 0.1 },
@@ -1954,7 +1954,7 @@ function buildAudio() {
   /* v26 去糊：鼓的混响发送先过 300Hz 高通——底鼓/808 低频不再洗进混响（鼓糊主要来源） */
   AE.drumVerbHP = new Tone.Filter(300, 'highpass');
   AE.drumVerbHP.connect(AE.masterVerb);
-  AE.sendDrums = new Tone.Gain(0.12).connect(AE.drumVerbHP);
+  AE.sendDrums = new Tone.Gain(0.08).connect(AE.drumVerbHP); /* v30：采样自带房间，加送再减量 */
   /* --- 爵士颤音琴：FM 金属音色 + 长释放（jazz 风格键盘专用） --- */
   AE.keysVibes = new Tone.PolySynth(Tone.FMSynth, {
     harmonicity: 3.01, modulationIndex: 12,
@@ -1976,7 +1976,7 @@ function buildAudio() {
      房间胶增益保留；代价是鼓尾从 0.35s 房间变共享大厅尾（风格门控 1.6-2.2s）。
      回退：AE.drumRoom = new Tone.Reverb({ decay: 0.35, wet: 1 }).connect(AE.master); drumRoomSend 改连 AE.drumRoom */
   AE.drumRoom = AE.masterVerb;
-  AE.drumRoomSend = new Tone.Gain(0.26).connect(AE.drumVerbHP); /* v26：房间胶减量 + 过 300Hz 高通（少洗=去糊） */
+  AE.drumRoomSend = new Tone.Gain(0.18).connect(AE.drumVerbHP); /* v30：Salamander 自带房间，房间胶再减（0.26→0.18）——空间由采样自带+少量发送构成 */
   AE.drumsComp.connect(AE.drumRoomSend);
 
   /* --- 808 鼓组（经典 TR-808 合成复刻，808 本身就是合成鼓机） --- */
@@ -2385,7 +2385,17 @@ function loadDrumSamples(isRetry) {
         const r = await fetch('drums/' + name);
         if (!r.ok) throw new Error('404');
         let buf = await raw.decodeAudioData(await r.arrayBuffer());
-        
+        /* v30：Salamander 头顶麦立体声 → 单声道下混——自带房间+鼓间串音是"不融合"的主因；
+           单声道采样由混音链统一给空间（鼓室发送），像真实混音里叠 close-mic 鼓件一样贴进编曲 */
+        if (/\.flac$/i.test(name) && buf.numberOfChannels > 1) {
+          const nb = raw.createBuffer(1, buf.length, buf.sampleRate);
+          const out = nb.getChannelData(0);
+          for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+            const d = buf.getChannelData(ch);
+            for (let i = 0; i < d.length; i++) out[i] += d[i] / buf.numberOfChannels;
+          }
+          buf = nb;
+        }
         const max = DRUM_MAXDUR[key] || 1.5;
         const offSec = DRUM_OFFSETS[key] || 0; /* v28：长录音从实测的击打位置切段 */
         if (buf.duration > offSec + max) {
@@ -2431,7 +2441,7 @@ const DRUM_SETS = {
 };
 const DRUM_GAIN = { shekere: 1.3, shaker: 0.9, snap: 1.1, clap: 1.3, hat_808: 0.9, kick_808: 1.25, crash: 0.95, rim_click: 1.1, kick_room: 1.45, snare_room: 1.2, brush_snare: 1.1, conga_h: 1.25, conga_l: 1.25, clave: 1.2,
   /* v29：Salamander 头顶麦克风录音偏轻，增益补偿 */
-  sal_kick: 1.6, sal_kick2: 1.6, sal_snare: 1.5, sal_snare2: 1.5, sal_hat: 1.7, sal_ohat: 1.6, sal_ride: 1.5, sal_crash: 1.5 };
+  sal_kick: 0.95, sal_kick2: 0.95, sal_snare: 0.95, sal_snare2: 0.95, sal_hat: 0.8, sal_ohat: 0.85, sal_ride: 0.8, sal_crash: 1.0 }; /* v30：头顶麦全频+自带房间，1.5-1.7 太响压过其他声部 → 回归融合级增益 */
 function playDrumSample(name, t, vel, opts) {
   /* v29：逻辑件按力度选层 + 层内轮询；旧名单文件直查 */
   let buf;
