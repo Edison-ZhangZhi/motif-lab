@@ -40,6 +40,7 @@ const state = {
   },
   playing: false,
   audioReady: false,
+  arrDirty: true,        /* v24 buffer 架构：编排脏标记（无已渲染 buffer 可播） */
   melodyEdited: false,
   sfBase: (typeof localStorage !== 'undefined' && localStorage.getItem('motif_sf')) || 'soundfont2',
   perf: (typeof localStorage !== 'undefined' && localStorage.getItem('motif_perf') === '1'),
@@ -1547,9 +1548,10 @@ const AE = { ready: false, nodes: {} };
 /* v21 根治"一播放就非常卡"：Tone.js MetalSynth 每次 triggerAttackRelease 要吃 ~14ms 主线程
    （6 载波+6 调制器调频 + 包络重建），播放中 hats/rides 每秒触发 6-12 次 = 主线程被吃掉一大半，
    排程回调整体迟到 → 音频爆卡（实测：20s 播放回调占主线程 17.6s，其中 MetalSynth 15.9s）。
-   方案：启动后用 Tone.Offline 把 8 个 MetalSynth 音色各自离线渲染成 AudioBuffer（只做一次），
+   方案：启动后把 8 个 MetalSynth 音色各自离线渲染成 AudioBuffer（只做一次），
    之后每次触发 = buffer source（<0.1ms），与真实采样同路径。live synth 保留作渲染就绪前的兜底。
-   METAL_DEFS 是 live synth 与离线渲染共用的唯一参数源，保证两者音色一致。 */
+   METAL_DEFS 是 live synth 与离线渲染共用的唯一参数源，保证两者音色一致。
+   v24：渲染改用独立 Tone.OfflineContext（不碰全局 context），见 renderMetalBufs 注释。 */
 const METAL_DEFS = {
   hat:        { opts: { envelope: { attack: 0.001, decay: 0.035, release: 0.02 }, harmonicity: 5.1, modulationIndex: 14, resonance: 3200, octaves: 0.8 },  note: 'G6', vol: -6,  sec: 2.2 },
   ride:       { opts: { envelope: { attack: 0.001, decay: 0.22,  release: 0.05 }, harmonicity: 5.1, modulationIndex: 12, resonance: 2400, octaves: 0.5 },  note: 'G5', vol: -8,  sec: 2.6 },
@@ -1570,20 +1572,40 @@ const FM_EP_OPTS = {
   envelope: { attack: 0.004, decay: 2.4, sustain: 0.32, release: 2.2 },
   modulationEnvelope: { attack: 0.002, decay: 0.25, sustain: 0.1, release: 0.3 },
 };
-/* 离屏渲染逐个进行（每个之间让出主线程），失败静默回退 live synth，绝不影响播放 */
+/* 离屏渲染逐个进行（每个之间让出主线程），失败静默回退 live synth，绝不影响播放。
+   v24 根治"点播放出一声就卡死/完全没声音"：不再用 Tone.Offline——它渲染期间会把 Tone 全局
+   context 换成 OfflineContext、渲染完再换回；渲染持续数秒，期间用户点播放，每音符建节点
+   （Tone.getContext().rawContext）与 Transport 都可能撞上"全局 context 是即将关闭的离线
+   context"的窗口 = 节点挂死 context（静音）/ Transport 状态错乱（卡死）。
+   新路径：每个音色用独立 Tone.OfflineContext（构造签名 (channels, durationSec, sampleRate)，
+   本版本 Tone 14.8.49 已导出），节点显式传 {context: offCtx}，render() 只渲染自身时钟，
+   全程不做全局 setContext。 */
 async function renderMetalBufs() {
   if (SYNTH_BUF._started || !AE.ready) return;
-  if (typeof Tone.Offline !== 'function') return;
+  if (typeof Tone.OfflineContext !== 'function') return;
+  if (typeof _arrRendering !== 'undefined' && _arrRendering) return; /* v24：编曲离线渲染持有离线 context 期间不插足 */
   SYNTH_BUF._started = true;
-  /* Tone.Offline 内部无 try/finally：回调抛异常会跳过全局 context 恢复，
-     主 context 被留在离线上下文 = 全站静音。这里兜底恢复。 */
+  /* 双保险：本路径不换全局 context；万一后续改动又引入全局替换，finally 强制恢复 */
   const prevCtx = Tone.getContext();
-  try {
-    await renderMetalBufsInner();
-  } catch (e) { console.warn('合成器离屏渲染失败（回退 live synth）', e); }
-  finally {
-    try { if (Tone.getContext() !== prevCtx) Tone.setContext(prevCtx); } catch (e) {}
-  }
+  const p = (async () => {
+    try {
+      await renderMetalBufsInner();
+    } catch (e) { console.warn('合成器离屏渲染失败（回退 live synth）', e); }
+    finally {
+      try { if (Tone.getContext() !== prevCtx) Tone.setContext(prevCtx); } catch (e) {}
+    }
+  })();
+  SYNTH_BUF._promise = p; /* v24：renderArrangementToBuffer 换挂 AE 前必须等它在途渲染收尾 */
+  await p;
+  SYNTH_BUF._promise = null;
+}
+/* 独立离线渲染：offCtx 包住独立 OfflineAudioContext，节点全部显式挂 {context: offCtx}，
+   出口接 offCtx.destination。返回 ToneAudioBuffer（与 Tone.Offline 的返回同接口）。 */
+async function renderOfflineBuf(sec, setup) {
+  const raw = Tone.getContext().rawContext;
+  const offCtx = new Tone.OfflineContext(2, sec, (raw && raw.sampleRate) || 44100);
+  setup(offCtx);
+  return offCtx.render();
 }
 async function renderMetalBufsInner() {
   try {
@@ -1598,12 +1620,12 @@ async function renderMetalBufsInner() {
     }
     for (const [k, d] of Object.entries(METAL_DEFS)) {
       try {
-        const rendered = await Tone.Offline(() => {
-          const s = new Tone.MetalSynth(JSON.parse(JSON.stringify(d.opts)));
+        const rendered = await renderOfflineBuf(d.sec, (offCtx) => {
+          const s = new Tone.MetalSynth(Object.assign(JSON.parse(JSON.stringify(d.opts)), { context: offCtx }));
           s.volume.value = d.vol;
-          s.connect(Tone.getDestination());
+          s.connect(offCtx.destination);
           s.triggerAttack(d.note, 0.15, 1);
-        }, d.sec);
+        });
         const ab = raw.createBuffer(rendered.numberOfChannels, rendered.length, rendered.sampleRate);
         for (let c = 0; c < rendered.numberOfChannels; c++) ab.copyToChannel(rendered.getChannelData(c), c);
         SYNTH_BUF[k] = { buf: ab, midi: noteNameToMidi(d.note) };
@@ -1612,13 +1634,14 @@ async function renderMetalBufsInner() {
     }
     /* FM tine 电钢：渲染含 7.5k 低通（与原链一致），tremolo/合唱留在 live 链上继续调制 */
     try {
-      const rendered = await Tone.Offline(() => {
-        const s = new Tone.PolySynth(Tone.FMSynth, JSON.parse(JSON.stringify(FM_EP_OPTS)));
+      const rendered = await renderOfflineBuf(7.5, (offCtx) => {
+        /* 对象构造形：voice/options/context 同层传——PolySynth 会把自身 context 透传给每个 voice */
+        const s = new Tone.PolySynth({ voice: Tone.FMSynth, options: JSON.parse(JSON.stringify(FM_EP_OPTS)), context: offCtx });
         s.volume.value = -5;
-        const lp = new Tone.Filter(7500, 'lowpass');
-        s.connect(lp); lp.connect(Tone.getDestination());
+        const lp = new Tone.Filter({ frequency: 7500, type: 'lowpass', context: offCtx });
+        s.connect(lp); lp.connect(offCtx.destination);
         s.triggerAttackRelease('C4', 4.6, 0.05, 1);
-      }, 7.5);
+      });
       const ab = raw.createBuffer(rendered.numberOfChannels, rendered.length, rendered.sampleRate);
       for (let c = 0; c < rendered.numberOfChannels; c++) ab.copyToChannel(rendered.getChannelData(c), c);
       SYNTH_BUF.keysEP = { buf: ab, midi: 60, bus: SYNTH_BUF.epBus };
@@ -1734,8 +1757,10 @@ function buildAudio() {
   AE.masterSat.connect(AE.limiterRef);
   AE.limiterRef.toDestination();
   AE.masterMeter = new Tone.Meter({ normalRange: false, smoothing: 0.85 });
-  AE.recDest = Tone.getContext().createMediaStreamDestination();
-  AE.limiterRef.connect(AE.recDest);
+  if (!Tone.getContext().isOffline) { /* v24：离线渲染建图时无 MediaStreamDestination（导出走录音的实时路径不需要它） */
+    AE.recDest = Tone.getContext().createMediaStreamDestination();
+    AE.limiterRef.connect(AE.recDest);
+  }
   /* 限制器后 → 电平监听（并联，不影响信号链；v14 AGC 呼吸环已删除，meter 留作诊断） */
   setTimeout(() => { try { AE.limiterRef.connect(AE.masterMeter); } catch (e) {} }, 0);
 
@@ -2084,7 +2109,7 @@ function loadGuitarSamples() {
   const raw = Tone.getContext().rawContext;
   for (const set of ['electric', 'acoustic']) GUITAR_SAMP.buffers[set] = {};
   /* v19 防风暴：34 个 mp3 全并发 fetch+decode 是首播卡死共犯——改逐个 await + 每个之间让出主线程 */
-  (async () => {
+  GUITAR_SAMP.promise = (async () => { /* v24：promise 外暴露，离线渲染前可等全 */
     for (const set of ['electric', 'acoustic']) {
       for (const note of GUITAR_SETS[set]) {
         try {
@@ -2307,7 +2332,7 @@ function loadDrumSamples(isRetry) {
   /* 单次击打最大时长（秒）：防止把 loop/长采样整段叠放 */
   const DRUM_MAXDUR = { hat_closed: 0.8, hat_808: 1.2, shaker: 2.2, shekere: 2.0, snare_room: 1.5, snap: 1.0, rim_click: 1.0, clap: 1.3, brush_snare: 1.8, kick_room: 1.1, kick_808: 1.6, crash: 2.8, conga_h: 1.6, conga_l: 1.6, clave: 1.0 };
   /* v19 防风暴：15 个 mp3 全并发 fetch+decode 与排程抢主线程——改逐个 await + 每个之间让出主线程 */
-  (async () => {
+  DRUM_SAMP.promise = (async () => { /* v24：promise 外暴露，离线渲染前可等全 */
     for (const name of DRUM_FILES) {
       try {
         const r = await fetch('drums/' + name + '.mp3');
@@ -2346,7 +2371,7 @@ const DRUM_GAIN = { shekere: 1.3, shaker: 0.9, snap: 1.1, clap: 1.3, hat_808: 0.
 function playDrumSample(name, t, vel, opts) {
   const buf = DRUM_SAMP.buffers[name];
   if (!buf || !DRUM_SAMP.bus) return false;
-  t += Math.random() * 0.016 - 0.008; /* v17 人性化加强：±4ms→±8ms，滚奏/16分连打的机关枪感主源 */
+  t = Math.max(0, t + Math.random() * 0.016 - 0.008); /* v17 人性化加强：±4ms→±8ms；v24 钳负（离线渲染 t 从 0 起） */
   vel *= 1 + (Math.random() * 0.2 - 0.1); /* v17：±6%→±10% 力度抖动 */
   const raw = Tone.getContext().rawContext;
   const src = raw.createBufferSource();
@@ -2590,7 +2615,7 @@ function flushDeferred() {
 }
 /* v19 急救：自写渐进式 SoundFont 加载器，替换 soundfont-player 的整音色一次性解码。
    旧方案 Soundfont.instrument() 把整音色 ~88 个逐音 MP3 一次性 atob+decodeAudioData，
-   主线程长任务风暴与 Tone.Transport 排程互抢 = "出一声就卡死"的根因。
+   主线程长任务风暴与 Tone.getTransport() 排程互抢 = "出一声就卡死"的根因。
    新方案：fetch 文本 → 解析 {音名: base64}（midiJsToJson 同款）→ 按当前乐曲用到的音高优先排序 →
    逐个 await decodeAudioData，每个之间 setTimeout(0) 让出主线程（单音色并发=1，播放中也能继续）。
    首个音解码完成即放入 SAMP.cache（sampOf 立即命中）；play() 找不到已解码音高返回 false，
@@ -2618,32 +2643,38 @@ function sfHintClear() {
 }
 function createProgressiveSF(name, base, cacheKey) {
   const raw = Tone.getContext().rawContext;
-  const dest = SAMP.filtByRole[roleOfName(name)]; /* v17 路由不变：角色低通 → 层推子 */
+  /* v24：dest 在 play 时动态解析——离线渲染期间采样总线被换挂到离线 AE 推子，
+     绑死创建时的 live 总线会让离线渲染的音符漏到 live 输出且不进 buffer */
   const inst = {
     buffers: {},     /* 音名 → AudioBuffer（兼容 autoAlignTimbres 的 inst.buffers['E3'] 用法） */
     _midiBuf: {},    /* midi → AudioBuffer（play 就近变速用） */
     _dead: false,    /* 换音色库时置位，逐音解码循环检查退出 */
     _done: false,
+    _usedReady: null,/* v24：本曲用到的音高全部解码完成时 resolve（离线渲染等全用） */
     play(note, t, opts) {
       if (Array.isArray(note)) { let any = false; for (const n of note) any = this._playOne(n, t, opts) || any; return any; }
       return this._playOne(note, t, opts);
     },
     _playOne(midi, t, opts) {
       opts = opts || {};
+      t = Math.max(0, t); /* v24：离线渲染 t 从 0 起，微时值为负会抛 setValueAtTime */
       let best = -1, bd = 1e9;
       for (const k in this._midiBuf) { const d = Math.abs(k - midi); if (d < bd) { bd = d; best = +k; } }
       if (best < 0) return false; /* 一个音都没解码——调用点走合成兜底 */
       const buf = this._midiBuf[best];
-      const src = raw.createBufferSource();
+      const rawNow = Tone.getContext().rawContext; /* v24：play 时动态取 context（离线渲染窗口内=离线 context） */
+      const destNow = (SAMP.filtByRole && SAMP.filtByRole[roleOfName(name)]) || null;
+      if (!destNow) return false;
+      const src = rawNow.createBufferSource();
       src.buffer = buf;
       src.playbackRate.value = Math.pow(2, (midi - best + (opts.cents || 0) / 100) / 12);
-      const g = raw.createGain();
+      const g = rawNow.createGain();
       const gv = opts.gain !== undefined ? opts.gain : 1;
       const end = t + Math.min(opts.duration || buf.duration, buf.duration) + 0.25; /* 尾段留白 */
       g.gain.setValueAtTime(gv, t);
       g.gain.setValueAtTime(gv, Math.max(t, end - 0.06));
       g.gain.linearRampToValueAtTime(0.0001, end); /* 60ms 淡出防咔哒 */
-      src.connect(g); g.connect(dest);
+      src.connect(g); g.connect(destNow);
       src.start(t); src.stop(end + 0.05);
       return true;
     },
@@ -2662,11 +2693,13 @@ function createProgressiveSF(name, base, cacheKey) {
     const entries = Object.keys(map).map(k => [k, _sfNoteMidi(k), map[k]]);
     /* 当前乐曲各声部实际用到的音高排最前（就近匹配，未用到的音靠后慢慢补） */
     const used = _sfUsedMidis(roleOfName(name));
+    let usedResolve = null;
+    inst._usedReady = new Promise(r => { usedResolve = r; });
     if (used.size) {
       const u = [...used];
       const score = m => { let s = 1e9; for (const x of u) { const d = Math.abs(x - m); if (d < s) s = d; } return s; };
       entries.sort((a, b2) => score(a[1]) - score(b[1]));
-    }
+    } else { usedResolve(); usedResolve = null; } /* 没用音（理论不到）→ 立即就绪 */
     for (const [noteName, midi, uri] of entries) {
       if (inst._dead) break; /* 作废标志：换音色库等场景退出 */
       const b64 = uri.slice(uri.indexOf(',') + 1);
@@ -2679,8 +2712,10 @@ function createProgressiveSF(name, base, cacheKey) {
       inst.buffers[noteName] = await raw.decodeAudioData(ab);
       inst._midiBuf[midi] = inst.buffers[noteName];
       if (!SAMP.cache[cacheKey]) SAMP.cache[cacheKey] = inst; /* 首音解码即上线 */
+      if (usedResolve && [...used].every(m => inst._midiBuf[m] !== undefined)) { usedResolve(); usedResolve = null; } /* v24：用音到齐即放行离线渲染 */
       await new Promise(r => setTimeout(r, 0)); /* 让出主线程：解码不与排程回调互抢 */
     }
+    if (usedResolve) { usedResolve(); usedResolve = null; } /* 提前 break/缺音兜底：渲染不死等 */
     inst._done = true;
     live.delete(inst);
     return inst;
@@ -2892,13 +2927,13 @@ const secPer16 = () => 60 / state.bpm / 4;
 
 function scheduleAll() {
   
-  Tone.Transport.cancel(0);
-  Tone.Transport.bpm.value = state.bpm;
+  Tone.getTransport().cancel(0);
+  Tone.getTransport().bpm.value = state.bpm;
   /* v4：swing 由排程层逐件计算（sharedSwingSec 共享网格 + drumTimeShift 鼓件专属偏移）。
      Transport.swing 只对 Sequence/Part 迭代生效，对 Transport.schedule 回调无效——
      旧代码里 swing 滑条对实时播放完全不生效，MIDI 导出却生效（两套时间），此处统一（导出见 buildMidi） */
-  Tone.Transport.swing = 0;
-  Tone.Transport.swingSubdivision = '16n';
+  Tone.getTransport().swing = 0;
+  Tone.getTransport().swingSubdivision = '16n';
   _ksStepsCache = null; /* pad/keys 侧链缓存随鼓重算 */
   const bars = state.slots.length;
 
@@ -2923,8 +2958,8 @@ function scheduleAll() {
       prevMel = { midi: e.midi, end: e.beat + e.dur };
       const melStyle = styleOfBar(e.beat);
       const src = GUITAR_SRC_BY_STYLE[melStyle] || 'samp';
-      Tone.Transport.schedule(tt => {
-        const pgt = tt + toff;
+      Tone.getTransport().schedule(tt => {
+        const pgt = Math.max(0, tt + toff); /* v24：离线渲染 t 从 0 起，负微时值钳 0 */
         const gduck = duckMulAt(e.beat, 0.93); /* 角色层级：主角只轻闪避——0.80 的逐音拽跳是"一颗颗蹦"的泵感根源 */
         if (src === 'sf') {
           const inst = instName && sampOf(instName, 'guitar');
@@ -2949,7 +2984,7 @@ function scheduleAll() {
       const koff = voiceOff(styleOfBar(e.beat), 'keys', e.beat) + sharedSwingSec(styleOfBar(e.beat), e.beat * SPB());
       const ks = SAMP_KEYS_BY_STYLE[styleOfBar(e.beat)] || SAMP_KEYS;
       const kduck = duckMulAt(e.beat, 0.85); /* B6：kick/snare 后和声闪避（v15 0.68→0.85：深度闪避把 comping 泵没了） */
-      Tone.Transport.schedule(tt2 => { const tt = tt2 + koff;
+      Tone.getTransport().schedule(tt2 => { const tt = Math.max(0, tt2 + koff); /* v24：负微时值钳 0 */
         const gi = e.inst && e.inst.startsWith('guitar:') ? e.inst.slice(7) : null;
         const gInst = gi && sampOf(SAMP_GUITAR[gi], 'guitar');
         /* v19：play 返回 false=音未解码 → 继续走下方 keys 兜底链 */
@@ -2957,8 +2992,9 @@ function scheduleAll() {
         if (gInst) { sfBright('guitar', e.vel * kduck, tt); for (const n of e.notes) gPlayed = gInst.play(n, tt, { duration: dur, gain: e.vel * 1.0 * kduck, cents: sfRepeatCents('guitar', n, tt) }) !== false || gPlayed; }
         if (!gPlayed && ks === '@vibes') AE.keysVibes.triggerAttackRelease(names, dur, tt, e.vel * 0.85 * kduck);
         else if (!gPlayed && ks === '@fmrhodes') {
-          /* v13 优先级：smplr Wurlitzer 采样 → v12 FM tine 兜底（v21：FM tine 已离线渲染成采样，~40ms/次 → <0.5ms） */
-          if (_wurli) { for (const n of e.notes) _wurli.start({ note: n, time: tt, duration: dur, velocity: Math.max(20, Math.round(e.vel * 118 * kduck)) }); }
+          /* v13 优先级：smplr Wurlitzer 采样 → v12 FM tine 兜底（v21：FM tine 已离线渲染成采样，~40ms/次 → <0.5ms）
+             v24：Wurli 绑死 live context，离线渲染（isOffline）时跳过，走 FM 电钢兜底 */
+          if (_wurli && !Tone.getContext().isOffline) { for (const n of e.notes) _wurli.start({ note: n, time: tt, duration: dur, velocity: Math.max(20, Math.round(e.vel * 118 * kduck)) }); }
           else if (!playSynthBuf('keysEP', e.notes, tt, e.vel * 0.9 * kduck, dur)) AE.keysEP.triggerAttackRelease(names, dur, tt, e.vel * 0.9 * kduck);
         }
         else if (!gPlayed) {
@@ -2981,14 +3017,15 @@ function scheduleAll() {
       const pcfg = PAD_BY_STYLE[styleOfBar(e.beat)] || PAD_BY_STYLE.rnb;
       const padName = SAMP_PAD[pcfg.bank];
       const pduck = duckMulAt(e.beat, 0.85); /* B6：kick 后 pad 闪避（v15 0.68→0.85：深闪=糊） */
-      Tone.Transport.schedule(tt => {
+      Tone.getTransport().schedule(tt => {
+        const pt = Math.max(0, tt + poff + lag); /* v24：离线渲染 t 从 0 起，负微时值钳 0 */
         const inst = (padName && sampOf(padName, 'pad')) || null; /* v19：回调内现查——渐进加载中途就绪即时切上采样 */
         let pPlayed = false;
-        if (inst) { sfBright('pad', e.vel * pduck, tt + poff + lag); for (const n of e.notes) pPlayed = inst.play(n, tt + poff + lag, { duration: dur, gain: e.vel * 1.4 * pduck, cents: sfRepeatCents('pad', n, tt + poff + lag) }) !== false || pPlayed; }
+        if (inst) { sfBright('pad', e.vel * pduck, pt); for (const n of e.notes) pPlayed = inst.play(n, pt, { duration: dur, gain: e.vel * 1.4 * pduck, cents: sfRepeatCents('pad', n, pt) }) !== false || pPlayed; }
         if (!pPlayed) {
-          AE.synthPad.triggerAttackRelease(names, dur, tt + poff + lag, e.vel * pduck);
+          AE.synthPad.triggerAttackRelease(names, dur, pt, e.vel * pduck);
           /* v15：supersaw 模拟垫底只在 Pad 采样缺失时启用（与采样叠加=浑浊加倍） */
-          for (const p of AE.padUnder) p.triggerAttackRelease(names, dur, tt + poff + lag, e.vel * 0.9 * pduck);
+          for (const p of AE.padUnder) p.triggerAttackRelease(names, dur, pt, e.vel * 0.9 * pduck);
         }
       }, t);
     }
@@ -2997,11 +3034,12 @@ function scheduleAll() {
       const t = t16(Math.round(e.beat * SPB()));
       const dur = Math.max(1, Math.round(e.dur * SPB())) * secPer16() * 0.9;
       const poff = voiceOff('afro', 'pad', e.beat) + sharedSwingSec('afro', e.beat * SPB());
-      Tone.Transport.schedule(tt => {
+      Tone.getTransport().schedule(tt => {
+        const ht = Math.max(0, tt + poff); /* v24：负微时值钳 0 */
         const inst = sampOf('brass_section', 'pad') || (SAMP_PAD.warm && sampOf(SAMP_PAD.warm, 'pad'));
         let hPlayed = false;
-        if (inst) { sfBright('pad', e.vel, tt + poff); for (const n of e.notes) hPlayed = inst.play(n, tt + poff, { duration: dur, gain: e.vel * 1.3, cents: sfRepeatCents('pad', n, tt + poff) }) !== false || hPlayed; }
-        if (!hPlayed) AE.synthPad.triggerAttackRelease(e.notes.map(midiName), dur, tt + poff, e.vel);
+        if (inst) { sfBright('pad', e.vel, ht); for (const n of e.notes) hPlayed = inst.play(n, ht, { duration: dur, gain: e.vel * 1.3, cents: sfRepeatCents('pad', n, ht) }) !== false || hPlayed; }
+        if (!hPlayed) AE.synthPad.triggerAttackRelease(e.notes.map(midiName), dur, ht, e.vel);
       }, t);
     }
   }
@@ -3015,7 +3053,7 @@ function scheduleAll() {
       const t = t16(Math.round(e.beat * SPB()));
       const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.95;
       const boff = voiceOff(styleOfBar(e.beat), 'bass', e.beat) + sharedSwingSec(styleOfBar(e.beat), e.beat * SPB());
-      Tone.Transport.schedule(tt => {
+      Tone.getTransport().schedule(tt => {
         if (e.b808) {
           if (!play808(e.midi, tt, dur * 1.6, e.vel, e.slideTo)) {
             AE.bass.triggerAttackRelease(midiName(e.midi), dur, tt, e.vel);
@@ -3035,7 +3073,7 @@ function scheduleAll() {
       const dStyle = styleOfBar(e.step16 / SPB());
       const doff = voiceOff(dStyle, (e.inst === 'hat' || e.inst === 'ohat' || e.inst === 'ride' || e.inst === 'shekere' || e.inst === 'shaker') ? 'hat' : 'drums', e.step16 / SPB())
         + drumTimeShift(dStyle, e.inst, e.step16);
-      Tone.Transport.schedule(tt0 => { const tt = tt0 + doff;
+      Tone.getTransport().schedule(tt0 => { const tt = Math.max(0, tt0 + doff); /* v24：负微时值钳 0 */
         const kit = e.kit || DRUM_KITS.rnb;
         const smp = (inst) => {
           const n = kit[inst]; if (!n) return false;
@@ -3080,8 +3118,8 @@ function scheduleAll() {
       }, t);
     }
   }
-  Tone.Transport.setLoopPoints(0, `${totalBars()}:0:0`);
-  Tone.Transport.loop = true;
+  Tone.getTransport().setLoopPoints(0, `${totalBars()}:0:0`);
+  Tone.getTransport().loop = true;
   /* v21 按需加载：只解码本曲实际用到的 SF 音色（单风格通常 4 个；旧 extras 全量预载是 ~11 个 ≈ 1000 次 decode）。
      渐进加载器逐音让出主线程；未就绪音高 play 返回 false 走合成兜底，就绪后 sampOf 自动切上（v19 机制）。
      换风格/音色/音色库 → 下一次 scheduleAll 自动带上新需求。 */
@@ -3124,6 +3162,130 @@ function warmupAudio() {
   } catch (e) { console.warn('音频预热失败（不影响播放手势路径）', e); }
 }
 
+/* ============================================================
+ * v24 DAW 式播放：编曲整体离线渲染成一条 AudioBuffer，播放 = 单 BufferSource。
+ * 实时排程（Transport 全曲 2400+ 回调 + 每音符现场建节点）在低端机上物理性卡死；
+ * 渲染后播放零排程零建节点，不可能卡。
+ * 渲染管线：等全部采样解码完 → Tone.setContext(离线 ctx) + AE 单例字段换挂离线新图 →
+ * scheduleAll 排进离线 Transport → offCtx.render() → finally 恢复全局 context 与 live AE 图。
+ * ============================================================ */
+const ARR = { buf: null, src: null, dur: 0 };
+let _arrRendering = false;
+
+/* 渲染前等采样全量解码（离线渲染不能渐进）：SF 按本曲用音到齐（_usedReady），鼓/吉他等首轮 */
+async function awaitArrSamples() {
+  loadGuitarSamples(); loadDrumSamples(); loadInstruments();
+  const need = new Set();
+  const add = n => { if (n && typeof n === 'string' && !n.startsWith('@')) need.add(n); };
+  add(SAMP_GUITAR[state.layers.guitar.patch]);
+  add(SAMP_BASS);
+  add(SAMP_PAD[state.layers.synth.patch]);
+  const actStyles = state.styles.length ? state.styles : ['rnb'];
+  for (const k of actStyles) {
+    add(SAMP_KEYS_BY_STYLE[k]);
+    const pc = PAD_BY_STYLE[k];
+    if (pc && SAMP_PAD[pc.bank]) add(SAMP_PAD[pc.bank]);
+    if ((GUITAR_SRC_BY_STYLE[k] || 'samp') === 'sf') add(SAMP_GUITAR[state.layers.guitar.patch]);
+  }
+  if (hornEvents.length) add(SAMP_PAD.warm); /* 与 scheduleAll 的需求集口径一致 */
+  const names = [...need];
+  for (let i = 0; i < names.length; i++) {
+    sampStatus(`渲染编曲中…采样 ${i + 1}/${names.length}`);
+    try {
+      const inst = await ensureSample(names[i]);
+      if (inst && inst._usedReady) {
+        await Promise.race([inst._usedReady, new Promise(r => setTimeout(r, 30000))]); /* 缺音/异常不死等 */
+      }
+    } catch (e) {}
+  }
+  sampStatus('渲染编曲中…鼓/吉他采样');
+  try { if (DRUM_SAMP.promise) await DRUM_SAMP.promise; } catch (e) {}
+  try { if (GUITAR_SAMP.promise) await GUITAR_SAMP.promise; } catch (e) {}
+  /* v21 金属/FM 预渲染 buffer 跨 context 可播：等它在途渲染收尾，离线渲染直接复用（速度与音色一致） */
+  try {
+    if (!SYNTH_BUF._started) renderMetalBufs();
+    if (SYNTH_BUF._promise) await SYNTH_BUF._promise;
+  } catch (e) {}
+}
+
+async function renderArrangementToBuffer() {
+  const prevCtx = Tone.getContext();
+  /* AE 是全局单例且上百处 AE.xxx 引用：保留对象身份，字段整体快照 → 换挂离线新图 → 渲染完原样恢复 */
+  const liveAE = {};
+  for (const k of Object.keys(AE)) liveAE[k] = AE[k];
+  const liveBuses = {
+    busByRole: SAMP.busByRole, sendByRole: SAMP.sendByRole, filtByRole: SAMP.filtByRole,
+    bus: SAMP.bus, padBus: SAMP.padBus,
+    drumBus: DRUM_SAMP.bus, synthBus: SYNTH_BUF.bus, epBus: SYNTH_BUF.epBus,
+  };
+  _arrRendering = true;
+  try {
+    await awaitArrSamples();
+    sampStatus('渲染编曲中…');
+    for (const k of Object.keys(AE)) delete AE[k];
+    AE.nodes = {}; AE.ready = false;
+    SAMP.busByRole = null; SAMP.sendByRole = null; SAMP.filtByRole = null; SAMP.bus = null; SAMP.padBus = null;
+    DRUM_SAMP.bus = null;
+    SYNTH_BUF.bus = null; SYNTH_BUF.epBus = null;
+    for (const k of Object.keys(GUITAR_FX_CHAINS)) delete GUITAR_FX_CHAINS[k]; /* 链节点绑 context，离线重建 */
+    const totalSec = totalBars() * BPB() * 60 / state.bpm;
+    const sr = (prevCtx.rawContext && prevCtx.rawContext.sampleRate) || 44100;
+    const offCtx = new Tone.OfflineContext(2, totalSec + 1.5, sr); /* +1.5s 尾音余量 */
+    Tone.setContext(offCtx);
+    buildAudio();          /* 全新一套图，节点全挂离线 context（末尾自调 applyMix） */
+    ensureBuses();         /* 采样总线/角色低通接离线 AE 推子 */
+    const oraw = offCtx.rawContext;
+    DRUM_SAMP.bus = oraw.createGain(); DRUM_SAMP.bus.gain.value = 1; DRUM_SAMP.bus.connect(nativeInputOf(AE.drumsVol));
+    if (SYNTH_BUF.hat) {   /* 预渲染金属/FM buffer 已就绪：只重挂总线到离线图 */
+      SYNTH_BUF.bus = oraw.createGain(); SYNTH_BUF.bus.gain.value = 1; SYNTH_BUF.bus.connect(nativeInputOf(AE.drumsVol));
+      SYNTH_BUF.epBus = oraw.createGain(); SYNTH_BUF.epBus.gain.value = 1; SYNTH_BUF.epBus.connect(nativeInputOf(AE.keysTremolo));
+      if (SYNTH_BUF.keysEP) SYNTH_BUF.keysEP.bus = SYNTH_BUF.epBus; /* ent.bus 也绑 context，必须同步换挂 */
+    }
+    scheduleAll();                /* 全曲排进离线 Transport（回调内 AE/SAMP/DRUM_SAMP 均已是离线换挂） */
+    Tone.getTransport().loop = false;  /* 只渲一遍：loop=true 会把开头 1.5s 重混进尾音余量 */
+    Tone.getTransport().start(0);
+    const rendered = await offCtx.render(); /* ToneAudioBuffer；渲染期间全局已是离线 context，无并发窗口 */
+    ARR.buf = rendered.get ? rendered.get() : rendered;
+    ARR.dur = totalSec;
+    state.arrDirty = false;
+    return true;
+  } catch (e) {
+    console.warn('编曲离线渲染失败', e);
+    ARR.lastError = (e && e.message) || String(e);
+    return false;
+  } finally {
+    try { Tone.setContext(prevCtx); } catch (e) {}
+    for (const k of Object.keys(AE)) delete AE[k];
+    Object.assign(AE, liveAE); /* 恢复 live 图（live 节点从未被动过） */
+    SAMP.busByRole = liveBuses.busByRole; SAMP.sendByRole = liveBuses.sendByRole; SAMP.filtByRole = liveBuses.filtByRole;
+    SAMP.bus = liveBuses.bus; SAMP.padBus = liveBuses.padBus;
+    DRUM_SAMP.bus = liveBuses.drumBus;
+    SYNTH_BUF.bus = liveBuses.synthBus; SYNTH_BUF.epBus = liveBuses.epBus;
+    if (SYNTH_BUF.keysEP) SYNTH_BUF.keysEP.bus = liveBuses.epBus; /* 与换挂对应恢复 */
+    for (const k of Object.keys(GUITAR_FX_CHAINS)) delete GUITAR_FX_CHAINS[k]; /* 离线链作废，live 链下次按需重建 */
+    _arrRendering = false;
+  }
+}
+
+/* 播放 = live context 上单个 BufferSource → AE.master（总音量推子对 buffer 仍然实时生效） */
+function startBufferPlayback() {
+  const raw = Tone.getContext().rawContext;
+  const src = raw.createBufferSource();
+  src.buffer = ARR.buf;
+  src.loop = true;
+  src.loopStart = 0;
+  src.loopEnd = ARR.dur; /* 尾音余量不进循环 */
+  src.connect(nativeInputOf(AE.master));
+  src.start();
+  ARR.src = src;
+  state.playing = true;
+  updatePlayBtn();
+  setTimeout(audioHealthCheck, 2500);
+}
+function stopBufferPlayback() {
+  if (ARR.src) { try { ARR.src.stop(); } catch (e) {} ARR.src = null; }
+}
+
 async function ensureAudio() {
   if (typeof Tone === 'undefined') return false;
   if (!state.audioReady) { buildAudio(); state.audioReady = true; const gp = SAMP_GUITAR[state.layers.guitar.patch]; if (gp) ensureSample(gp); loadGuitarSamples(); loadDrumSamples(); loadInstruments(); loadWurli(); renderMetalBufs(); /* v17：与 warmupAudio 同优先级序；v13 后台预热 Wurli 采样电钢 */ }
@@ -3138,9 +3300,56 @@ async function ensureAudio() {
   return Tone.context.state === 'running';
 }
 
+/* v24 音频健康自检：播放 2.5s 后确认链路真的在出声。
+   判定全部用硬条件，防误报：context running + Transport 在走 + 主音量未关，
+   且（AE 节点挂的 context 已不是当前全局 context = 历史离屏渲染竞态的死征，
+   或主链电平恒 0）才动手。触发后状态栏提示，并自动重建一次音频图
+   （buildAudio 重建全部节点，后续触发走新节点；SYNTH_BUF 总线指向旧节点，一并清掉重渲）。
+   只自动重建一次，再坏交给用户按提示重试。 */
+let _audioRebuilt = false;
+function audioHealthCheck() {
+  if (!state.playing || typeof Tone === 'undefined' || !AE.ready) return;
+  try {
+    const curRaw = Tone.getContext().rawContext;
+    const ctxMismatch = !!(AE.master && AE.master.context && AE.master.context.rawContext !== curRaw);
+    let silent = false;
+    if (!ctxMismatch && Tone.context.state === 'running' && (Tone.getTransport().state === 'started' || !!ARR.src) /* v24 buffer 模式无 Transport */
+        && state.master > 0.01 && AE.masterMeter) {
+      const lv = AE.masterMeter.getValue();
+      silent = Array.isArray(lv) ? lv.every(v => !isFinite(v) || v === 0) : (!isFinite(lv) || lv === 0);
+    }
+    if (!ctxMismatch && !silent) return;
+    sampStatus('⚠ 音频链路异常，点播放键重试');
+    console.warn('音频健康自检未通过', { ctxMismatch, silent, ctxState: Tone.context.state, transport: Tone.getTransport().state });
+    if (_audioRebuilt) return;
+    _audioRebuilt = true;
+    AE.ready = false;
+    buildAudio();
+    AE.ready = true;
+    applyMix();
+    for (const k of Object.keys(SYNTH_BUF)) delete SYNTH_BUF[k];
+    SYNTH_BUF._started = false;
+    renderMetalBufs();
+  } catch (e) { console.warn('音频健康自检异常', e); }
+}
+
 async function togglePlay() {
   if (typeof Tone === 'undefined') {
     alert('音频引擎加载失败，请检查网络后刷新页面');
+    return;
+  }
+  if (_arrRendering) { /* v24：离线渲染进行中，再点无效（渲染完自动开播的语义不做，避免误停） */
+    sampStatus('编曲渲染中，请稍候…');
+    return;
+  }
+  if (state.playing) {
+    try { Tone.getTransport().stop(); } catch (e) {} /* 实时兜底模式下可能在走 */
+    stopBufferPlayback();
+    silenceSampleBuses();
+    state.playing = false;
+    flushDeferred(); /* v17：播放中挂起的采样加载/音色对齐，停止后补载 */
+    updatePlayBtn();
+    sampStatus(state.arrDirty ? '编曲已改，再点播放渲染新版' : '');
     return;
   }
   if (!(await ensureAudio())) {
@@ -3148,34 +3357,36 @@ async function togglePlay() {
     return;
   }
   applyMix();
-  if (state.playing) {
-    Tone.Transport.stop();
-    silenceSampleBuses();
-    state.playing = false;
-    flushDeferred(); /* v17：播放中挂起的采样加载/音色对齐，停止后补载 */
-  } else {
-    restoreSampleBuses();
-    applyMix();
-    (async () => {
-      /* v19 急救：音色门整体删除——渐进式加载器（createProgressiveSF）逐音让出主线程，
-         点播即排程开播；未就绪采样 play() 返回 false 走合成兜底，就绪后 sampOf 自动切换 */
-      state._gateDone = true;
-      try {
-        restoreSampleBuses();
-        scheduleAll();
-        Tone.Transport.start();
-        state.playing = true;
-        updatePlayBtn();
-        /* 轻提示：还有采样在渐进加载时告知，全部就绪后由 sfHintClear 清掉 */
-        sampStatus(Object.keys(SAMP.pending).length ? '音色渐进加载中…' : '');
-      } catch (playErr) {
-        /* v19 防弹：排程/启动失败要可见，不能按钮静默失灵 */
-        console.error('播放启动失败', playErr);
-        sampStatus('⚠ 播放启动失败：' + (playErr && playErr.message ? playErr.message : playErr));
-      }
-    })();
+  restoreSampleBuses();
+  /* v24：已有新鲜 buffer → 直接开播（零排程零建节点）；否则先离线渲染整条编曲 */
+  if (!state.arrDirty && ARR.buf) {
+    startBufferPlayback();
+    sampStatus('');
+    return;
   }
-  updatePlayBtn();
+  sampStatus('渲染编曲中…准备采样');
+  if (await renderArrangementToBuffer()) {
+    startBufferPlayback();
+    sampStatus('');
+    return;
+  }
+  /* 渲染失败兜底：回退老实时排程路径（v19 原逻辑，保留可用性） */
+  (async () => {
+    state._gateDone = true;
+    try {
+      restoreSampleBuses();
+      scheduleAll();
+      Tone.getTransport().start();
+      state.playing = true;
+      updatePlayBtn();
+      setTimeout(audioHealthCheck, 2500); /* v24：播放健康自检（链路坏死时提示+自动重建一次） */
+      sampStatus('⚠ 编曲渲染失败，回退实时播放' + (ARR.lastError ? '（' + ARR.lastError + '）' : ''));
+    } catch (playErr) {
+      /* v19 防弹：排程/启动失败要可见，不能按钮静默失灵 */
+      console.error('播放启动失败', playErr);
+      sampStatus('⚠ 播放启动失败：' + (playErr && playErr.message ? playErr.message : playErr));
+    }
+  })();
 }
 function updatePlayBtn() {
   const b = document.getElementById('btn-play');
@@ -3183,9 +3394,12 @@ function updatePlayBtn() {
   b.classList.toggle('playing', state.playing);
 }
 
-/* 播放中改动 → 立即重排 */
+/* v24 buffer 架构：任何编排改动只打脏标记，正在播的旧 buffer 继续播完；
+   实时兜底模式（渲染失败回退）下保留旧行为——播放中改动立即重排 */
 function reScheduleIfPlaying() {
-  if (state.playing && state.audioReady) scheduleAll();
+  state.arrDirty = true;
+  if (state.playing && ARR.src) sampStatus('编曲已改，停止后再点播放渲染新版');
+  else if (state.playing && state.audioReady) scheduleAll();
 }
 let _rsTimer = null;
 function reScheduleDebounced() {
@@ -3707,10 +3921,10 @@ async function exportAudio() {
   const btn = document.getElementById('btn-audio');
   const wasPlaying = state.playing;
   applyMix();
-  Tone.Transport.stop();
+  Tone.getTransport().stop();
   restoreSampleBuses();
   scheduleAll();
-  Tone.Transport.position = 0;
+  Tone.getTransport().position = 0;
   const stream = AE.recDest.stream;
   const mime = (window.MediaRecorder && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) ? 'audio/webm;codecs=opus' : 'audio/webm';
   const rec = new MediaRecorder(stream, { mimeType: mime });
@@ -3719,8 +3933,8 @@ async function exportAudio() {
   const durMs = totalBars() * BPB() * (60000 / state.bpm) + 800; /* 全曲 + 尾音余量 */
   rec.onstop = () => {
     _audioRec = null;
-    Tone.Transport.stop();
-    if (wasPlaying) { Tone.Transport.start(); }
+    Tone.getTransport().stop();
+    if (wasPlaying) { Tone.getTransport().start(); }
     else { state.playing = false; silenceSampleBuses(); }
     updatePlayBtn();
     const blob = new Blob(chunks, { type: 'audio/webm' });
@@ -3757,7 +3971,7 @@ async function exportAudio() {
   rec.start();
   state.playing = true;
   updatePlayBtn();
-  Tone.Transport.start();
+  Tone.getTransport().start();
   setTimeout(() => { try { rec.stop(); } catch (e) {} }, durMs);
 }
 
