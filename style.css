@@ -330,3 +330,38 @@ footer {
 }
 .ted-feedback.flash { background: #FBE3C4; }
 .ted-thint { font-size: 10.5px; color: var(--ink-3); letter-spacing: .03em; }
+/* v26 新手游戏模式：像玩节奏游戏一样编曲 */
+.ted-game {
+  margin: 14px 0 4px; padding: 14px;
+  background: #FAF7EC; border: 1px solid var(--line-2); border-radius: 12px;
+}
+.ted-game-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.ted-game-title { font-family: var(--serif); font-size: 15px; color: var(--ink); }
+.game-mode.on { background: var(--acc); color: #fff; border-color: var(--acc); }
+.game-pads { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.game-pad {
+  flex: 1; min-width: 100px; height: 78px; border: 0; border-radius: 14px;
+  color: #fff; font-size: 15px; font-weight: 600; letter-spacing: .02em;
+  cursor: pointer; box-shadow: 0 3px 0 rgba(0,0,0,.18);
+  transition: transform .06s, filter .1s;
+}
+.game-pad:active { transform: translateY(3px); box-shadow: none; }
+.game-pad.hit { filter: brightness(1.5); }
+.game-pad.chord { background: #4A6B8A; font-size: 13px; }
+.game-key {
+  flex: 1; height: 112px; border: 1px solid #C9C2B0; border-radius: 0 0 8px 8px;
+  background: #FFFDF5; cursor: pointer; font-size: 11px; color: var(--ink-2);
+  display: flex; align-items: flex-end; justify-content: center; padding-bottom: 8px;
+  transition: background .08s;
+}
+.game-key.black { background: #2B2D30; color: #B9B2A0; border-radius: 0 0 6px 6px; height: 74px; align-self: flex-start; flex: .55; }
+.game-key.hit { background: #F7D9A8; }
+.game-hint { font-size: 11px; color: var(--ink-3); margin-top: 2px; flex-basis: 100%; }
+.game-beat { display: inline-flex; gap: 5px; align-items: center; }
+.game-beat i { width: 10px; height: 10px; border-radius: 50%; background: var(--line-2); display: inline-block; transition: background .08s, transform .08s; }
+.game-beat i.on { background: var(--acc); transform: scale(1.3); }
+.ted-advanced { margin-top: 12px; }
+.ted-advanced summary { font-size: 12.5px; color: var(--ink-2); cursor: pointer; list-style: none; user-select: none; }
+.ted-advanced summary::before { content: '▸ '; }
+.ted-advanced[open] summary::before { content: '▾ '; }
+.ted-advanced summary:hover { color: var(--acc); }

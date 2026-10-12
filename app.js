@@ -1775,7 +1775,7 @@ function buildAudio() {
   /* 吉他 cab 卷积：WaveShaper 失真后必须过箱体（带通 100Hz-5kHz + 指数衰减 IR），
      否则蜂鸣 fizz 直出；25% 直声并联保瞬态 */
   AE.guitarComp = new Tone.Compressor(-16, 3).connect(AE.guitarDelay);
-  AE.guitarEq = new Tone.EQ3({ low: -1, mid: 0.5, high: 2.5, lowFrequency: 220, highFrequency: 2400 }).connect(AE.guitarComp);
+  AE.guitarEq = new Tone.EQ3({ low: -2.5, mid: 0.5, high: 3.5, lowFrequency: 220, highFrequency: 2400 }).connect(AE.guitarComp); /* v26：低段再挖 1.5dB、高频 +1dB——合成吉他兜底的糊/闷专项 */
   AE.guitarCab = new Tone.Convolver(makeCabImpulse()).connect(AE.guitarEq);
   AE.guitarCabDry = new Tone.Gain(0.25).connect(AE.guitarEq);
   AE.guitarPre = new Tone.WaveShaper(driveCurve(6), 2048);
@@ -1890,7 +1890,7 @@ function buildAudio() {
   AE.lpGuitar = new Tone.Filter(13500, 'lowpass'); /* 分工表：吉他毛刺上限（风格链可再下压） */
   AE.lpGuitar.connect(AE.musicBus);
   AE.toneEqGuitar = new Tone.EQ3({ low: 0, mid: 0, high: 3, lowFrequency: 300, highFrequency: 3500 }).connect(AE.lpGuitar); /* 3.5k 以上=拨片定义感区，空气感从这出 */
-  AE.hpGuitar = new Tone.Filter(70, 'highpass').connect(AE.toneEqGuitar); /* 70Hz 以下让给贝斯 */
+  AE.hpGuitar = new Tone.Filter(90, 'highpass').connect(AE.toneEqGuitar); /* v26：70→90Hz，吉他次低泥区让给贝斯/kick */
   AE.toneDistGuitar = new Tone.Distortion(0).connect(AE.hpGuitar);
   AE.guitarVol.connect(nativeInputOf(AE.hpGuitar)); /* v14：吉他层推子（合成回退+采样总线共用）→ 分工表链 */
   AE.lpKeys = new Tone.Filter(9500, 'lowpass'); /* 分工表：EP 上限 9.5k，金属毛刺让位镲片空气感 */
@@ -1930,8 +1930,8 @@ function buildAudio() {
   AE.npPad.connect(AE.padRoleGain);
   AE.padRoleGain.connect(AE.toneEqPad);
   /* 鼓：失真(轻饱和,2x过采样去数字毛刺)→11k洗剪(镲片糊根)→EQ→主总线 */
-  AE.toneEqDrums = new Tone.EQ3({ low: 0, mid: 0, high: 2, lowFrequency: 200, highFrequency: 7000 }).connect(AE.master);
-  AE.lpDrums = new Tone.Filter(11000, 'lowpass'); /* 分工表：11k 以上镲片"洗"剪除 = 鼓糊主要来源 */
+  AE.toneEqDrums = new Tone.EQ3({ low: 0, mid: 0, high: 2, lowFrequency: 200, highFrequency: 5200 }).connect(AE.master); /* v26：高频搁架 7k→5.2k，军鼓/镲更多存在感 */
+  AE.lpDrums = new Tone.Filter(13500, 'lowpass'); /* v26：11k→13.5k，放开镲片空气感（原 11k 洗剪=鼓闷的帮凶） */
   AE.lpDrums.connect(AE.toneEqDrums);
   AE.toneDistDrums = new Tone.Distortion(0);
   AE.toneDistDrums.oversample = '2x';
@@ -1943,7 +1943,10 @@ function buildAudio() {
   AE.sendKeys = new Tone.Gain(0.3).connect(AE.masterVerb);
   AE.sendBass = new Tone.Gain(0.05).connect(AE.masterVerb);
   AE.sendPad = new Tone.Gain(0.12).connect(AE.masterVerb);
-  AE.sendDrums = new Tone.Gain(0.12).connect(AE.masterVerb);
+  /* v26 去糊：鼓的混响发送先过 300Hz 高通——底鼓/808 低频不再洗进混响（鼓糊主要来源） */
+  AE.drumVerbHP = new Tone.Filter(300, 'highpass');
+  AE.drumVerbHP.connect(AE.masterVerb);
+  AE.sendDrums = new Tone.Gain(0.12).connect(AE.drumVerbHP);
   /* --- 爵士颤音琴：FM 金属音色 + 长释放（jazz 风格键盘专用） --- */
   AE.keysVibes = new Tone.PolySynth(Tone.FMSynth, {
     harmonicity: 3.01, modulationIndex: 12,
@@ -1957,12 +1960,15 @@ function buildAudio() {
   AE.drumsVol.connect(AE.drumsPar);
   AE.drumsPar.connect(AE.drumsParGain);
   AE.drumsParGain.connect(AE.drumsComp);
-  AE.drumsComp.connect(AE.toneDistDrums);
+  /* v26 去糊：鼓总线 320Hz 低中峰削 -2.5dB（军鼓/康加箱体泥区），再进饱和/低通 */
+  AE.drumMud = new Tone.Filter(320, 'peaking'); AE.drumMud.Q.value = 1.0; AE.drumMud.gain.value = -2.5;
+  AE.drumsComp.connect(AE.drumMud);
+  AE.drumMud.connect(AE.toneDistDrums);
   /* 鼓房间声：v17 性能攻坚——drumRoom 独立卷积器并入共享 masterVerb 总线（卷积器 3→2，仅剩共享 verb + 吉他 cab），
      房间胶增益保留；代价是鼓尾从 0.35s 房间变共享大厅尾（风格门控 1.6-2.2s）。
      回退：AE.drumRoom = new Tone.Reverb({ decay: 0.35, wet: 1 }).connect(AE.master); drumRoomSend 改连 AE.drumRoom */
   AE.drumRoom = AE.masterVerb;
-  AE.drumRoomSend = new Tone.Gain(0.34).connect(AE.masterVerb); /* 房间胶：鼓件共享空间 */
+  AE.drumRoomSend = new Tone.Gain(0.26).connect(AE.drumVerbHP); /* v26：房间胶减量 + 过 300Hz 高通（少洗=去糊） */
   AE.drumsComp.connect(AE.drumRoomSend);
 
   /* --- 808 鼓组（经典 TR-808 合成复刻，808 本身就是合成鼓机） --- */
@@ -2339,7 +2345,7 @@ function loadDrumSamples(isRetry) {
   DRUM_SAMP.bus.gain.value = 1;
   DRUM_SAMP.bus.connect(nativeInputOf(AE.drumsVol));
   /* 单次击打最大时长（秒）：防止把 loop/长采样整段叠放 */
-  const DRUM_MAXDUR = { hat_closed: 0.8, hat_808: 1.2, shaker: 2.2, shekere: 2.0, snare_room: 1.5, snap: 1.0, rim_click: 1.0, clap: 1.3, brush_snare: 1.8, kick_room: 1.1, kick_808: 1.6, crash: 2.8, conga_h: 1.6, conga_l: 1.6, clave: 1.0 };
+  const DRUM_MAXDUR = { hat_closed: 0.8, hat_808: 1.2, shaker: 2.2, shekere: 2.0, snare_room: 1.5, snap: 1.0, rim_click: 1.0, clap: 1.3, brush_snare: 1.8, kick_room: 1.1, kick_808: 1.3, crash: 2.8, conga_h: 1.6, conga_l: 1.6, clave: 1.0 }; /* v26：kick_808 1.6→1.3s 收敛长尾——808 尾巴与贝斯叠糊是"鼓糊"主因之一 */
   /* v19 防风暴：15 个 mp3 全并发 fetch+decode 与排程抢主线程——改逐个 await + 每个之间让出主线程 */
   DRUM_SAMP.promise = (async () => { /* v24：promise 外暴露，离线渲染前可等全 */
     for (const name of DRUM_FILES) {
@@ -3155,6 +3161,7 @@ function scheduleAll() {
    注意：Tone.start() 仍需用户手势（ensureAudio 内保持），这里只建图+预载，不出声。 */
 function warmupAudio() {
   if (typeof Tone === 'undefined' || state.audioReady) return;
+  if (_arrSwapped) { setTimeout(warmupAudio, 400); return; } /* v26：离线渲染窗口内不建 live 图，等窗口结束 */
   try {
     buildAudio(); /* 建图不依赖 running state */
     state.audioReady = true;
@@ -3180,9 +3187,12 @@ function warmupAudio() {
  * ============================================================ */
 const ARR = { buf: null, src: null, dur: 0 };
 let _arrRendering = false;
+let _arrSwapped = false; /* v26：离线渲染已换全局 context 的窗口标志（试听/建图需避让） */
+let _arrPromise = null;  /* v26：在途渲染 promise（播放与预渲染共用，绝不重复渲染） */
+let _preTimer = null;
 
 /* 渲染前等采样全量解码（离线渲染不能渐进）：SF 按本曲用音到齐（_usedReady），鼓/吉他等首轮 */
-async function awaitArrSamples() {
+async function awaitArrSamples(silent) {
   loadGuitarSamples(); loadDrumSamples(); loadInstruments();
   const need = new Set();
   const add = n => { if (n && typeof n === 'string' && !n.startsWith('@')) need.add(n); };
@@ -3199,7 +3209,7 @@ async function awaitArrSamples() {
   if (hornEvents.length) add(SAMP_PAD.warm); /* 与 scheduleAll 的需求集口径一致 */
   const names = [...need];
   for (let i = 0; i < names.length; i++) {
-    sampStatus(`渲染编曲中…采样 ${i + 1}/${names.length}`);
+    if (!silent) sampStatus(`渲染编曲中…采样 ${i + 1}/${names.length}`);
     try {
       const inst = await ensureSample(names[i]);
       if (inst && inst._usedReady) {
@@ -3207,7 +3217,7 @@ async function awaitArrSamples() {
       }
     } catch (e) {}
   }
-  sampStatus('渲染编曲中…鼓/吉他采样');
+  if (!silent) sampStatus('渲染编曲中…鼓/吉他采样');
   try { if (DRUM_SAMP.promise) await DRUM_SAMP.promise; } catch (e) {}
   try { if (GUITAR_SAMP.promise) await GUITAR_SAMP.promise; } catch (e) {}
   /* v21 金属/FM 预渲染 buffer 跨 context 可播：等它在途渲染收尾，离线渲染直接复用（速度与音色一致） */
@@ -3217,7 +3227,7 @@ async function awaitArrSamples() {
   } catch (e) {}
 }
 
-async function renderArrangementToBuffer() {
+async function renderArrangementToBuffer(silent) {
   const prevCtx = Tone.getContext();
   /* AE 是全局单例且上百处 AE.xxx 引用：保留对象身份，字段整体快照 → 换挂离线新图 → 渲染完原样恢复 */
   const liveAE = {};
@@ -3229,8 +3239,8 @@ async function renderArrangementToBuffer() {
   };
   _arrRendering = true;
   try {
-    await awaitArrSamples();
-    sampStatus('渲染编曲中…');
+    await awaitArrSamples(silent);
+    if (!silent) sampStatus('渲染编曲中…');
     for (const k of Object.keys(AE)) delete AE[k];
     AE.nodes = {}; AE.ready = false;
     SAMP.busByRole = null; SAMP.sendByRole = null; SAMP.filtByRole = null; SAMP.bus = null; SAMP.padBus = null;
@@ -3241,6 +3251,7 @@ async function renderArrangementToBuffer() {
     const sr = (prevCtx.rawContext && prevCtx.rawContext.sampleRate) || 44100;
     const offCtx = new Tone.OfflineContext(2, totalSec + 1.5, sr); /* +1.5s 尾音余量 */
     Tone.setContext(offCtx);
+    _arrSwapped = true; /* v26：全局 context 已换离线——此窗口内禁建 live 节点（试听/预热自检） */
     buildAudio();          /* 全新一套图，节点全挂离线 context（末尾自调 applyMix） */
     ensureBuses();         /* 采样总线/角色低通接离线 AE 推子 */
     const oraw = offCtx.rawContext;
@@ -3263,6 +3274,7 @@ async function renderArrangementToBuffer() {
     ARR.lastError = (e && e.message) || String(e);
     return false;
   } finally {
+    _arrSwapped = false;
     try { Tone.setContext(prevCtx); } catch (e) {}
     for (const k of Object.keys(AE)) delete AE[k];
     Object.assign(AE, liveAE); /* 恢复 live 图（live 节点从未被动过） */
@@ -3297,6 +3309,10 @@ function stopBufferPlayback() {
 
 async function ensureAudio() {
   if (typeof Tone === 'undefined') return false;
+  /* v26：离线渲染换挂全局 context 的窗口内建 live 图 = 节点挂死。先等窗口结束（≤6s） */
+  let guard = 0;
+  while (_arrSwapped && guard++ < 20) await new Promise(r => setTimeout(r, 300));
+  if (_arrSwapped) { sampStatus('🎧 正在后台渲染编曲，稍等一下下…'); return false; }
   if (!state.audioReady) { buildAudio(); state.audioReady = true; const gp = SAMP_GUITAR[state.layers.guitar.patch]; if (gp) ensureSample(gp); loadGuitarSamples(); loadDrumSamples(); loadInstruments(); loadWurli(); renderMetalBufs(); /* v17：与 warmupAudio 同优先级序；v13 后台预热 Wurli 采样电钢 */ }
   try {
     await Tone.start();
@@ -3342,60 +3358,84 @@ function audioHealthCheck() {
   } catch (e) { console.warn('音频健康自检异常', e); }
 }
 
+/* v26 渲染提速：编排定稿 1.2s 后后台预渲染——用户点播放时 buffer 通常已就绪（零等待）。
+   并发安全：全站共用一份在途渲染 promise，播放/再次预渲染都等它，不重复渲染。 */
+function ensureRendered(verbose) {
+  if (_arrPromise) return _arrPromise;
+  _arrPromise = (async () => {
+    try { return await renderArrangementToBuffer(!verbose); }
+    finally { _arrPromise = null; }
+  })();
+  return _arrPromise;
+}
+function preRenderArrangement() {
+  clearTimeout(_preTimer);
+  _preTimer = setTimeout(() => {
+    if (!state.arrDirty || state.playing || _arrRendering) return;
+    if (!state.audioReady || !AE.ready) return; /* 音频图未建不渲（warmup 完成后编排再改会再触发） */
+    /* v26：短编曲走实时播放，无需离线渲染（省 CPU） */
+    const evCount = melodyEvents.length + bassEvents.length + keysEvents.length + synthEvents.length + hornEvents.length + drumEvents.length;
+    if (evCount < 800) return;
+    ensureRendered(false);
+  }, 1200);
+}
+function stopPlayback() {
+  try { Tone.getTransport().stop(); } catch (e) {} /* 实时兜底模式下可能在走 */
+  stopBufferPlayback();
+  silenceSampleBuses();
+  state.playing = false;
+  flushDeferred(); /* v17：播放中挂起的采样加载/音色对齐，停止后补载 */
+  updatePlayBtn();
+  sampStatus(state.arrDirty ? '编曲已改，再点播放渲染新版' : '');
+}
+function startRealtimePlayback(isFallback) {
+  state._gateDone = true;
+  try {
+    restoreSampleBuses();
+    scheduleAll();
+    Tone.getTransport().start();
+    state.playing = true;
+    updatePlayBtn();
+    setTimeout(audioHealthCheck, 2500); /* v24：播放健康自检（链路坏死时提示+自动重建一次） */
+    sampStatus(isFallback ? '⚠ 编曲渲染失败，回退实时播放' + (ARR.lastError ? '（' + ARR.lastError + '）' : '') : '');
+  } catch (playErr) {
+    /* v19 防弹：排程/启动失败要可见，不能按钮静默失灵 */
+    console.error('播放启动失败', playErr);
+    sampStatus('⚠ 播放启动失败：' + (playErr && playErr.message ? playErr.message : playErr));
+  }
+}
 async function togglePlay() {
   if (typeof Tone === 'undefined') {
     alert('音频引擎加载失败，请检查网络后刷新页面');
     return;
   }
-  if (_arrRendering) { /* v24：离线渲染进行中，再点无效（渲染完自动开播的语义不做，避免误停） */
-    sampStatus('编曲渲染中，请稍候…');
-    return;
-  }
-  if (state.playing) {
-    try { Tone.getTransport().stop(); } catch (e) {} /* 实时兜底模式下可能在走 */
-    stopBufferPlayback();
-    silenceSampleBuses();
-    state.playing = false;
-    flushDeferred(); /* v17：播放中挂起的采样加载/音色对齐，停止后补载 */
-    updatePlayBtn();
-    sampStatus(state.arrDirty ? '编曲已改，再点播放渲染新版' : '');
-    return;
-  }
+  if (state.playing) { stopPlayback(); return; }
   if (!(await ensureAudio())) {
     sampStatus('⚠ 音频引擎未唤醒，请再点一次播放（浏览器自动播放限制）'); /* v19：原静默 return，用户以为按钮坏了 */
     return;
   }
+  stopGameMetro(); /* v26：主播放与新手模式节拍器互斥 */
   applyMix();
   restoreSampleBuses();
-  /* v24：已有新鲜 buffer → 直接开播（零排程零建节点）；否则先离线渲染整条编曲 */
+  /* v24：已有新鲜 buffer → 直接开播（零排程零建节点） */
   if (!state.arrDirty && ARR.buf) {
     startBufferPlayback();
     sampStatus('');
     return;
   }
-  sampStatus('渲染编曲中…准备采样');
-  if (await renderArrangementToBuffer()) {
-    startBufferPlayback();
-    sampStatus('');
+  /* v26：短编曲（事件少）直接实时排程播放——零渲染等待，编辑→播放秒开；
+     只有长编曲（40 小节歌 / 32 小节 groove，数千事件）才走离线渲染（且已后台预渲染）。 */
+  const evCount = melodyEvents.length + bassEvents.length + keysEvents.length + synthEvents.length + hornEvents.length + drumEvents.length;
+  if (evCount < 800) {
+    startRealtimePlayback();
     return;
   }
+  if (await ensureRendered(true)) {
+    if (!state.arrDirty) { startBufferPlayback(); sampStatus(''); return; }
+    if (await ensureRendered(true)) { startBufferPlayback(); sampStatus(''); return; } /* 渲染期间又改 → 再渲一版（罕见） */
+  }
   /* 渲染失败兜底：回退老实时排程路径（v19 原逻辑，保留可用性） */
-  (async () => {
-    state._gateDone = true;
-    try {
-      restoreSampleBuses();
-      scheduleAll();
-      Tone.getTransport().start();
-      state.playing = true;
-      updatePlayBtn();
-      setTimeout(audioHealthCheck, 2500); /* v24：播放健康自检（链路坏死时提示+自动重建一次） */
-      sampStatus('⚠ 编曲渲染失败，回退实时播放' + (ARR.lastError ? '（' + ARR.lastError + '）' : ''));
-    } catch (playErr) {
-      /* v19 防弹：排程/启动失败要可见，不能按钮静默失灵 */
-      console.error('播放启动失败', playErr);
-      sampStatus('⚠ 播放启动失败：' + (playErr && playErr.message ? playErr.message : playErr));
-    }
-  })();
+  startRealtimePlayback(true);
 }
 function updatePlayBtn() {
   const b = document.getElementById('btn-play');
@@ -3409,6 +3449,7 @@ function reScheduleIfPlaying() {
   state.arrDirty = true;
   if (state.playing && ARR.src) sampStatus('编曲已改，停止后再点播放渲染新版');
   else if (state.playing && state.audioReady) scheduleAll();
+  preRenderArrangement(); /* v26：改动停顿 1.2s 后自动后台渲染（点播放时零等待） */
 }
 let _rsTimer = null;
 function reScheduleDebounced() {
@@ -3823,8 +3864,7 @@ function studioHealthCheck(buf) {
 
 /* ---------- 试听单和弦 ---------- */
 async function auditionChord(i) {
-  if (!state.audioReady) { buildAudio(); state.audioReady = true; loadInstruments(); }
-  await Tone.start();
+  if (!(await ensureAudio())) return; /* v26：统一走 ensureAudio（含渲染窗口避让） */
   const chord = chordTimeline[i];
   if (!chord) return;
   const voicing = chooseVoicing(chord.pcs, null);
@@ -4008,8 +4048,8 @@ function applyTone(layer) {
   const perfMul = state.perf ? 0.5 : 1;
   const brightDb = -12 + t.b * 26;
   if (layer === 'guitar' && AE.toneEqGuitar) {
-    AE.toneEqGuitar.high.value = brightDb;
-    AE.toneEqGuitar.low.value = -2 + t.t * 4;
+    AE.toneEqGuitar.high.value = brightDb + 1.5; /* v26：吉他存在感 +1.5dB（用户反馈糊/闷） */
+    AE.toneEqGuitar.low.value = -3.5 + t.t * 4; /* v26：300Hz 泥区再挖 1.5dB */
     AE.toneEqGuitar.mid.value = 0.5 + t.t * 2.5; /* v5.1 琴体归位：塑料感=中频掏空，糊该由低频频段管 */
     AE.toneDistGuitar.distortion = t.t * 0.35;
     AE.sendGuitar.gain.value = t.s * 0.65 * perfMul; /* v4.3 混响发送收敛 */
@@ -4797,9 +4837,199 @@ function tedResetTrack(track) {
 function bindTrackEditor() {
   const det = document.getElementById('track-editor');
   if (!det) return;
-  det.addEventListener('toggle', () => { if (det.open) editorRefresh(); });
+  det.addEventListener('toggle', () => { if (det.open) { editorRefresh(); renderGamePads(); } else stopGameMetro(); });
   document.getElementById('ted-prev').onclick = () => { TED.page = Math.max(0, TED.page - 1); editorRefresh(); };
   document.getElementById('ted-next').onclick = () => { TED.page = Math.min(Math.max(1, Math.ceil(totalBars() / TED.per)) - 1, TED.page + 1); editorRefresh(); };
+  bindGameMode();
+  renderGamePads();
+}
+
+/* ============================================================
+ * v26 新手游戏模式：像玩节奏游戏一样编曲
+ * 大鼓垫/钢琴条/和弦垫 + 节拍器 + 点按量化录制 + 连击反馈
+ * ============================================================ */
+const GAME = { mode: 'drums', step: 0, running: false, timer: null, hits: 0, combo: 0 };
+const GAME_DRUM_PADS = [
+  ['kick', '底鼓', '🥁', '#C24D2D'],
+  ['snare', '军鼓', '🔵', '#C77B3A'],
+  ['clap', '拍手', '👏', '#4A7A4F'],
+  ['hat', '闭镲', '🔔', '#3A6EA5'],
+  ['ohat', '开镲', '✨', '#5B7FA6'],
+  ['congaH', '康加', '🪘', '#7A5BA6'],
+];
+const GAME_FUN = ['🎯 正中节拍！', '🔥 好耶！', '💥 就是这个 feel！', '⭐ 漂亮！', '🎵 跟上节奏了！', '👏 手速可以！'];
+
+function gameRange() {
+  const bars = totalBars();
+  const pages = Math.max(1, Math.ceil(bars / TED.per));
+  TED.page = clamp(TED.page, 0, pages - 1);
+  const bar0 = TED.page * TED.per;
+  const shown = Math.min(TED.per, bars - bar0);
+  return { bar0, shown, bars };
+}
+function flashPad(el) {
+  el.classList.remove('hit');
+  void el.offsetWidth;
+  el.classList.add('hit');
+}
+function gameScore() {
+  GAME.hits++; GAME.combo++;
+  const el = document.getElementById('ted-feedback');
+  if (el) {
+    el.textContent = GAME_FUN[Math.floor(Math.random() * GAME_FUN.length)] + ' 连击 ×' + GAME.combo + '（已写 ' + GAME.hits + ' 个音）';
+    el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+  }
+}
+function gameDrumHit(inst) {
+  const { bar0, shown } = gameRange();
+  if (GAME.running && GAME.step < shown * SBAR()) {
+    const gs = bar0 * SBAR() + GAME.step;
+    if (!drumEvents.some(e => Math.round(e.step16) === gs && e.inst === inst)) {
+      drumEvents.push({ step16: gs, inst, vel: 0.9, kit: tedKitAt(Math.floor(gs / SBAR())) });
+      drumEvents.sort((a, b) => a.step16 - b.step16);
+      reScheduleIfPlaying();
+      editorRefresh();
+    }
+  }
+  tedAudition('drums', null, inst); /* 立刻响 */
+  if (GAME.running) gameScore();
+}
+function gameMelodyHit(midi) {
+  const { bar0, shown } = gameRange();
+  if (GAME.running && GAME.step < shown * SBAR()) {
+    const gs = bar0 * SBAR() + GAME.step;
+    const sameStep = melodyEvents.find(e => Math.round(e.beat * SPB()) === gs && !e.dbl && !e.ghost);
+    if (sameStep) sameStep.midi = midi; /* 同拍再弹 = 改音高 */
+    else { melodyEvents.push({ beat: gs / SPB(), midi, dur: 0.25, vel: 0.8 }); melodyEvents.sort((a, b) => a.beat - b.beat); }
+    state.melodyEdited = true;
+    renderRoll(); renderStats();
+    reScheduleIfPlaying();
+    editorRefresh();
+  }
+  tedAudition('melody', midi); /* 立刻响 */
+  if (GAME.running) gameScore();
+}
+function gameChordHit(bar) {
+  const chord = chordAtBar(bar);
+  if (!chord) return;
+  const { bar0, shown } = gameRange();
+  if (GAME.running && GAME.step < shown * SBAR()) {
+    const gs = bar0 * SBAR() + GAME.step;
+    const b = Math.floor(gs / SBAR());
+    const sty = tedStyAt(b);
+    const notes = chooseVoicing(styleVoicingPcs(chord.pcs, sty), null,
+      melodyEvents.filter(m => Math.floor(m.beat / BPB()) === b).map(m => m.midi));
+    for (let i = keysEvents.length - 1; i >= 0; i--) if (Math.round(keysEvents[i].beat * SPB()) === gs) keysEvents.splice(i, 1);
+    keysEvents.push({ beat: gs / SPB(), notes, dur: 0.5, vel: 0.55, inst: 'keys' });
+    keysEvents.sort((a, b) => a.beat - b.beat);
+    reScheduleIfPlaying();
+    editorRefresh();
+  }
+  (async () => { /* 试听和弦（立刻响） */
+    try {
+      if (typeof Tone === 'undefined' || !(await ensureAudio())) return;
+      const t = Tone.now() + 0.04;
+      const pcs = chord.pcs.slice(0, 3).map(p => 60 + p);
+      if (!playSynthBuf('keysEP', pcs, t, 0.7, 0.5)) AE.keys.triggerAttackRelease(pcs.map(midiName), 0.5, t, 0.7);
+    } catch (e) {}
+  })();
+  if (GAME.running) gameScore();
+}
+function renderGamePads() {
+  const host = document.getElementById('game-pads');
+  if (!host) return;
+  host.innerHTML = '';
+  if (GAME.mode === 'drums') {
+    for (const [inst, name, emoji, color] of GAME_DRUM_PADS) {
+      const b = tedEl('button', 'game-pad', emoji + ' ' + name);
+      b.style.background = color;
+      b.onclick = () => { flashPad(b); gameDrumHit(inst); };
+      host.appendChild(b);
+    }
+  } else if (GAME.mode === 'melody') {
+    const wrap = tedEl('div', 'game-piano');
+    wrap.style.display = 'flex';
+    wrap.style.flexBasis = '100%';
+    for (let m = 60; m <= 83; m++) {
+      const black = [1, 3, 6, 8, 10].includes(m % 12);
+      const b = tedEl('button', 'game-key' + (black ? ' black' : ''), black ? '' : midiName(m).replace(/\d+$/, ''));
+      b.title = midiName(m);
+      b.onclick = () => { flashPad(b); gameMelodyHit(m); };
+      wrap.appendChild(b);
+    }
+    host.appendChild(wrap);
+    host.appendChild(tedEl('div', 'game-hint', '点琴键 = 把音写进当前拍（会马上响）· 开节拍器后跟着节奏弹'));
+  } else {
+    const { bar0, shown } = gameRange();
+    const wrap = tedEl('div', 'game-chords');
+    wrap.style.display = 'flex';
+    wrap.style.gap = '12px';
+    wrap.style.flexBasis = '100%';
+    for (let i = 0; i < shown; i++) {
+      const bar = bar0 + i;
+      const chord = chordAtBar(bar);
+      const b = tedEl('button', 'game-pad chord', chord ? chord.name : '—');
+      b.title = '第 ' + (bar + 1) + ' 小节的和弦';
+      b.onclick = () => { flashPad(b); gameChordHit(bar); };
+      wrap.appendChild(b);
+    }
+    host.appendChild(wrap);
+    host.appendChild(tedEl('div', 'game-hint', '点和弦 = 在当前拍弹下它（写进编曲）· 开节拍器后跟着节奏点'));
+  }
+}
+function startGameMetro() {
+  if (GAME.running) { stopGameMetro(); return; }
+  if (typeof Tone === 'undefined') { sampStatus('⚠ 音频引擎未加载，刷新页面重试'); return; }
+  (async () => {
+    if (!(await ensureAudio())) { sampStatus('⚠ 音频引擎未唤醒，再点一次（浏览器限制）'); return; }
+    stopPlayback(); /* 与主播放互斥，避免叠音 */
+    GAME.running = true; GAME.hits = 0; GAME.combo = 0; GAME.step = 0;
+    const btn = document.getElementById('btn-game-metro');
+    if (btn) btn.textContent = '⏹ 停止节拍器';
+    if (AE.metro) { try { AE.metro.dispose(); } catch (e) {} }
+    AE.metro = new Tone.Synth({ oscillator: { type: 'square' }, envelope: { attack: 0.001, decay: 0.06, sustain: 0, release: 0.02 } });
+    AE.metro.volume.value = -16;
+    AE.metro.connect(AE.master);
+    const ms = 60000 / state.bpm / 4; /* 16 分一步 */
+    const dots = document.querySelectorAll('#game-beat i');
+    const barLabel = document.getElementById('game-bar-label');
+    const tick = () => {
+      const { bar0, shown } = gameRange();
+      const steps = shown * SBAR();
+      if (GAME.step >= steps) GAME.step = 0;
+      const s = GAME.step;
+      const down = s % SBAR() === 0;
+      try { AE.metro.triggerAttackRelease(down ? 'A6' : 'A5', '32n', Tone.now(), down ? 0.65 : 0.4); } catch (e) {}
+      if (barLabel) barLabel.textContent = '第 ' + (bar0 + Math.floor(s / SBAR()) + 1) + ' 小节';
+      dots.forEach((d, i) => d.classList.toggle('on', ((s % SBAR()) / SPB()) === i));
+      GAME.step = (GAME.step + 1) % steps;
+    };
+    tick();
+    GAME.timer = setInterval(tick, ms);
+  })();
+}
+function stopGameMetro() {
+  const wasRunning = GAME.running;
+  GAME.running = false;
+  if (GAME.timer) { clearInterval(GAME.timer); GAME.timer = null; }
+  const btn = document.getElementById('btn-game-metro');
+  if (btn) btn.textContent = '▶ 跟节拍器玩';
+  document.querySelectorAll('#game-beat i').forEach(d => d.classList.remove('on'));
+  const el = document.getElementById('ted-feedback');
+  if (wasRunning && el) el.textContent = '🎉 录制完成！点 ▶ 播放 听听你刚刚打的节奏';
+  GAME.combo = 0;
+}
+function bindGameMode() {
+  document.querySelectorAll('.game-mode').forEach(b => {
+    b.onclick = () => {
+      document.querySelectorAll('.game-mode').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      GAME.mode = b.dataset.gmode;
+      renderGamePads();
+    };
+  });
+  const mb = document.getElementById('btn-game-metro');
+  if (mb) mb.onclick = startGameMetro;
 }
 
 /* ============================================================
@@ -4826,7 +5056,7 @@ function regenerate(reason) {
   renderStats();
   renderScale();
   editorRefresh();
-  reScheduleIfPlaying();
+  reScheduleIfPlaying(); /* v26：内部已挂后台预渲染 */
 }
 
 function loadPreset(id) {
