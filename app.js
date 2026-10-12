@@ -2147,6 +2147,55 @@ function loadGuitarSamples() {
     }
   })();
 }
+/* ================= v31 真实电贝斯采样（tonejs-instruments bass-electric，与吉他一族）
+ * 库内采样为小三度网格（As/Cs/E/G），就近映射最远 ±1.5 半音（回放速率 ±9%），
+ * 取代 GM 指弹贝斯（25 年前采样=贝斯塑料感主犯）；GM 保留为兜底。 */
+const BASS_SAMP = { buffers: {}, started: false, _rrMidi: null, _rrT: 0 };
+const BASS_NOTES = ['Cs1','E1','G1','As1','Cs2','E2','G2','As2','Cs3','E3','G3','As3','Cs4','E4','G4','As4','Cs5'];
+function loadBassSamples() {
+  if (BASS_SAMP.started || typeof Tone === 'undefined') return;
+  BASS_SAMP.started = true;
+  const raw = Tone.getContext().rawContext;
+  BASS_SAMP.promise = (async () => {
+    for (const note of BASS_NOTES) {
+      try {
+        const r = await fetch('bass/' + note + '.mp3');
+        if (!r.ok) continue;
+        const buf = await raw.decodeAudioData(await r.arrayBuffer());
+        BASS_SAMP.buffers[noteNameToMidi(note)] = buf;
+      } catch (e) {}
+      await new Promise(res => setTimeout(res, 0));
+    }
+  })();
+}
+function playBassReal(midi, t, dur, vel) {
+  const keys = Object.keys(BASS_SAMP.buffers).map(Number);
+  if (!keys.length) return false;
+  let best = keys[0], bd = 99;
+  for (const k of keys) { const d = Math.abs(k - midi); if (d < bd) { bd = d; best = k; } }
+  if (bd > 4) return false; /* 小三度网格：正常覆盖内最远 ±1.5 半音，>4 判定越界 */
+  if (midi === BASS_SAMP._rrMidi && t - BASS_SAMP._rrT < 0.6) {
+    const alts = keys.filter(k => k !== best && Math.abs(k - midi) <= 4);
+    if (alts.length) best = alts[Math.floor(Math.random() * alts.length)];
+  }
+  BASS_SAMP._rrMidi = midi; BASS_SAMP._rrT = t;
+  const raw = Tone.getContext().rawContext;
+  const src = raw.createBufferSource();
+  src.buffer = BASS_SAMP.buffers[best];
+  src.playbackRate.value = Math.pow(2, (midi - best) / 12);
+  const g = raw.createGain();
+  const v = Math.max(0.04, vel);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(v, t + 0.008);
+  g.gain.setValueAtTime(v, Math.max(t + 0.008, t + Math.max(0.1, dur) - 0.05));
+  g.gain.linearRampToValueAtTime(0.0001, t + Math.max(0.12, dur) + 0.08);
+  /* 力度联动亮度（同吉他思路）：轻拨暗、重拨亮 */
+  const tp = raw.createBiquadFilter(); tp.type = 'lowpass'; tp.frequency.value = 1500 + Math.min(1, vel) * 3500; tp.Q.value = 0.5;
+  src.connect(tp); tp.connect(g);
+  g.connect(nativeInputOf(AE.bassVol));
+  src.start(t); src.stop(t + dur + 0.5);
+  return true;
+}
 /* ================= v5.7 声部互锁：治"各播各的" =================
    真实乐队的锁定关系：贝斯 onset 贴底鼓（pocket）、军鼓位留空、键盘避让旋律 onset（应答）。
    各生成器彼此独立、节奏互不参照 = "各播各的"的根因；此 pass 在调度前统一对齐。 */
@@ -2610,8 +2659,8 @@ const SAMP_KEYS = 'electric_piano_1';
    bossa=电钢（原钢采样 404 回退）/afro=原钢稀疏顿奏/hiphop=暗黑 polysynth stab */
 const SAMP_KEYS_BY_STYLE = {
   rnb: '@fmrhodes', jazz: '@vibes', rock: null,
-  bossa: '@fmrhodes', afro: '@fmrhodes', hiphop: 'pad_3_polysynth', /* v25：bossa 弃 GM 电钢采样 → FM tine（GM 电钢是塑料感重灾区） */ /* v15：acoustic_grand_piano 两库都 404 → electric_piano_1（soundfont/soundfont2 均有） */
-  funk: '@fmrhodes', soul: '@fmrhodes', reggae: 'pad_3_polysynth', afrobeats: '@fmrhodes',
+  bossa: '@fmrhodes', afro: '@fmrhodes', hiphop: '@fmrhodes', /* v25：bossa 弃 GM 电钢采样 → FM tine（GM 电钢是塑料感重灾区）；v31：hiphop 弃 GM polysynth 铺 → FM tine */ /* v15：acoustic_grand_piano 两库都 404 → electric_piano_1（soundfont/soundfont2 均有） */
+  funk: '@fmrhodes', soul: '@fmrhodes', reggae: '@fmrhodes', afrobeats: '@fmrhodes', /* v31：reggae 同弃 GM polysynth */
   /* funk/soul/afrobeats = FM tine 顿奏（clav/Rhodes/亮色琴键的最近近似）；reggae = polysynth 短 stab 拼 organ 咬感（无风琴采样可用） */
 }; /* v12: GM 电钢采样退出和声层——换 DX7 式 FM tine 合成（塑料感主犯） */
 const SAMP_BASS = 'electric_bass_finger';
@@ -2940,8 +2989,8 @@ async function autoAlignTimbres(styleKey) {
 function loadInstruments() {
   const ksCore = SAMP_KEYS_BY_STYLE[state.styles.length === 1 ? state.styles[0] : 'rnb'] || SAMP_KEYS;
   const core = [
-    SAMP_GUITAR[state.layers.guitar.patch], ksCore === '@vibes' ? SAMP_KEYS : ksCore, SAMP_BASS, SAMP_PAD[state.layers.synth.patch],
-  ].filter(Boolean);
+    SAMP_GUITAR[state.layers.guitar.patch], ksCore === '@vibes' ? SAMP_KEYS : ksCore, SAMP_BASS,
+  ].filter(Boolean); /* v31：Pad 弃 GM 采样（改合成垫），不再预载 */
   let done = 0;
   sampStatus(`正在加载采样音色 0/${core.length}…`);
   core.forEach(n => ensureSample(n).then(() => {
@@ -3108,14 +3157,10 @@ function scheduleAll() {
       const pduck = duckMulAt(e.beat, 0.85); /* B6：kick 后 pad 闪避（v15 0.68→0.85：深闪=糊） */
       Tone.getTransport().schedule(tt => {
         const pt = Math.max(0, tt + poff + lag); /* v24：离线渲染 t 从 0 起，负微时值钳 0 */
-        const inst = (padName && sampOf(padName, 'pad')) || null; /* v19：回调内现查——渐进加载中途就绪即时切上采样 */
-        let pPlayed = false;
-        if (inst) { sfBright('pad', e.vel * pduck, pt); for (const n of e.notes) pPlayed = inst.play(n, pt, { duration: dur, gain: e.vel * 1.4 * pduck, cents: sfRepeatCents('pad', n, pt) }) !== false || pPlayed; }
-        if (!pPlayed) {
-          AE.synthPad.triggerAttackRelease(names, dur, pt, e.vel * pduck);
-          /* v15：supersaw 模拟垫底只在 Pad 采样缺失时启用（与采样叠加=浑浊加倍） */
-          for (const p of AE.padUnder) p.triggerAttackRelease(names, dur, pt, e.vel * 0.9 * pduck);
-        }
+        /* v31：Pad 弃 GM 采样（合唱/弦乐 GM 垫=塑料感重灾区）→ Juno 式合成垫（supersaw+移相+合唱），
+           风格差异仍由 padFilter 低通与 PAD_BY_STYLE 存在度保留 */
+        AE.synthPad.triggerAttackRelease(names, dur, pt, e.vel * 1.15 * pduck);
+        for (const p of AE.padUnder) p.triggerAttackRelease(names, dur, pt, e.vel * 1.0 * pduck);
       }, t);
     }
     /* v5 horn 层：反拍铜管 stab（走 pad 采样库，短促 envelope） */
@@ -3125,10 +3170,8 @@ function scheduleAll() {
       const poff = voiceOff('afro', 'pad', e.beat) + sharedSwingSec('afro', e.beat * SPB());
       Tone.getTransport().schedule(tt => {
         const ht = Math.max(0, tt + poff); /* v24：负微时值钳 0 */
-        const inst = sampOf('brass_section', 'pad') || (SAMP_PAD.warm && sampOf(SAMP_PAD.warm, 'pad'));
-        let hPlayed = false;
-        if (inst) { sfBright('pad', e.vel, ht); for (const n of e.notes) hPlayed = inst.play(n, ht, { duration: dur, gain: e.vel * 1.3, cents: sfRepeatCents('pad', n, ht) }) !== false || hPlayed; }
-        if (!hPlayed) AE.synthPad.triggerAttackRelease(e.notes.map(midiName), dur, ht, e.vel);
+        /* v31：horn 无真采样，直接走合成垫（原 GM pad 兜底已弃） */
+        AE.synthPad.triggerAttackRelease(e.notes.map(midiName), dur, ht, e.vel * 0.9);
       }, t);
     }
   }
@@ -3149,6 +3192,7 @@ function scheduleAll() {
           }
           return;
         }
+        if (playBassReal(e.midi, tt, dur, e.vel * 1.1 * duckMul)) return; /* v31：真实电贝斯采样优先 */
         const inst = sampOf(SAMP_BASS, 'bass'); /* v19：回调内现查（渐进加载中途就绪即时切上） */
         if (inst) { sfBright('bass', e.vel * duckMul, tt); if (inst.play(e.midi, tt, { duration: dur, gain: e.vel * 1.3 * duckMul, cents: sfRepeatCents('bass', e.midi, tt) }) !== false) return; }
         AE.bass.triggerAttackRelease(midiName(e.midi), dur, tt, e.vel * duckMul);
@@ -3217,15 +3261,11 @@ function scheduleAll() {
     const add = n => { if (n && typeof n === 'string' && !n.startsWith('@')) need.add(n); };
     add(SAMP_GUITAR[state.layers.guitar.patch]);
     add(SAMP_BASS);
-    add(SAMP_PAD[state.layers.synth.patch]);
     const actStyles = state.styles.length ? state.styles : ['rnb'];
     for (const k of actStyles) {
       add(SAMP_KEYS_BY_STYLE[k]);
-      const pc = PAD_BY_STYLE[k];
-      if (pc && SAMP_PAD[pc.bank]) add(SAMP_PAD[pc.bank]);
       if ((GUITAR_SRC_BY_STYLE[k] || 'samp') === 'sf') add(SAMP_GUITAR[state.layers.guitar.patch]);
     }
-    if (hornEvents.length) add(SAMP_PAD.warm); /* horn 的 brass_section 采样不存在，实际兜底走 warm pad */
     for (const n of need) ensureSample(n);
   }
 }
@@ -3244,6 +3284,7 @@ function warmupAudio() {
     const gp = SAMP_GUITAR[state.layers.guitar.patch];
     if (gp) ensureSample(gp);
     loadGuitarSamples();
+    loadBassSamples(); /* v31：真贝斯采样（与吉他同族）第二优先 */
     loadDrumSamples();
     loadInstruments();
     const idleW = (fn) => { if (typeof requestIdleCallback === 'function') requestIdleCallback(fn, { timeout: 8000 }); else setTimeout(fn, 200); };
@@ -3267,20 +3308,16 @@ let _preTimer = null;
 
 /* 渲染前等采样全量解码（离线渲染不能渐进）：SF 按本曲用音到齐（_usedReady），鼓/吉他等首轮 */
 async function awaitArrSamples(silent) {
-  loadGuitarSamples(); loadDrumSamples(); loadInstruments();
+  loadGuitarSamples(); loadBassSamples(); loadDrumSamples(); loadInstruments(); /* v31：真贝斯采样同预热 */
   const need = new Set();
   const add = n => { if (n && typeof n === 'string' && !n.startsWith('@')) need.add(n); };
   add(SAMP_GUITAR[state.layers.guitar.patch]);
   add(SAMP_BASS);
-  add(SAMP_PAD[state.layers.synth.patch]);
   const actStyles = state.styles.length ? state.styles : ['rnb'];
   for (const k of actStyles) {
     add(SAMP_KEYS_BY_STYLE[k]);
-    const pc = PAD_BY_STYLE[k];
-    if (pc && SAMP_PAD[pc.bank]) add(SAMP_PAD[pc.bank]);
     if ((GUITAR_SRC_BY_STYLE[k] || 'samp') === 'sf') add(SAMP_GUITAR[state.layers.guitar.patch]);
   }
-  if (hornEvents.length) add(SAMP_PAD.warm); /* 与 scheduleAll 的需求集口径一致 */
   const names = [...need];
   for (let i = 0; i < names.length; i++) {
     if (!silent) sampStatus(`渲染编曲中…采样 ${i + 1}/${names.length}`);
@@ -3294,6 +3331,7 @@ async function awaitArrSamples(silent) {
   if (!silent) sampStatus('渲染编曲中…鼓/吉他采样');
   try { if (DRUM_SAMP.promise) await DRUM_SAMP.promise; } catch (e) {}
   try { if (GUITAR_SAMP.promise) await GUITAR_SAMP.promise; } catch (e) {}
+  try { if (BASS_SAMP.promise) await BASS_SAMP.promise; } catch (e) {} /* v31：真贝斯采样 */
   /* v21 金属/FM 预渲染 buffer 跨 context 可播：等它在途渲染收尾，离线渲染直接复用（速度与音色一致） */
   try {
     if (!SYNTH_BUF._started) renderMetalBufs();
@@ -3387,7 +3425,7 @@ async function ensureAudio() {
   let guard = 0;
   while (_arrSwapped && guard++ < 20) await new Promise(r => setTimeout(r, 300));
   if (_arrSwapped) { sampStatus('🎧 正在后台渲染编曲，稍等一下下…'); return false; }
-  if (!state.audioReady) { buildAudio(); state.audioReady = true; ensureBuses(); /* v27：建图即建采样总线——游戏垫/试听不依赖 SF 加载才出声 */ const gp = SAMP_GUITAR[state.layers.guitar.patch]; if (gp) ensureSample(gp); loadGuitarSamples(); loadDrumSamples(); loadInstruments(); loadWurli(); renderMetalBufs(); /* v17：与 warmupAudio 同优先级序；v13 后台预热 Wurli 采样电钢 */ }
+  if (!state.audioReady) { buildAudio(); state.audioReady = true; ensureBuses(); /* v27：建图即建采样总线——游戏垫/试听不依赖 SF 加载才出声 */ const gp = SAMP_GUITAR[state.layers.guitar.patch]; if (gp) ensureSample(gp); loadGuitarSamples(); loadBassSamples(); loadDrumSamples(); loadInstruments(); loadWurli(); renderMetalBufs(); /* v17：与 warmupAudio 同优先级序；v13 后台预热 Wurli 采样电钢 */ }
   try {
     await Tone.start();
     if (Tone.context.state !== 'running') await Tone.context.resume();
@@ -3550,6 +3588,7 @@ async function auditionLayer(layer) {
   } else if (layer === 'bass') {
     const inst = sampOf(SAMP_BASS, 'bass');
     for (let i = 0; i < 3; i++) {
+      if (playBassReal(40 + i * 5, t + i * 0.25, 0.25, 0.95)) continue; /* v31：真贝斯采样试听 */
       if (!inst || inst.play(40 + i * 5, t + i * 0.25, { duration: 0.25, gain: 1.1 }) === false) AE.bass.triggerAttackRelease(midiName(40 + i * 5), 0.25, t + i * 0.25, 0.9);
     }
   } else if (layer === 'drums') {
@@ -3557,9 +3596,8 @@ async function auditionLayer(layer) {
     playDrumSample(kit.kick, t, 0.9); playDrumSample(kit.snare || 'snare_room', t + 0.25, 0.8);
     playDrumSample(kit.hat || 'hat_closed', t + 0.5, 0.6);
   } else if (layer === 'synth') {
-    const name = SAMP_PAD[state.layers.synth.patch];
-    const inst = name && sampOf(name, 'pad');
-    if (!inst || inst.play([48, 52, 55, 59], t, { duration: 1.6, gain: 0.9 }) === false) AE.synthPad.triggerAttackRelease(['C3','E3','G3','B3'], 1.6, t, 0.5);
+    /* v31：Pad 试听走合成垫（GM pad 已弃） */
+    AE.synthPad.triggerAttackRelease(['C3','E3','G3','B3'], 1.6, t, 0.55);
   }
 }
 
