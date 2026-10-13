@@ -959,11 +959,11 @@ function genBass() {
       push(3, fifth, 0.35, 0.65);
       push(3.5, nextRoot, 1.9, 0.85); /* 抢拍进下一和弦根音，跨 1/2 拍延音 */
     } else { /* afro：弹性 16 分 Vamp */
+      /* v41：12 音/小节 → 8 音/小节——指纹实测旧版偏忙（Fela 真身 Vamp 约 6-8 音），抽掉 2.5 拍根音重复 */
       push(0, r, 0.4, 0.85);
       push(0.75, oct, 0.2, 0.55);
       push(1.5, r, 0.4, 0.7);
       push(2, fifth, 0.4, 0.7);
-      push(2.5, r, 0.4, 0.65);
       push(3, r, 0.4, 0.7);
       push(3.75, oct, 0.2, 0.55);
     }
@@ -2229,6 +2229,50 @@ function playBassReal(midi, t, dur, vel) {
   src.start(t); src.stop(t + dur + 0.5);
   return true;
 }
+/* ================= v41 自托管 Wurlitzer 电钢（tonejs/audio casio 采样，与 smplr 同源）
+ * 取代 CDN smplr（jsdelivr/unpkg 国内不稳）——真实电钢采样本地化，rnb/soul 键盘首选；FM tine 兜底 */
+const WURLI_SAMP = { buffers: {}, started: false };
+const WURLI_NOTES = ['C2','Cs2','D2','Ds2','E2','F2','Fs2','G2','Gs2','A2','As2','B2','C3','Cs3','D3','Ds3','E3','F3','Fs3','G3','Gs3','A3','As3','B3','C4','Cs4','D4','Ds4','E4','F4','Fs4','G4','Gs4','A4','As4','B4','C5','Cs5','D5'];
+function loadWurliSamples() {
+  if (WURLI_SAMP.started || typeof Tone === 'undefined') return;
+  WURLI_SAMP.started = true;
+  const raw = Tone.getContext().rawContext;
+  WURLI_SAMP.promise = (async () => {
+    for (const note of WURLI_NOTES) {
+      try {
+        const r = await fetch('wurli/' + note + '.mp3');
+        if (!r.ok) continue;
+        const buf = await raw.decodeAudioData(await r.arrayBuffer());
+        WURLI_SAMP.buffers[noteNameToMidi(note)] = buf;
+      } catch (e) {}
+      await new Promise(res => setTimeout(res, 0));
+    }
+  })();
+}
+function playWurliReal(notes, t, dur, vel) {
+  const keys = Object.keys(WURLI_SAMP.buffers).map(Number);
+  if (!keys.length) return false;
+  let played = false;
+  const raw = Tone.getContext().rawContext;
+  for (const n of notes) {
+    let best = keys[0], bd = 99;
+    for (const k of keys) { const d = Math.abs(k - n); if (d < bd) { bd = d; best = k; } }
+    if (bd > 3) continue; /* 就近映射，>3 半音走兜底 */
+    const src = raw.createBufferSource();
+    src.buffer = WURLI_SAMP.buffers[best];
+    src.playbackRate.value = Math.pow(2, (n - best) / 12);
+    const g = raw.createGain();
+    const v = Math.max(0.04, vel);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(v, t + 0.006);
+    g.gain.setValueAtTime(v, Math.max(t + 0.006, t + dur - 0.08));
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.4);
+    src.connect(g); g.connect(nativeInputOf(AE.keysVol));
+    src.start(t); src.stop(t + dur + 0.5);
+    played = true;
+  }
+  return played;
+}
 /* ================= v5.7 声部互锁：治"各播各的" =================
    真实乐队的锁定关系：贝斯 onset 贴底鼓（pocket）、军鼓位留空、键盘避让旋律 onset（应答）。
    各生成器彼此独立、节奏互不参照 = "各播各的"的根因；此 pass 在调度前统一对齐。 */
@@ -3189,10 +3233,11 @@ function scheduleAll() {
         let gPlayed = false;
         if (!gPlayed && ks === '@vibes') AE.keysVibes.triggerAttackRelease(names, dur, tt, e.vel * 0.95 * kduck); /* v35：0.85→0.95 可闻性 */
         else if (!gPlayed && ks === '@fmrhodes') {
-          /* v13 优先级：smplr Wurlitzer 采样 → v12 FM tine 兜底（v21：FM tine 已离线渲染成采样，~40ms/次 → <0.5ms）
-             v24：Wurli 绑死 live context，离线渲染（isOffline）时跳过，走 FM 电钢兜底 */
-          if (_wurli && !Tone.getContext().isOffline) { for (const n of e.notes) _wurli.start({ note: n, time: tt, duration: dur, velocity: Math.max(20, Math.round(e.vel * 118 * kduck)) }); }
-          else if (!playSynthBuf('keysEP', e.notes, tt, e.vel * 0.9 * kduck, dur)) AE.keysEP.triggerAttackRelease(names, dur, tt, e.vel * 0.9 * kduck);
+          /* v41 优先级：自托管 Wurlitzer 真采样 → FM tine（离线渲染成采样）→ live FM 兜底；
+             v13 旧链的 CDN smplr 路径退役（jsdelivr/unpkg 国内不稳） */
+          if (!playWurliReal(e.notes, tt, dur, e.vel * 0.9 * kduck)) {
+            if (!playSynthBuf('keysEP', e.notes, tt, e.vel * 0.9 * kduck, dur)) AE.keysEP.triggerAttackRelease(names, dur, tt, e.vel * 0.9 * kduck);
+          }
         }
         else if (!gPlayed) {
           const inst = ks && sampOf(ks, 'keys');
@@ -3355,6 +3400,7 @@ function warmupAudio() {
     loadBassSamples(); /* v31：真贝斯采样（与吉他同族）第二优先 */
     loadDrumSamples();
     loadInstruments();
+    loadWurliSamples(); /* v41：自托管 Wurli 取代 CDN smplr */
     const idleW = (fn) => { if (typeof requestIdleCallback === 'function') requestIdleCallback(fn, { timeout: 8000 }); else setTimeout(fn, 200); };
     idleW(() => loadWurli()); /* 后台预热，fire-and-forget，不阻塞任何路径 */
     idleW(() => renderMetalBufs()); /* v21：MetalSynth 离屏渲染成采样，播放中触发从 14ms → <0.1ms */
@@ -3376,7 +3422,7 @@ let _preTimer = null;
 
 /* 渲染前等采样全量解码（离线渲染不能渐进）：SF 按本曲用音到齐（_usedReady），鼓/吉他等首轮 */
 async function awaitArrSamples(silent) {
-  loadGuitarSamples(); loadBassSamples(); loadDrumSamples(); loadInstruments(); /* v31：真贝斯采样同预热 */
+  loadGuitarSamples(); loadBassSamples(); loadDrumSamples(); loadInstruments(); loadWurliSamples(); /* v31：真贝斯采样同预热；v41：Wurli */
   const need = new Set();
   const add = n => { if (n && typeof n === 'string' && !n.startsWith('@')) need.add(n); };
   add(SAMP_GUITAR[state.layers.guitar.patch]);
@@ -3400,6 +3446,7 @@ async function awaitArrSamples(silent) {
   try { if (DRUM_SAMP.promise) await DRUM_SAMP.promise; } catch (e) {}
   try { if (GUITAR_SAMP.promise) await GUITAR_SAMP.promise; } catch (e) {}
   try { if (BASS_SAMP.promise) await BASS_SAMP.promise; } catch (e) {} /* v31：真贝斯采样 */
+  try { if (WURLI_SAMP.promise) await WURLI_SAMP.promise; } catch (e) {} /* v41：Wurli 自托管 */
   /* v21 金属/FM 预渲染 buffer 跨 context 可播：等它在途渲染收尾，离线渲染直接复用（速度与音色一致） */
   try {
     if (!SYNTH_BUF._started) renderMetalBufs();
@@ -3493,7 +3540,7 @@ async function ensureAudio() {
   let guard = 0;
   while (_arrSwapped && guard++ < 20) await new Promise(r => setTimeout(r, 300));
   if (_arrSwapped) { sampStatus('🎧 正在后台渲染编曲，稍等一下下…'); return false; }
-  if (!state.audioReady) { buildAudio(); state.audioReady = true; ensureBuses(); /* v27：建图即建采样总线——游戏垫/试听不依赖 SF 加载才出声 */ const gp = SAMP_GUITAR[state.layers.guitar.patch]; if (gp) ensureSample(gp); loadGuitarSamples(); loadBassSamples(); loadDrumSamples(); loadInstruments(); loadWurli(); renderMetalBufs(); /* v17：与 warmupAudio 同优先级序；v13 后台预热 Wurli 采样电钢 */ }
+  if (!state.audioReady) { buildAudio(); state.audioReady = true; ensureBuses(); /* v27：建图即建采样总线——游戏垫/试听不依赖 SF 加载才出声 */ const gp = SAMP_GUITAR[state.layers.guitar.patch]; if (gp) ensureSample(gp); loadGuitarSamples(); loadBassSamples(); loadDrumSamples(); loadInstruments(); loadWurliSamples(); renderMetalBufs(); /* v17：与 warmupAudio 同优先级序；v41：自托管 Wurli */ }
   try {
     await Tone.start();
     if (Tone.context.state !== 'running') await Tone.context.resume();
@@ -3553,9 +3600,9 @@ function preRenderArrangement() {
   _preTimer = setTimeout(() => {
     if (!state.arrDirty || state.playing || _arrRendering) return;
     if (!state.audioReady || !AE.ready) return; /* 音频图未建不渲（warmup 完成后编排再改会再触发） */
-    /* v26：短编曲走实时播放，无需离线渲染（省 CPU） */
+    /* v26：短编曲走实时播放，无需离线渲染（省 CPU）；v41：阈值与 togglePlay 同步 800→500 */
     const evCount = melodyEvents.length + bassEvents.length + keysEvents.length + synthEvents.length + hornEvents.length + drumEvents.length;
-    if (evCount < 800) return;
+    if (evCount < 500) return;
     ensureRendered(false);
   }, 1200);
 }
@@ -3606,7 +3653,7 @@ async function togglePlay() {
   /* v26：短编曲（事件少）直接实时排程播放——零渲染等待，编辑→播放秒开；
      只有长编曲（40 小节歌 / 32 小节 groove，数千事件）才走离线渲染（且已后台预渲染）。 */
   const evCount = melodyEvents.length + bassEvents.length + keysEvents.length + synthEvents.length + hornEvents.length + drumEvents.length;
-  if (evCount < 800) {
+  if (evCount < 500) { /* v41：800→500——弱机实时排程仍是卡顿源，更多编曲走零卡顿 buffer 路径（配合 v39 自动刷新，改完即换） */
     startRealtimePlayback();
     return;
   }
@@ -3636,18 +3683,19 @@ function reScheduleDebounced() {
   clearTimeout(_rsTimer);
   _rsTimer = setTimeout(() => {
     reScheduleIfPlaying();
-    /* v39：buffer 播放中改编排 → 自动重渲染并续播。
-       旧行为"正在播的旧 buffer 继续播完"让用户切走向/改风格后听感"完全没变"——这是主因之一 */
+    /* v39→v41 修复：buffer 播放中改编排 → 自动刷新续播。
+       v41 回归修复：不能"边播边渲"——离线渲染与实时播放抢 CPU = 卡顿回归主因。
+       改为顺序化：停旧 buffer → 渲染 → 起新 buffer（短暂静默，无卡顿）。 */
     if (state.playing && ARR.src) {
       sampStatus('编曲已改，正在刷新…');
       (async () => {
         try {
+          stopBufferPlayback();
           if (await ensureRendered(true)) {
-            stopBufferPlayback();
-            startBufferPlayback(); /* 换新 buffer 续播（位置从头） */
+            startBufferPlayback();
             sampStatus('');
           } else {
-            startRealtimePlayback(true); /* 渲染失败回退实时排程 */
+            startRealtimePlayback(true);
           }
         } catch (e) {}
       })();
