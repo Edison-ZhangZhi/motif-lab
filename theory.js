@@ -249,11 +249,13 @@ const DRUM_PATTERNS = {
     hat:   [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0],
     crash: [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0],
   },
-  rnb: { /* v34 Neo-Soul 完全版：kick 1+2&+3e（0/7/10 步，Questlove/D'Angelo 切分），ghost 网加密（6/9/14/15 步），hat 8 分摇摆 */
+  rnb: { /* v34 Neo-Soul 完全版：kick 1+2&+3e（0/7/10 步，Questlove/D'Angelo 切分），ghost 网加密（6/9/14/15 步），hat 8 分摇摆
+     v37：hatGhost=e/ah 位置轻 16 分 ghost 帽（现代 trapsoul 滚奏感，SZA/Bryson Tiller 系） */
     kick:  [1,0,0,0, 0,0,0,1, 0,0,1,0, 0,0,0,0],
     snare: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
     ghost: [0,0,0,0, 0,0,1,0, 0,1,0,0, 0,0,1,1],
     hat:   [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0],
+    hatGhost: [0,1,0,1, 0,1,0,1, 0,1,0,1, 0,1,0,1],
     ohat:  [0,0,0,0, 0,0,0,0, 0,0,1,0, 0,0,0,0],
   },
   jazz: { /* ride spang-a-lang（1/5/8轻/9/13/16轻）+ hat 脚踏 2/4 拍 + kick 1/3 拍 feathering */

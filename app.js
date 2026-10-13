@@ -1248,9 +1248,8 @@ function genKeys() {
         [[2.5, 1], [3.5, 1.5], [3.75, 1]],
       ];
       for (const [b, d] of pick(rng, NEO_COMP2)) ev.push({ beat: bar * BPB() + b, notes: voicing, dur: Math.min(d, BPB() - b), vel: 0.44 + rng() * 0.12, inst: 'keys' });
-      /* v36：吉他和弦垫层——十首参考曲（Best Part/Japanese Denim/Untitled/Heartbreak Anniversary/Snooze/On & On/Brown Sugar/Love Song/Easy/Focus）共性：
-         Rhodes 背后有 clean guitar 轻铺和弦，是"那味儿"的关键织体层 */
-      if (rng() < 0.75) {
+      /* v36/v37：吉他和弦垫层——rnb/soul 参考曲共性：Rhodes 背后有 clean guitar 轻铺和弦 */
+      if ((styleKey === 'rnb' || styleKey === 'soul') && rng() < 0.75) {
         const gStabs = pick(rng, [[2.5], [1.5, 3.5], [2.5, 3.75], [1.5]]);
         for (const s of gStabs) ev.push({ beat: bar * BPB() + s, notes: voicing, dur: 0.45, vel: 0.3 + rng() * 0.08, inst: 'guitar:clean' });
       }
@@ -1280,7 +1279,7 @@ const PAD_BY_STYLE = {
   afro:  { bank: 'warm',      presence: 0.35, attack: 'stab', lpf: 4200, mode: 'stab', vol: 0.85 },
   hiphop:{ bank: 'polysynth', presence: 0.65, attack: 'slow', lpf: 3400, mode: 'pad',  vol: 1.00 },
   funk:     { bank: 'sweep',     presence: 0.07, attack: 'gate', lpf: 3600, mode: 'gate', vol: 0.55 }, /* 放克几乎不用 pad：律动靠吉他/贝斯/鼓，仅高能量段一抹门控底色 */
-  soul:     { bank: 'choir',     presence: 0.50, attack: 'slow', lpf: 5000, mode: 'pad',  vol: 0.90 }, /* 福音合唱垫 = soul 的教堂空间感核心 */
+  soul:     { bank: 'choir',     presence: 0.35, attack: 'slow', lpf: 4800, mode: 'pad',  vol: 0.8 }, /* v37：0.50→0.35 现代福音灵魂的垫子更收敛 */
   reggae:   { bank: 'polysynth', presence: 0.32, attack: 'stab', lpf: 4400, mode: 'stab', vol: 0.80 }, /* organ bubble 感：polysynth 短促反拍 stab，与 skank 错开 */
   afrobeats:{ bank: 'halo',      presence: 0.30, attack: 'slow', lpf: 5600, mode: 'pad',  vol: 0.80 }, /* 亮色 halo 薄垫：阳光电台感，不压打击乐 */
 };
@@ -1491,6 +1490,8 @@ function genDrums() {
         hatBase *= 0.9 + rng() * 0.2; /* v15 hat 两档力度 ±10% 抖动 */
         push('hat', hatBase);
       }
+      /* v37：现代 RnB 轻 16 分 ghost 帽（e/ah 位置，力度 0.26 上下——SZA/Bryson Tiller 式滚奏织感） */
+      if (Pv.hatGhost && Pv.hatGhost[s] && !isThinSec && density !== 'lite') push('hat', 0.24 + rng() * 0.08);
       if (Pv.ohat && Pv.ohat[s] && density !== 'lite') push('ohat', 0.6);
       /* N5 rock verse 开镲：15% 概率在反拍点开镲（GNR 式动态） */
       if (patName === 'rock' && !rockChorus && s % 4 === 2 && rng() < 0.15) push('ohat', 0.5);
@@ -1846,6 +1847,10 @@ function buildAudio() {
     envelope: { attack: 0.008, decay: 0.3, sustain: 0.6, release: 0.2 },
     filterEnvelope: { attack: 0.004, decay: 0.2, sustain: 0.4, baseFrequency: 90, octaves: 2.6 },
   }).connect(AE.bassVol);
+  /* v37：现代 RnB sub 层——真贝斯下方垫 -12 正弦（trapsoul 808 低音感，Giveon/SZA 系） */
+  AE.subBass = new Tone.Synth({ oscillator: { type: 'sine' }, envelope: { attack: 0.012, decay: 0.45, sustain: 0.5, release: 0.35 } });
+  AE.subBass.volume.value = -15;
+  AE.subBass.connect(AE.bassVol);
 
   /* --- 鼓组 --- */
   AE.drumsVol = new Tone.Volume(-3.5); /* 路由在音色链创建后建立；v7 再前置：用户反馈"感受不到鼓点"，律动必须有肉体存在感 */
@@ -3229,6 +3234,11 @@ function scheduleAll() {
       const dur = Math.max(1, Math.round(e.dur * 4)) * secPer16() * 0.95;
       const boff = voiceOff(styleOfBar(e.beat), 'bass', e.beat) + sharedSwingSec(styleOfBar(e.beat), e.beat * SPB());
       Tone.getTransport().schedule(tt => {
+        /* v37：rnb/soul sub 层——真贝斯下方垫 -12 正弦（现代 RnB 低频质；与 kick 侧链式闪避同步） */
+        const bSty = styleOfBar(e.beat);
+        if (!e.b808 && (bSty === 'rnb' || bSty === 'soul') && AE.subBass) {
+          AE.subBass.triggerAttackRelease(midiName(Math.max(24, e.midi - 12)), dur, tt, e.vel * (bSty === 'rnb' ? 0.55 : 0.38) * duckMul);
+        }
         if (e.b808) {
           if (!play808(e.midi, tt, dur * 1.6, e.vel, e.slideTo)) {
             AE.bass.triggerAttackRelease(midiName(e.midi), dur, tt, e.vel);
