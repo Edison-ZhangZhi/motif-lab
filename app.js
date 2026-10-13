@@ -2426,8 +2426,11 @@ const DRUM_FILES = [
   'ride1_OH_FF_1.flac','ride1_OH_FF_2.flac','ride1_OH_MP_1.flac','ride1_OH_MP_2.flac',
   'crash1_OH_FF_1.flac','crash1_OH_FF_2.flac','ride2Crash_OH_FF_1.flac',
   /* 旧鼓件（打击乐/808/备用，仍为 mp3） */
-  'brush_snare.mp3','rim_click.mp3','shaker.mp3','shekere.mp3','conga_h.mp3','conga_l.mp3','clave.mp3',
-  'kick_808.mp3','snap.mp3','hat_808.mp3','clap.mp3','crash.mp3','snare_room.mp3','kick_room.mp3','hat_closed.mp3',
+  'brush_snare.mp3','rim_click.mp3','kick_808.mp3','snap.mp3','hat_808.mp3','clap.mp3','crash.mp3','snare_room.mp3','kick_room.mp3','hat_closed.mp3',
+  /* v40：VCSL（CC0 公有领域）真实打击乐——沙锤/响棒/康加 48k 录音，带轮询；替换 64kbps 老 MP3 */
+  'shaker_a.wav','shaker_b.wav','shaker_c.wav','shaker_d.wav',
+  'clave_a.wav','clave_b.wav','clave_c.wav',
+  'conga_h_a.wav','conga_h_b.wav','conga_l_a.wav','conga_l_b.wav',
 ];
 /* 每风格鼓件映射：值=采样名，null=用合成鼓回退 */
 const DRUM_KITS = {
@@ -2466,7 +2469,7 @@ function loadDrumSamples(isRetry) {
   DRUM_SAMP.promise = (async () => { /* v24：promise 外暴露，离线渲染前可等全 */
     for (const name of DRUM_FILES) {
       try {
-        const key = name.replace(/\.(mp3|flac)$/i, ''); /* v29：文件名自带扩展名，缓存键用裸名（与 kit/GAIN/MAXDUR 一致） */
+        const key = name.replace(/\.(mp3|flac|wav)$/i, ''); /* v29：文件名自带扩展名，缓存键用裸名（与 kit/GAIN/MAXDUR 一致）；v40：+wav */
         if (DRUM_SAMP.buffers[key]) continue; /* v29：重试只补缺，不重复下载 */
         const r = await fetch('drums/' + name);
         if (!r.ok) throw new Error('404');
@@ -2500,7 +2503,7 @@ function loadDrumSamples(isRetry) {
   setTimeout(() => {
     DRUM_SAMP.loading = false;
     const total = DRUM_FILES.length;
-    const missing = DRUM_FILES.filter(n => !DRUM_SAMP.buffers[n.replace(/\.(mp3|flac)$/i, '')]).length;
+    const missing = DRUM_FILES.filter(n => !DRUM_SAMP.buffers[n.replace(/\.(mp3|flac|wav)$/i, '')]).length;
     if (missing && !DRUM_SAMP.retried) {
       DRUM_SAMP.retried = true;
       sampStatus('鼓采样 ' + missing + '/' + total + ' 未加载，重试中…');
@@ -2524,6 +2527,12 @@ const DRUM_SETS = {
   sal_ohat:  { ff: ['hihatOpen_OH_F_1', 'hihatOpen_OH_F_2'], f: ['hihatOpen_OH_F_1', 'hihatOpen_OH_F_2'], p: ['hihatOpen_OH_P_1'] },
   sal_ride:  { ff: ['ride1_OH_FF_1', 'ride1_OH_FF_2'], f: ['ride1_OH_MP_1', 'ride1_OH_MP_2'], p: ['ride1_OH_MP_1', 'ride1_OH_MP_2'] },
   sal_crash: { ff: ['crash1_OH_FF_1', 'crash1_OH_FF_2', 'ride2Crash_OH_FF_1'], f: ['crash1_OH_FF_1', 'crash1_OH_FF_2'], p: ['crash1_OH_FF_2'] },
+  /* v40：VCSL 真实打击乐轮询池——替换 64kbps 老 MP3（沙锤/响棒/康加）；shekere 复用沙锤池（同族） */
+  shaker:   { ff: ['shaker_a', 'shaker_b', 'shaker_c', 'shaker_d'], f: ['shaker_a', 'shaker_b', 'shaker_c', 'shaker_d'], p: ['shaker_c', 'shaker_d'] },
+  shekere:  { ff: ['shaker_a', 'shaker_b', 'shaker_c', 'shaker_d'], f: ['shaker_a', 'shaker_b', 'shaker_c', 'shaker_d'], p: ['shaker_c', 'shaker_d'] },
+  clave:    { ff: ['clave_a', 'clave_b', 'clave_c'], f: ['clave_a', 'clave_b', 'clave_c'], p: ['clave_b'] },
+  conga_h:  { ff: ['conga_h_a', 'conga_h_b'], f: ['conga_h_a', 'conga_h_b'], p: ['conga_h_b'] },
+  conga_l:  { ff: ['conga_l_a', 'conga_l_b'], f: ['conga_l_a', 'conga_l_b'], p: ['conga_l_b'] },
 };
 const DRUM_GAIN = { shekere: 1.3, shaker: 0.9, snap: 1.1, clap: 1.3, hat_808: 0.9, kick_808: 1.25, crash: 0.95, rim_click: 1.1, kick_room: 1.45, snare_room: 1.2, brush_snare: 1.1, conga_h: 1.25, conga_l: 1.25, clave: 1.2,
   /* v29：Salamander 头顶麦克风录音偏轻，增益补偿 */
@@ -2550,7 +2559,7 @@ function playDrumSample(name, t, vel, opts) {
   const src = raw.createBufferSource();
   src.buffer = buf;
   src.playbackRate.value = 1 + (Math.random() * 0.06 - 0.03);
-  if (name === 'conga_l') src.playbackRate.value *= 0.84; /* conga_l 与 conga_h 是同一文件：播放层降 ~3 半音，听起来才是真低康加 */
+  /* v40：真低康加（Tumba）采样已就位，删除 conga_l 旧 0.84 降调 hack（旧 conga_l 与 conga_h 同文件） */
   const g = raw.createGain();
   const v = vel * (DRUM_GAIN[name] || 1);
   g.gain.setValueAtTime(0.0001, t);
