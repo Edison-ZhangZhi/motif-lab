@@ -1135,12 +1135,14 @@ function chooseVoicing(pcs, prevNotes, avoidMidi) {
   return best.slice(0, cap);
 }
 
-/* 风格化 voicing：RnB 去根音保 3-7-9(-13)；Jazz shell(3-7)+延伸 */
+/* 风格化 voicing：RnB 有根 shell（根-3-7-9，省五音）；Jazz shell(3-7)+延伸 */
 function styleVoicingPcs(pcs, styleKey) {
   if (styleKey === 'rnb' && pcs.length > 4) {
-    /* 真去根音 + 省五音：保 3-7-9（旧代码 filter(i!==2) 去的是五音，根音还在） */
-    const noRoot = pcs.filter((pc, i) => i !== 0 && i !== 2);
-    return noRoot.length >= 3 ? noRoot : pcs;
+    /* v38：教程规范修正——Neo-Soul 用"shell 和弦 + 延伸音"（根-3-7-9，省五音保根）。
+       旧"真去根音 3-7-9"是爵士大编制 comping 语汇；小编制里无根漂浮音簇=听感"和声不对"的主因。
+       （eMastered Neo-Soul 教程：shell chords = 根+五音或 3+7，保留和声锚点） */
+    const shell = pcs.filter((pc, i) => i !== 2);
+    return shell.length >= 4 ? shell : pcs;
   }
   if (styleKey === 'jazz') {
     const rest = pcs.slice(1);
@@ -4290,7 +4292,7 @@ function applyStyleFx(styleKey) {
 const STYLE_SETUP = {
   /* swing 字段量纲 = 奇数 16 分后移量（sharedSwingSec 的 state.swing×100）：
      记谱 swing% = (1+swing/100)/2×100，即 字段值 = (swing% − 50) × 2。下列为热歌实测换算值 */
-  rnb:   { guitar: 'clean',  keys: 'comp',  drums: 'full',  swing: 12, bpm: 78,  synth: 'choir',  preset: 'rnb-fong' }, /* v34：swing 10→12；v35：默认走向换方大同式 1-5-6-4（原 ♭VII 漂移保留在预设里，听感"怪异"主要是和声漂移+旋律难跟） */
+  rnb:   { guitar: 'clean',  keys: 'comp',  drums: 'full',  swing: 12, bpm: 78,  synth: 'choir',  preset: 'rnb-2516' }, /* v38：默认走向换 Neo-Soul 教科书 2-5-1-6（Isn't She Lovely 语法，教程规范） */
   jazz:  { guitar: 'jazz',   keys: 'comp',  drums: 'auto',  swing: 24, bpm: 120, synth: 'warm',   preset: 'jazz-2516' }, /* Fly Me to the Moon ~120 / 62% */
   rock:  { guitar: 'dist',   keys: 'auto',  drums: 'drive', swing: 0,  bpm: 115, synth: 'sweep',  preset: 'rock-min' }, /* Back in Black~Teen Spirit 115 / 直拍 */
   bossa: { guitar: 'nylon',  keys: 'auto',  drums: 'auto',  swing: 4,  bpm: 126, synth: 'warm',   preset: 'bossa-251' }, /* Ipanema ~126 / 52% 近直拍 */
