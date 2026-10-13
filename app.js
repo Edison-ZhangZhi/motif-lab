@@ -3470,6 +3470,7 @@ let _arrRendering = false;
 let _arrSwapped = false; /* v26：离线渲染已换全局 context 的窗口标志（试听/建图需避让） */
 let _arrPromise = null;  /* v26：在途渲染 promise（播放与预渲染共用，绝不重复渲染） */
 let _preTimer = null;
+let _playToken = 0; /* v44：播放意图令牌——停止/新播放会使在途异步渲染的结果失效（防"点了停止还在放"） */
 
 /* 渲染前等采样全量解码（离线渲染不能渐进）：SF 按本曲用音到齐（_usedReady），鼓/吉他等首轮 */
 async function awaitArrSamples(silent) {
@@ -3658,6 +3659,7 @@ function preRenderArrangement() {
   }, 1200);
 }
 function stopPlayback() {
+  _playToken++; /* v44：作废在途异步渲染的开播意图（修复"点了停止，渲染回来又放起来"） */
   try { Tone.getTransport().stop(); } catch (e) {} /* 实时兜底模式下可能在走 */
   stopBufferPlayback();
   silenceSampleBuses();
@@ -3695,24 +3697,24 @@ async function togglePlay() {
   stopGameMetro(); /* v26：主播放与新手模式节拍器互斥 */
   applyMix();
   restoreSampleBuses();
+  const tok = ++_playToken; /* v44：本次开播意图；后续 await 完成时若令牌已变（用户点了停止）则放弃 */
   /* v24：已有新鲜 buffer → 直接开播（零排程零建节点） */
   if (!state.arrDirty && ARR.buf) {
-    startBufferPlayback();
-    sampStatus('');
+    if (tok === _playToken) { startBufferPlayback(); sampStatus(''); }
     return;
   }
-  /* v26：短编曲（事件少）直接实时排程播放——零渲染等待，编辑→播放秒开；
-     只有长编曲（40 小节歌 / 32 小节 groove，数千事件）才走离线渲染（且已后台预渲染）。 */
-  /* v42：实时排程路径退役——弱机上实时排程仍是偶发卡顿源；所有编曲一律走预渲染 buffer（零卡顿），
-     配合 v39 自动刷新（改完自动重渲染续播）与 v26 空闲预渲染（点播放零等待）体验不降级 */
+  /* v44：小循环恢复实时路径（秒开零等待；v42 全量 buffer 导致"按了半天不播放"）；
+     实时路径的卡顿源（主链过采样/大歌实时排程）已在 v35/v42 移除，小循环足够轻 */
   const evCount = melodyEvents.length + bassEvents.length + keysEvents.length + synthEvents.length + hornEvents.length + drumEvents.length;
-  void evCount;
+  if (evCount < 400) { startRealtimePlayback(false); return; }
+  /* v42：长编曲走预渲染 buffer（零卡顿）；渲染完成时校验令牌——渲染期间用户点了停止就不开播 */
   if (await ensureRendered(true)) {
+    if (tok !== _playToken) return;
     if (!state.arrDirty) { startBufferPlayback(); sampStatus(''); return; }
-    if (await ensureRendered(true)) { startBufferPlayback(); sampStatus(''); return; } /* 渲染期间又改 → 再渲一版（罕见） */
+    if (await ensureRendered(true)) { if (tok === _playToken) { startBufferPlayback(); sampStatus(''); } return; } /* 渲染期间又改 → 再渲一版（罕见） */
   }
-  /* 渲染失败兜底：回退老实时排程路径（v19 原逻辑，保留可用性） */
-  startRealtimePlayback(true);
+  /* 渲染失败兜底：回退实时排程路径（v19 原逻辑，保留可用性） */
+  if (tok === _playToken) startRealtimePlayback(true);
 }
 function updatePlayBtn() {
   const b = document.getElementById('btn-play');
@@ -3738,13 +3740,13 @@ function reScheduleDebounced() {
        改为顺序化：停旧 buffer → 渲染 → 起新 buffer（短暂静默，无卡顿）。 */
     if (state.playing && ARR.src) {
       sampStatus('编曲已改，正在刷新…');
+      const tok = _playToken; /* v44：渲染期间用户若点了停止 → 不复活播放 */
       (async () => {
         try {
           stopBufferPlayback();
           if (await ensureRendered(true)) {
-            startBufferPlayback();
-            sampStatus('');
-          } else {
+            if (tok === _playToken && state.playing) { startBufferPlayback(); sampStatus(''); }
+          } else if (tok === _playToken && state.playing) {
             startRealtimePlayback(true);
           }
         } catch (e) {}
@@ -5481,6 +5483,43 @@ function bindEvents() {
       reScheduleDebounced();
     };
   }
+  /* ===== v44 3D 深空效果：透视粒子星野 + 卡片视差倾斜（零依赖，低 CPU） ===== */
+  const sfCanvas = document.getElementById('starfield');
+  if (sfCanvas && sfCanvas.getContext) {
+    const c = sfCanvas.getContext('2d');
+    let W = innerWidth, H = innerHeight;
+    sfCanvas.width = W; sfCanvas.height = H;
+    const N = Math.min(170, Math.floor(innerWidth * innerHeight / 10000));
+    const stars = Array.from({ length: N }, () => ({ x: Math.random(), y: Math.random(), z: Math.random() * 0.9 + 0.1, r: Math.random() * 1.3 + 0.4, c: Math.random() }));
+    const mx = { x: 0, y: 0 };
+    addEventListener('mousemove', e => { mx.x = e.clientX / innerWidth - 0.5; mx.y = e.clientY / innerHeight - 0.5; }, { passive: true });
+    let last = 0;
+    (function draw(t) {
+      requestAnimationFrame(draw);
+      if (t - last < 50 || document.hidden) return; /* 20fps 足够顺滑且极省 CPU */
+      last = t;
+      if (W !== innerWidth || H !== innerHeight) { W = innerWidth; H = innerHeight; sfCanvas.width = W; sfCanvas.height = H; }
+      c.clearRect(0, 0, W, H);
+      const cx = W / 2 + mx.x * W * 0.05, cy = H / 2 + mx.y * H * 0.05;
+      for (const s of stars) {
+        s.z -= 0.0022; if (s.z <= 0.06) s.z = 0.96;
+        const px = cx + ((s.x - 0.5) * W / s.z) * 0.5;
+        const py = cy + ((s.y - 0.5) * H / s.z) * 0.5;
+        const a = (1 - s.z) * 0.85;
+        c.fillStyle = s.c < 0.55 ? 'rgba(124,108,255,' + a.toFixed(3) + ')' : (s.c < 0.82 ? 'rgba(79,163,255,' + a.toFixed(3) + ')' : 'rgba(232,234,246,' + a.toFixed(3) + ')');
+        c.beginPath(); c.arc(px, py, s.r * (1.25 - s.z), 0, 6.2832); c.fill();
+      }
+    })(0);
+  }
+  document.querySelectorAll('.card').forEach(card => {
+    card.addEventListener('mousemove', e => {
+      const r = card.getBoundingClientRect();
+      const dx = (e.clientX - r.left) / r.width - 0.5;
+      const dy = (e.clientY - r.top) / r.height - 0.5;
+      card.style.transform = 'rotateY(' + (dx * 3.2).toFixed(2) + 'deg) rotateX(' + (-dy * 3.2).toFixed(2) + 'deg) translateZ(3px)';
+    }, { passive: true });
+    card.addEventListener('mouseleave', () => { card.style.transform = ''; });
+  });
   const addSlotBtn = document.getElementById('btn-add-slot'); /* v42：级数编辑已移除；守卫防旧 UI 空引用 */
   if (addSlotBtn) addSlotBtn.onclick = () => {
     const last = state.slots[state.slots.length - 1];

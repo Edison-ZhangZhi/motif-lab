@@ -497,3 +497,22 @@ input[type="range"] { accent-color: #7c6cff; }
 ::-webkit-scrollbar-thumb { background: #2a2f47; border-radius: 6px; border: 2px solid #0a0c16; }
 ::-webkit-scrollbar-thumb:hover { background: #3a4066; }
 @media (max-width: 760px) { .card { border-radius: 14px; padding: 16px 14px; } }
+
+/* ============================================================
+   v44 3D 深空效果（Kimi 3d_web 式）
+   透视粒子星野 + 漂浮光球 + 卡片 3D 视差倾斜
+   ============================================================ */
+#starfield { position: fixed; inset: 0; z-index: -1; pointer-events: none; }
+.orb { position: fixed; z-index: -1; border-radius: 50%; filter: blur(90px); opacity: 0.55; pointer-events: none; }
+.orb-a { width: 440px; height: 440px; left: -160px; top: 16%; background: radial-gradient(circle, rgba(124, 108, 255, 0.5), transparent 70%); animation: orbFloat 26s ease-in-out infinite alternate; }
+.orb-b { width: 380px; height: 380px; right: -140px; top: 52%; background: radial-gradient(circle, rgba(79, 163, 255, 0.42), transparent 70%); animation: orbFloat 34s ease-in-out infinite alternate-reverse; }
+@keyframes orbFloat {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to { transform: translate3d(70px, -90px, 0) scale(1.3); }
+}
+.app { perspective: 1400px; }
+.card { transform-style: preserve-3d; will-change: transform; transition: border-color .25s, box-shadow .25s; }
+@media (prefers-reduced-motion: reduce) {
+  .orb, #starfield { display: none; }
+  .card { transition: none; }
+}
