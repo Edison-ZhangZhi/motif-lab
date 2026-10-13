@@ -2238,15 +2238,20 @@ function loadWurliSamples() {
   WURLI_SAMP.started = true;
   const raw = Tone.getContext().rawContext;
   WURLI_SAMP.promise = (async () => {
-    for (const note of WURLI_NOTES) {
-      try {
-        const r = await fetch('wurli/' + note + '.mp3');
-        if (!r.ok) continue;
-        const buf = await raw.decodeAudioData(await r.arrayBuffer());
-        WURLI_SAMP.buffers[noteNameToMidi(note)] = buf;
-      } catch (e) {}
-      await new Promise(res => setTimeout(res, 0));
-    }
+    /* v43：8 路并行加载（旧串行 39 文件=数秒级；缺文件 404 快速跳过） */
+    const batch = async (list) => {
+      for (const note of list) {
+        try {
+          const r = await fetch('wurli/' + note + '.mp3');
+          if (!r.ok) continue;
+          const buf = await raw.decodeAudioData(await r.arrayBuffer());
+          WURLI_SAMP.buffers[noteNameToMidi(note)] = buf;
+        } catch (e) {}
+      }
+    };
+    const chunks = [];
+    for (let i = 0; i < WURLI_NOTES.length; i += 8) chunks.push(WURLI_NOTES.slice(i, i + 8));
+    await Promise.all(chunks.map(c => batch(c)));
   })();
 }
 function playWurliReal(notes, t, dur, vel) {
@@ -3492,7 +3497,7 @@ async function awaitArrSamples(silent) {
   try { if (DRUM_SAMP.promise) await DRUM_SAMP.promise; } catch (e) {}
   try { if (GUITAR_SAMP.promise) await GUITAR_SAMP.promise; } catch (e) {}
   try { if (BASS_SAMP.promise) await BASS_SAMP.promise; } catch (e) {} /* v31：真贝斯采样 */
-  try { if (WURLI_SAMP.promise) await WURLI_SAMP.promise; } catch (e) {} /* v41：Wurli 自托管 */
+  /* v43：Wurli 不阻塞渲染（缺文件的 404 串行等待=15s+，v42"播放放不了/等很久"主因）——Wurli 是增强音色，FM 电钢兜底，后台渐进就绪 */
   /* v21 金属/FM 预渲染 buffer 跨 context 可播：等它在途渲染收尾，离线渲染直接复用（速度与音色一致） */
   try {
     if (!SYNTH_BUF._started) renderMetalBufs();

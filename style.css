@@ -374,3 +374,126 @@ footer {
 .us-pad:hover { border-color: #5a60c0; }
 .us-pad.sel { border-color: #7fb8ff; color: #d7e4ff; }
 .us-pad.has { background: #232a3f; color: #cfe0ff; }
+
+/* ============================================================
+   v43 月之暗面（Moonshot/Kimi）深空主题
+   深空底色 + 星云渐变 + 玻璃拟态 + 紫青渐变点缀
+   ============================================================ */
+:root {
+  --paper: #07080e;
+  --card: rgba(17, 20, 34, 0.62);
+  --ink: #e8eaf4;
+  --ink-2: #9aa1b8;
+  --ink-3: #666d88;
+  --line: rgba(255, 255, 255, 0.09);
+  --line-2: rgba(255, 255, 255, 0.05);
+  --acc: #7c6cff;
+  --acc-2: #4fa3ff;
+  --acc-tint: rgba(124, 108, 255, 0.14);
+  --serif: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", "Microsoft YaHei", Arial, sans-serif;
+}
+html, body {
+  background:
+    radial-gradient(1100px 620px at 12% -8%, rgba(124, 108, 255, 0.20), transparent 60%),
+    radial-gradient(900px 560px at 96% 8%, rgba(79, 163, 255, 0.14), transparent 62%),
+    radial-gradient(760px 520px at 55% 112%, rgba(180, 90, 255, 0.12), transparent 60%),
+    #07080e;
+  background-attachment: fixed;
+  color: var(--ink);
+}
+.app { padding-top: 30px; }
+header { margin-bottom: 26px; }
+header h1 {
+  background: linear-gradient(115deg, #c9c2ff 0%, #7c6cff 38%, #4fa3ff 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  letter-spacing: 0.02em;
+}
+header p { color: var(--ink-2); }
+.card {
+  background: var(--card);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: 0 12px 40px rgba(2, 4, 14, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition: border-color .25s, box-shadow .25s, transform .25s;
+}
+.card:hover {
+  border-color: rgba(124, 108, 255, 0.28);
+  box-shadow: 0 16px 48px rgba(2, 4, 14, 0.55), 0 0 24px rgba(124, 108, 255, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+h2 .step {
+  background: linear-gradient(135deg, #7c6cff, #4fa3ff);
+  color: #fff; border: 0;
+  box-shadow: 0 2px 10px rgba(124, 108, 255, 0.45);
+}
+.btn-play {
+  background: linear-gradient(120deg, #7c6cff, #4fa3ff);
+  border: 0; color: #fff; border-radius: 999px;
+  box-shadow: 0 6px 22px rgba(124, 108, 255, 0.4);
+  transition: transform .18s, box-shadow .18s, filter .18s;
+}
+.btn-play:hover { filter: brightness(1.12); transform: translateY(-1px); box-shadow: 0 10px 30px rgba(124, 108, 255, 0.55); }
+.btn-play.playing { background: linear-gradient(120deg, #e15b7d, #b0456c); }
+.btn, .btn.small {
+  border: 1px solid var(--line); background: rgba(255, 255, 255, 0.04);
+  color: var(--ink); border-radius: 10px; transition: all .18s;
+}
+.btn:hover, .btn.small:hover { border-color: rgba(124, 108, 255, 0.5); background: var(--acc-tint); color: #d8d3ff; }
+.chip {
+  background: rgba(255, 255, 255, 0.035); border: 1px solid var(--line);
+  border-radius: 999px; color: var(--ink-2); transition: all .2s;
+}
+.chip:hover { border-color: rgba(124, 108, 255, 0.45); color: var(--ink); }
+.chip.active {
+  background: linear-gradient(120deg, rgba(124, 108, 255, 0.85), rgba(79, 163, 255, 0.85));
+  color: #fff; border-color: transparent;
+  box-shadow: 0 4px 16px rgba(124, 108, 255, 0.4);
+}
+select, input[type="text"], textarea {
+  background: rgba(10, 12, 22, 0.75); border: 1px solid var(--line);
+  border-radius: 10px; color: var(--ink);
+}
+select:focus-visible, input:focus-visible, textarea:focus-visible {
+  outline: none; border-color: rgba(124, 108, 255, 0.7);
+  box-shadow: 0 0 0 3px rgba(124, 108, 255, 0.18);
+}
+input[type="range"] { accent-color: #7c6cff; }
+.slot {
+  background: rgba(255, 255, 255, 0.03); border: 1px solid var(--line);
+  border-radius: 12px; transition: all .2s;
+}
+.slot:hover { border-color: rgba(124, 108, 255, 0.4); background: rgba(124, 108, 255, 0.06); }
+.roman { color: #8f86ff; }
+.chord-name:hover { color: #a99fff; }
+.prog-explain, .prog-desc { color: var(--ink-2); }
+.spec-title { color: var(--ink); }
+.spec-title::before {
+  content: "✦"; margin-right: 8px;
+  background: linear-gradient(120deg, #7c6cff, #4fa3ff);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.layer { border-bottom-color: var(--line-2); }
+.tone-panel {
+  background: rgba(10, 12, 22, 0.8); border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.audition, .del { color: var(--ink-2); }
+.audition:hover, .del:hover { color: #a99fff; }
+.game-pad {
+  background: rgba(255, 255, 255, 0.04); border: 1px solid var(--line);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.game-pad.hit, .game-pad.flash {
+  background: linear-gradient(120deg, rgba(124, 108, 255, 0.8), rgba(79, 163, 255, 0.8));
+  box-shadow: 0 0 26px rgba(124, 108, 255, 0.6);
+}
+.game-mode.on { background: linear-gradient(120deg, #7c6cff, #4fa3ff); color: #fff; border-color: transparent; }
+.ted-feedback.flash { color: #b9b1ff; text-shadow: 0 0 14px rgba(124, 108, 255, 0.8); }
+::selection { background: rgba(124, 108, 255, 0.35); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #0a0c16; }
+::-webkit-scrollbar-thumb { background: #2a2f47; border-radius: 6px; border: 2px solid #0a0c16; }
+::-webkit-scrollbar-thumb:hover { background: #3a4066; }
+@media (max-width: 760px) { .card { border-radius: 14px; padding: 16px 14px; } }
