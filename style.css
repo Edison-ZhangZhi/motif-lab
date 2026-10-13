@@ -365,3 +365,12 @@ footer {
 .ted-advanced summary::before { content: '▸ '; }
 .ted-advanced[open] summary::before { content: '▾ '; }
 .ted-advanced summary:hover { color: var(--acc); }
+
+/* v42 我的采样 */
+.us-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.us-use { font-size: 12px; color: #9aa3c0; display: inline-flex; align-items: center; gap: 5px; }
+.us-pads { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.us-pad { min-width: 76px; padding: 8px 4px; border: 1px solid #3a3f52; border-radius: 8px; background: #1b1e2c; color: #9aa3c0; font-size: 12px; cursor: pointer; text-align: center; }
+.us-pad:hover { border-color: #5a60c0; }
+.us-pad.sel { border-color: #7fb8ff; color: #d7e4ff; }
+.us-pad.has { background: #232a3f; color: #cfe0ff; }

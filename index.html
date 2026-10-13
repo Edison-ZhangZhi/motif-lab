@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Motif Lab · 电吉他动机旋律生成器</title>
-<link rel="stylesheet" href="style.css?v=40">
+<link rel="stylesheet" href="style.css?v=42">
 <script src="lib/Tone.js"></script>
 <script src="lib/soundfont-player.min.js"></script>
 </head>
@@ -16,7 +16,7 @@
     <div class="brand">
       <div class="logo">🎸</div>
       <div>
-        <h1>Motif Lab <span style="font-size:11px;font-weight:400;opacity:.45;vertical-align:middle">v40</span></h1>
+        <h1>Motif Lab <span style="font-size:11px;font-weight:400;opacity:.45;vertical-align:middle">v42</span></h1>
         <p>电吉他动机旋律 · 和弦驱动编曲工作台</p>
       </div>
     </div>
@@ -33,16 +33,6 @@
       <div class="ctl">
         <label>调性</label>
         <select id="ctl-key"></select>
-      </div>
-      <div class="ctl">
-        <label>调式</label>
-        <select id="ctl-mode">
-          <option value="major">自然大调</option>
-          <option value="minor">自然小调</option>
-          <option value="dorian">多利亚 (Dorian)</option>
-          <option value="mixolydian">混合利底亚 (Mixolydian)</option>
-          <option value="lydian">利底亚 (Lydian)</option>
-        </select>
       </div>
       <div class="ctl">
         <label>结构</label>
@@ -192,6 +182,7 @@
               <option value="lite">简洁</option>
               <option value="drive">加密驱动</option>
               <option value="808">808 嘻哈鼓组</option>
+              <option value="user">🎙 我的采样</option>
               <option value="beach">沙滩 · 无鼓组（shaker+贝斯riff）</option>
             </select>
             <input type="range" class="vol" min="0" max="100" value="70">
@@ -233,14 +224,25 @@
 
     <!-- ===================== 和弦进行 ===================== -->
     <section class="card">
-      <h2><span class="step">4</span> 和弦进行 <em>点和弦名试听 · 改级数/性质 → 旋律自动跟随</em></h2>
+      <h2><span class="step">4</span> 和弦进行 <em>选一个走向 · 点和弦名试听</em></h2>
       <div class="prog-toolbar">
         <select id="preset-select"></select>
-        <span class="prog-desc" id="preset-desc"></span>
-        <button id="btn-add-slot" class="btn small">＋ 添加小节</button>
       </div>
       <div class="slots" id="slots"></div>
       <div class="prog-explain" id="prog-explain"></div>
+    </section>
+
+    <!-- ===================== 我的采样 ===================== -->
+    <section class="card">
+      <h2>🎙 我的采样 <em>导入或录制你的声音 → 用软件的鼓点/和声一起创作</em></h2>
+      <div class="us-bar">
+        <button id="btn-us-import" class="btn small">📁 导入音频</button>
+        <button id="btn-us-record" class="btn small">🎤 录制</button>
+        <label class="us-use"><input type="checkbox" id="us-use"> 鼓组使用我的采样</label>
+        <span class="prog-desc" id="us-status"></span>
+        <input type="file" id="us-file" accept="audio/*" hidden>
+      </div>
+      <div class="us-pads" id="us-pads"></div>
     </section>
 
     <!-- ===================== 轨道编辑 ===================== -->
@@ -307,11 +309,11 @@
     </footer>
   </main>
 </div>
-<script src="theory.js?v=40"></script>
-<script src="cells.js?v=40"></script>
-<script src="specs.js?v=40"></script>
-<script src="rules.js?v=40"></script>
-<script src="app.js?v=40"></script>
+<script src="theory.js?v=42"></script>
+<script src="cells.js?v=42"></script>
+<script src="specs.js?v=42"></script>
+<script src="rules.js?v=42"></script>
+<script src="app.js?v=42"></script>
 <script>
 /* v17 性能：注册 Service Worker，预缓存静态资源与鼓采样，二次访问秒开 */
 try {
@@ -330,7 +332,7 @@ try {
 /* v23 缓存幽灵根治②：版本探测兜底——拿线上 sw.js 缓存名对比本页版本（?bust 强制走网络、
    绕开旧 SW 的缓存优先），不一致说明本页是旧 SW 端的旧版 → 强制刷新一次。 */
 (function () {
-  var PAGE_VER = 'v40'; /* 发版三件套：?v=N + 徽章 + 这里 */
+  var PAGE_VER = 'v42'; /* 发版三件套：?v=N + 徽章 + 这里 */
   try {
     fetch('sw.js?bust=' + Date.now()).then(function (r) { return r.text(); }).then(function (t) {
       var m = /motiflab-(v\d+)/.exec(t);

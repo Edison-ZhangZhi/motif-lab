@@ -1381,7 +1381,7 @@ function genDrums() {
     const styleKey = styleKeys.length > 1 ? styleKeys[bar % styleKeys.length] : styleKeys[0];
     const energy = sectionAt(bar).energy;
     let patName = state.layers.drums.patch;
-    if (patName === 'auto' || patName === '808') patName = STYLES[styleKey].drums;
+    if (patName === 'auto' || patName === '808' || patName === 'user') patName = STYLES[styleKey].drums; /* v42：我的采样沿用当前风格鼓型 */
     /* B5 减法过渡：verse 最后一小节抽掉非正拍 kick（把能量推进副歌） */
     const secChange = state.structure === 'song' && bar + 1 < bars && sectionAt(bar + 1).name !== sectionAt(bar).name;
     const subtract = state.structure === 'song' && (secChange || sectionAt(bar + 1).energy - energy > 0.3); /* v5：段落切换前减壳 = vamp 过渡呼吸 */
@@ -2272,6 +2272,45 @@ function playWurliReal(notes, t, dur, vel) {
     played = true;
   }
   return played;
+}
+/* ================= v42 我的采样（导入/录制） =================
+ * 小白录入任意声音 → 映射到鼓件（kick/snare/hat/clap/snap/fx）→ 用本软件鼓点/和声一起创作。
+ * 采样存内存（本会话有效）；走 DRUM_SAMP.bus = 与真鼓同享压缩/混响链路 */
+const USER_SAMPS = { kick: null, snare: null, hat: null, clap: null, snap: null, fx: null };
+let USER_TARGET = 'fx';
+function playUserSample(key, t, vel) {
+  const buf = USER_SAMPS[key];
+  if (!buf) return false;
+  const raw = Tone.getContext().rawContext;
+  const src = raw.createBufferSource();
+  src.buffer = buf;
+  const g = raw.createGain();
+  const v = Math.max(0.05, Math.min(1, vel));
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(v, t + 0.004);
+  g.gain.setValueAtTime(v, Math.max(t + 0.004, t + buf.duration - 0.1));
+  g.gain.exponentialRampToValueAtTime(0.0001, t + buf.duration + 0.15);
+  src.connect(g); g.connect(DRUM_SAMP.bus);
+  src.start(t);
+  return true;
+}
+async function assignUserSample(blob) {
+  try {
+    await ensureAudio();
+    const raw = Tone.getContext().rawContext;
+    const buf = await raw.decodeAudioData(await blob.arrayBuffer());
+    USER_SAMPS[USER_TARGET] = buf;
+    renderUserPads();
+    usStatus('✅ 已放入「' + USER_TARGET + '」格子');
+  } catch (e) { usStatus('❌ 解析失败：' + e.message); }
+}
+function usStatus(msg) { const el = document.getElementById('us-status'); if (el) el.textContent = msg; }
+function renderUserPads() {
+  const wrap = document.getElementById('us-pads');
+  if (!wrap) return;
+  wrap.innerHTML = Object.keys(USER_SAMPS).map(k =>
+    `<button class="us-pad${k === USER_TARGET ? ' sel' : ''}${USER_SAMPS[k] ? ' has' : ''}" data-key="${k}">${k}<br><span style="font-size:10px">${USER_SAMPS[k] ? '● 已放' : '点击选中'}</span></button>`).join('');
+  wrap.querySelectorAll('.us-pad').forEach(b => b.onclick = () => { USER_TARGET = b.dataset.key; renderUserPads(); });
 }
 /* ================= v5.7 声部互锁：治"各播各的" =================
    真实乐队的锁定关系：贝斯 onset 贴底鼓（pocket）、军鼓位留空、键盘避让旋律 onset（应答）。
@@ -3317,6 +3356,13 @@ function scheduleAll() {
         + drumTimeShift(dStyle, e.inst, e.step16);
       Tone.getTransport().schedule(tt0 => { const tt = Math.max(0, tt0 + doff); /* v24：负微时值钳 0 */
         const kit = e.kit || DRUM_KITS.rnb;
+        /* v42 我的采样：用户导入/录制的样本替代对应鼓件 */
+        if (state.layers.drums.patch === 'user') {
+          const uk = { kick: 'kick', snare: 'snare', hat: 'hat', ohat: 'hat', clap: 'clap', snap: 'snap', ride: 'hat', crash: 'fx', congaH: 'fx', congaL: 'fx', bell: 'fx', shekere: 'hat', shaker: 'hat' }[e.inst];
+          if (uk && playUserSample(uk, tt, e.vel)) return;
+          if (e.sub) trig808kick(tt + 0.002, e.vel * 0.5);
+          return;
+        }
         const smp = (inst) => {
           const n = kit[inst]; if (!n) return false;
           /* v15：jazz ride 无采样——复用 crash 低力度+低通变暗+缩短衰减模拟 ride 叮声 */
@@ -3600,9 +3646,9 @@ function preRenderArrangement() {
   _preTimer = setTimeout(() => {
     if (!state.arrDirty || state.playing || _arrRendering) return;
     if (!state.audioReady || !AE.ready) return; /* 音频图未建不渲（warmup 完成后编排再改会再触发） */
-    /* v26：短编曲走实时播放，无需离线渲染（省 CPU）；v41：阈值与 togglePlay 同步 800→500 */
-    const evCount = melodyEvents.length + bassEvents.length + keysEvents.length + synthEvents.length + hornEvents.length + drumEvents.length;
-    if (evCount < 500) return;
+    /* v26：空闲时后台预渲染（点播放零等待）；v42：全量预渲染（实时路径已退役） */
+    const evCount2 = melodyEvents.length + bassEvents.length + keysEvents.length + synthEvents.length + hornEvents.length + drumEvents.length;
+    void evCount2;
     ensureRendered(false);
   }, 1200);
 }
@@ -3652,11 +3698,10 @@ async function togglePlay() {
   }
   /* v26：短编曲（事件少）直接实时排程播放——零渲染等待，编辑→播放秒开；
      只有长编曲（40 小节歌 / 32 小节 groove，数千事件）才走离线渲染（且已后台预渲染）。 */
+  /* v42：实时排程路径退役——弱机上实时排程仍是偶发卡顿源；所有编曲一律走预渲染 buffer（零卡顿），
+     配合 v39 自动刷新（改完自动重渲染续播）与 v26 空闲预渲染（点播放零等待）体验不降级 */
   const evCount = melodyEvents.length + bassEvents.length + keysEvents.length + synthEvents.length + hornEvents.length + drumEvents.length;
-  if (evCount < 500) { /* v41：800→500——弱机实时排程仍是卡顿源，更多编曲走零卡顿 buffer 路径（配合 v39 自动刷新，改完即换） */
-    startRealtimePlayback();
-    return;
-  }
+  void evCount;
   if (await ensureRendered(true)) {
     if (!state.arrDirty) { startBufferPlayback(); sampStatus(''); return; }
     if (await ensureRendered(true)) { startBufferPlayback(); sampStatus(''); return; } /* 渲染期间又改 → 再渲一版（罕见） */
@@ -4383,30 +4428,27 @@ const STYLE_SETUP = {
 function syncPresetSelect() {
   const ps = document.getElementById('preset-select');
   if (!ps) return;
-  const match = PRESETS.filter(p => p.styles.some(s => state.styles.includes(s)));
-  const hadCustom = [...ps.options].some(o => o.value === 'custom');
-  ps.innerHTML = match.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
-  if (hadCustom) { const o = document.createElement('option'); o.value = 'custom'; o.textContent = '自定义进行'; ps.appendChild(o); }
-  if (state.presetId === 'custom') ps.value = 'custom';
-  else if (match.some(p => p.id === state.presetId)) ps.value = state.presetId;
-  else if (match.length) loadPreset(match[0].id); /* 当前走向与风格不符 → 自动换成本风格招牌走向 */
+  /* v42：全部走向按风格分组陈列（optgroup），不再按当前风格过滤、不再自动换走向 */
+  const order = ['rnb', 'soul', 'jazz', 'rock', 'bossa', 'funk', 'reggae', 'afro', 'afrobeats', 'hiphop'];
+  const groups = {};
+  for (const p of PRESETS) {
+    const g = order.find(s => p.styles.includes(s)) || p.styles[0] || 'other';
+    (groups[g] = groups[g] || []).push(p);
+  }
+  ps.innerHTML = Object.entries(groups).map(([g, list]) =>
+    `<optgroup label="${(STYLES[g] || { name: g }).name}">` +
+    list.map(p => `<option value="${p.id}">${p.name}</option>`).join('') + `</optgroup>`).join('');
+  if (state.presetId && PRESETS.some(p => p.id === state.presetId)) ps.value = state.presetId;
 }
 
-/* 风格档案面板：渲染当前 SPEC 卡 */
+/* 风格档案面板：v42 只写风格名（参考曲/BPM 等细节不再展示） */
 function renderSpecPanel() {
   const el = document.getElementById("spec-panel");
   if (!el) return;
-  if (state.styles.length !== 1) { el.innerHTML = "<span class='spec-multi'>融合模式：" + state.styles.map(k => SPEC_META[k] ? SPEC_META[k].name : k).join(" + ") + "（档案需单风格查看）</span>"; return; }
-  const sp = getSpec(state.styles[0]);
-  if (!sp) { el.innerHTML = ""; return; }
-  const chk = specCompleteness(sp.key);
-  el.innerHTML =
-    "<div class=spec-title>风格档案 · " + sp.name + (chk.ok ? " <em>规格完整 ✓</em>" : " <em style=color:#c2452d>缺:" + chk.missing.join(",") + "</em>") + "</div>" +
-    "<div class=spec-row><b>参考曲</b>" + sp.referenceSongs.map(x => "<i>" + x + "</i>").join("、") + "</div>" +
-    "<div class=spec-row><b>BPM</b>" + sp.bpmRange[0] + "-" + sp.bpmRange[1] + " <b>律动</b>" + sp.groove + "</div>" +
-    "<div class=spec-row><b>和声语法</b>" + sp.harmony + "</div>" +
-    "<div class=spec-row><b>声音目标</b>" + sp.soundTarget + "</div>" +
-    "<div class=spec-row><b>引擎件</b>细胞" + sp.cellCount + " · 鼓预算" + sp.budget + "/小节 · 预设[" + sp.presets.length + "] · DNA密度" + sp.dnaDensity + "</div>";
+  const sp = state.styles.length === 1 ? getSpec(state.styles[0]) : null;
+  el.innerHTML = sp
+    ? `<div class="spec-title">风格档案 · ${sp.name}</div>`
+    : `<div class="spec-title">风格档案 · ${state.styles.map(k => STYLES[k] ? STYLES[k].name : k).join(' + ')}</div>`;
 }
 
 function setStyles(list) {
@@ -4464,7 +4506,7 @@ function populateStatic() {
 
 function updatePresetDesc() {
   const p = PRESETS.find(x => x.id === state.presetId);
-  $('#preset-desc').textContent = p ? p.desc : '自定义进行';
+  const pd = document.getElementById('preset-desc'); if (pd) pd.textContent = p ? p.desc : ''; /* v42：描述区已从 UI 移除 */
 }
 
 /* ---------- 音阶显示 ---------- */
@@ -4480,46 +4522,17 @@ function renderSlots() {
   const wrap = $('#slots');
   wrap.innerHTML = '';
   chordTimeline.forEach((chord, i) => {
-    const slot = state.slots[i];
     const div = document.createElement('div');
     div.className = 'slot';
     div.innerHTML = `
       <div class="slot-head">
         <span class="bar-num">小节 ${i + 1}</span>
         <button class="audition" title="试听">▶</button>
-        ${state.slots.length > 2 ? '<button class="del" title="删除">×</button>' : ''}
       </div>
       <div class="chord-name" title="点击试听">${chord.name}</div>
-      <div class="roman">${chord.roman}<sup style="font-size:9px">${chord.ext}</sup></div>
-      <select class="deg-sel" title="级数">
-        ${[1, 2, 3, 4, 5, 6, 7].map(d => {
-          const opts = [{ v: 0, t: '' }, { v: -1, t: '♭' }, { v: 1, t: '♯' }]
-            .map(a => `<option value="${d}:${a.v}" ${slot.d === d && (slot.acc || 0) === a.v ? 'selected' : ''}>${a.t}${ROMAN[d - 1]}</option>`).join('');
-          return opts;
-        }).join('')}
-      </select>
-      <select class="q-sel" title="和弦性质">
-        <option value="auto" ${slot.q === 'auto' ? 'selected' : ''}>自动（按风格延伸）</option>
-        ${CHORD_GROUPS.map(g => `<optgroup label="${g.title}">${
-          Object.keys(CHORDS).filter(k => CHORDS[k].grp === g.grp)
-            .map(k => `<option value="${k}" ${slot.q === k ? 'selected' : ''}>${CHORDS[k].sym || '三和弦'} · ${CHORDS[k].label}</option>`).join('')
-        }</optgroup>`).join('')}
-      </select>
-      <div class="chord-tones">${chord.iv.map(iv => pcName(chord.rootPC + iv)).join(' · ')}</div>
-      <div class="chord-func">${chord.func}</div>`;
+      <div class="roman">${chord.roman}<sup style="font-size:9px">${chord.ext}</sup></div>`;
     div.querySelector('.audition').onclick = () => auditionChord(i);
     div.querySelector('.chord-name').onclick = () => auditionChord(i);
-    const del = div.querySelector('.del');
-    if (del) del.onclick = () => { state.slots.splice(i, 1); regenerate('chord'); };
-    div.querySelector('.deg-sel').onchange = ev => {
-      const [d, a] = ev.target.value.split(':').map(Number);
-      state.slots[i].d = d; state.slots[i].acc = a;
-      markCustom(); regenerate('chord');
-    };
-    div.querySelector('.q-sel').onchange = ev => {
-      state.slots[i].q = ev.target.value;
-      markCustom(); regenerate('chord');
-    };
     wrap.appendChild(div);
   });
   renderExplain();
@@ -5311,7 +5324,7 @@ function loadPreset(id) {
   if (!p) return;
   state.presetId = id;
   state.slots = p.slots.map(s => ({ d: s.d, acc: s.acc || 0, q: s.q || 'auto' }));
-  if (p.mode) { state.mode = p.mode; $('#ctl-mode').value = p.mode; }
+  if (p.mode) { state.mode = p.mode; const mEl = document.getElementById('ctl-mode'); if (mEl) mEl.value = p.mode; }
   updatePresetDesc();
   regenerate('preset');
 }
@@ -5331,7 +5344,8 @@ function bindEvents() {
     reScheduleDebounced();
   };
   $('#ctl-key').onchange = e => { state.keyRoot = +e.target.value; regenerate('key'); };
-  $('#ctl-mode').onchange = e => { state.mode = e.target.value; regenerate('mode'); };
+  const modeEl = document.getElementById('ctl-mode'); /* v42：调式选择已从 UI 移除（预设自带调式框架） */
+  if (modeEl) modeEl.onchange = e => { state.mode = e.target.value; regenerate('mode'); };
   $('#ctl-master').oninput = e => { state.master = e.target.value / 100; applyMix(); };
 
   /* 风格 */
@@ -5429,7 +5443,41 @@ function bindEvents() {
 
   /* 进行 */
   $('#preset-select').onchange = e => loadPreset(e.target.value);
-  $('#btn-add-slot').onclick = () => {
+  /* ===== v42 我的采样（导入/录制）绑定 ===== */
+  if (document.getElementById('us-pads')) {
+    renderUserPads();
+    const usFile = document.getElementById('us-file');
+    const btnImp = document.getElementById('btn-us-import');
+    const btnRec = document.getElementById('btn-us-record');
+    const usUse = document.getElementById('us-use');
+    if (btnImp) btnImp.onclick = () => usFile && usFile.click();
+    if (usFile) usFile.onchange = () => { const f = usFile.files && usFile.files[0]; if (f) assignUserSample(f); };
+    let _usRec = null, _usChunks = [];
+    if (btnRec) btnRec.onclick = async () => {
+      if (_usRec && _usRec.state === 'recording') { _usRec.stop(); return; }
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { usStatus('❌ 当前浏览器不支持录音'); return; }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        _usChunks = [];
+        _usRec = new MediaRecorder(stream);
+        _usRec.ondataavailable = ev => { if (ev.data && ev.data.size) _usChunks.push(ev.data); };
+        _usRec.onstop = async () => {
+          stream.getTracks().forEach(t => t.stop());
+          const blob = new Blob(_usChunks, { type: _usRec.mimeType || 'audio/webm' });
+          await assignUserSample(blob);
+        };
+        _usRec.start();
+        usStatus('🔴 录音中…再点一次「🎤 录制」停止');
+      } catch (err) { usStatus('❌ 无法录音（需允许麦克风权限）：' + err.message); }
+    };
+    if (usUse) usUse.onchange = ev => {
+      state.layers.drums.patch = ev.target.checked ? 'user' : 'auto';
+      const dp = document.querySelector('.layer[data-layer="drums"] .patch'); if (dp) dp.value = state.layers.drums.patch;
+      reScheduleDebounced();
+    };
+  }
+  const addSlotBtn = document.getElementById('btn-add-slot'); /* v42：级数编辑已移除；守卫防旧 UI 空引用 */
+  if (addSlotBtn) addSlotBtn.onclick = () => {
     const last = state.slots[state.slots.length - 1];
     state.slots.push({ ...last });
     markCustom(); regenerate('add');
