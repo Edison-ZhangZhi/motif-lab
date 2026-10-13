@@ -3588,10 +3588,18 @@ function stopBufferPlayback() {
 
 async function ensureAudio() {
   if (typeof Tone === 'undefined') return false;
-  /* v26：离线渲染换挂全局 context 的窗口内建 live 图 = 节点挂死。先等窗口结束（≤6s） */
+  /* v47："点播放没反应"根因修复——旧逻辑在后台预渲染换挂窗口内等 6 秒就放弃返回 false，
+     用户反复点都失败。改为：等渲染结束（≤15s、可见进度）再建 live 图；
+     仍超时则强制复位换挂标志兜底（渲染 finally 会自愈）。 */
   let guard = 0;
-  while (_arrSwapped && guard++ < 20) await new Promise(r => setTimeout(r, 300));
-  if (_arrSwapped) { sampStatus('🎧 正在后台渲染编曲，稍等一下下…'); return false; }
+  while (_arrSwapped && guard++ < 50) {
+    if (guard === 1) sampStatus('⏳ 正在准备音频引擎（后台渲染收尾中）…');
+    await new Promise(r => setTimeout(r, 300));
+  }
+  if (_arrSwapped) {
+    _arrSwapped = false; _arrRendering = false;
+    sampStatus('⚠ 后台渲染超时，已强制恢复音频引擎');
+  }
   if (!state.audioReady) { buildAudio(); state.audioReady = true; ensureBuses(); /* v27：建图即建采样总线——游戏垫/试听不依赖 SF 加载才出声 */ const gp = SAMP_GUITAR[state.layers.guitar.patch]; if (gp) ensureSample(gp); loadGuitarSamples(); loadBassSamples(); loadDrumSamples(); loadInstruments(); loadWurliSamples(); renderMetalBufs(); /* v17：与 warmupAudio 同优先级序；v41：自托管 Wurli */ }
   try {
     await Tone.start();
@@ -3690,8 +3698,13 @@ async function togglePlay() {
     return;
   }
   if (state.playing) { stopPlayback(); return; }
+  /* v47：点击即时反馈（⏳），并把整条启动链包进 try/catch——任何异常都可见，绝不"点不动" */
+  const bp = document.getElementById('btn-play');
+  if (bp) bp.textContent = '⏳ 启动…';
+  try {
   if (!(await ensureAudio())) {
     sampStatus('⚠ 音频引擎未唤醒，请再点一次播放（浏览器自动播放限制）'); /* v19：原静默 return，用户以为按钮坏了 */
+    updatePlayBtn();
     return;
   }
   stopGameMetro(); /* v26：主播放与新手模式节拍器互斥 */
@@ -3715,6 +3728,11 @@ async function togglePlay() {
   }
   /* 渲染失败兜底：回退实时排程路径（v19 原逻辑，保留可用性） */
   if (tok === _playToken) startRealtimePlayback(true);
+  } catch (playFail) {
+    console.error('播放启动异常', playFail);
+    sampStatus('⚠ 播放启动异常：' + (playFail && playFail.message ? playFail.message : playFail));
+    updatePlayBtn();
+  }
 }
 function updatePlayBtn() {
   const b = document.getElementById('btn-play');
