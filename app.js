@@ -1238,7 +1238,7 @@ function genKeys() {
       /* reggae 默认伴奏 = skank：2/4 拍反拍 chop + 八分反拍 bubble 轻垫（同 auto 分支语汇） */
       for (const s of [4, 12]) ev.push({ beat: bar * BPB() + s / SPB(), notes: voicing, dur: 0.22, vel: 0.5 + rng() * 0.1, inst: 'keys' });
       for (const s of [2, 6, 10, 14]) ev.push({ beat: bar * BPB() + s / SPB(), notes: voicing.slice(0, 3), dur: 0.14, vel: 0.3 + rng() * 0.08, inst: 'keys' });
-    } else if (patch === 'comp' && styleKey === 'rnb') {
+    } else if (patch === 'comp' && (styleKey === 'rnb' || styleKey === 'soul')) { /* v39：soul 并入（v37 只改了 rnb 条件，soul 一直没进新编曲=漏改） */
       /* v34：Neo-Soul Rhodes 反拍 comp——在"&"上呼吸，正拍留给贝斯/鼓（patch=comp 路径）。
          NEO_COMP2 结构与 COMP_PATTERNS 同：每个"型"=若干 [拍, 时值] 对，pick 返回一个型 */
       const NEO_COMP2 = [
@@ -3625,7 +3625,25 @@ function reScheduleIfPlaying() {
 let _rsTimer = null;
 function reScheduleDebounced() {
   clearTimeout(_rsTimer);
-  _rsTimer = setTimeout(reScheduleIfPlaying, 160);
+  _rsTimer = setTimeout(() => {
+    reScheduleIfPlaying();
+    /* v39：buffer 播放中改编排 → 自动重渲染并续播。
+       旧行为"正在播的旧 buffer 继续播完"让用户切走向/改风格后听感"完全没变"——这是主因之一 */
+    if (state.playing && ARR.src) {
+      sampStatus('编曲已改，正在刷新…');
+      (async () => {
+        try {
+          if (await ensureRendered(true)) {
+            stopBufferPlayback();
+            startBufferPlayback(); /* 换新 buffer 续播（位置从头） */
+            sampStatus('');
+          } else {
+            startRealtimePlayback(true); /* 渲染失败回退实时排程 */
+          }
+        } catch (e) {}
+      })();
+    }
+  }, 500);
 }
 
 async function auditionLayer(layer) {
