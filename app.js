@@ -5511,15 +5511,7 @@ function bindEvents() {
       }
     })(0);
   }
-  document.querySelectorAll('.card').forEach(card => {
-    card.addEventListener('mousemove', e => {
-      const r = card.getBoundingClientRect();
-      const dx = (e.clientX - r.left) / r.width - 0.5;
-      const dy = (e.clientY - r.top) / r.height - 0.5;
-      card.style.transform = 'rotateY(' + (dx * 3.2).toFixed(2) + 'deg) rotateX(' + (-dy * 3.2).toFixed(2) + 'deg) translateZ(3px)';
-    }, { passive: true });
-    card.addEventListener('mouseleave', () => { card.style.transform = ''; });
-  });
+  /* v45：卡片 3D 倾斜移除——backdrop-filter + 3D transform 组合在 Chrome 会导致卡片内容消失（UI 组件加载不完全） */
   const addSlotBtn = document.getElementById('btn-add-slot'); /* v42：级数编辑已移除；守卫防旧 UI 空引用 */
   if (addSlotBtn) addSlotBtn.onclick = () => {
     const last = state.slots[state.slots.length - 1];
