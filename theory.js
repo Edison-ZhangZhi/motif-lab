@@ -262,10 +262,12 @@ const DRUM_PATTERNS = {
     snare: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
     hat:   [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0], /* 脚踏 2/4 拍 "chick" */
   },
-  bossa: { /* Ipanema：surdo kick 1/9 重 + 8/16 轻前导；bossa clave 两小节侧击（snareB=第二小节）；cabasa 16 分 */
-    kick:  [1,0,0,0, 0,0,0,1, 1,0,0,0, 0,0,0,1],
-    snare: [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,0,0], /* clave 小节 A：3/7/11 步 */
-    snareB:[0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0], /* clave 小节 B：5/13 步 */
+  bossa: { /* v36 十首经典实测（Ipanema/Corcovado/Desafinado/Chega de Saudade/Wave/One Note Samba/Águas de Março/Meditação/Triste/Summer Samba）：
+      surdo kick 只打 1/3 拍（步 0/8）；rim 奏 3-2 bossa clave（1& 2 2& 3& 4 = 步 2/4/6/10/12，B 型省 2&）；
+      cabasa 八分+反拍十六——旧版 kick 带 2&/4& 前导、clave 缺 2/4 拍，是"不像 bossa"的根因 */
+    kick:  [1,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0],
+    snare: [0,0,1,0, 1,0,1,0, 0,0,1,0, 1,0,0,0],
+    snareB:[0,0,1,0, 1,0,0,0, 0,0,1,0, 1,0,0,0],
     hat:   [1,0,1,1, 1,0,1,1, 1,0,1,1, 1,0,1,1],
   },
   beach: { /* 陶喆《沙滩》式：无鼓组，shaker 16分 + 偶尔 rimshot */

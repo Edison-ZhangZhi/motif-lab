@@ -1159,7 +1159,7 @@ function genKeys() {
     [[1, 2], [3, 2]], [[2, 2], [3.5, 1.5]], [[1.5, 2], [3, 2]],
     [[2, 4], [3.5, 1]], [[0.5, 2], [2.5, 2]], [[1, 1.5], [2.5, 2], [3.5, 1]],
   ];
-  const BOSSA_KEYS = [[0, 2], [1.5, 2], [2.5, 2], [3, 2], [3.75, 1]];
+  const BOSSA_KEYS = [[0, 1.8], [1.5, 0.6], [2, 1.8], [2.5, 0.55], [3.5, 0.7]]; /* v36 João Gilberto batida：根音 1/3 拍长音 + 2&/3&/4& 和弦刺（Corcovado/Ipanema 实录） */
   /* A2 答句生成器：旋律在前半句收住（留出 ≥1 拍）→ 键盘在后半句作答（力度 ×0.55） */
   const melodyGapAnswer = (bar, hits) => {
     const mInBar = melodyEvents.filter(m => Math.floor(m.beat / 4) === bar);
@@ -1187,7 +1187,7 @@ function genKeys() {
           ev.push({ beat: bar * BPB() + i * 0.5, notes: power, dur: 0.28, vel: i % 2 === 0 ? 0.62 : 0.48, inst: 'guitar:muted' });
         }
       } else if (styleKey === 'bossa') {
-        for (const [b, d] of BOSSA_KEYS) ev.push({ beat: bar * BPB() + b, notes: voicing, dur: Math.min(d, BPB() - b), vel: 0.5 + rng() * 0.1, inst: 'guitar:nylon' });
+        for (const [b, d] of BOSSA_KEYS) ev.push({ beat: bar * BPB() + b, notes: voicing, dur: Math.min(d, BPB() - b), vel: (b === 0 || b === 2) ? 0.6 : 0.45, inst: 'guitar:nylon' }); /* v36：根音亮、和弦刺轻（batida 层级） */
       } else if (styleKey === 'afro') {
         /* A4 一疏一密（Fela 双吉他互锁）：偶数小节全 chop，奇数小节只留抢拍 stub */
         const stabs = bar % 2 === 0 ? [[2, 1.5], [6, 1.5], [10, 1.5], [13, 1], [14, 2]] : [[13, 1], [14, 2]];
@@ -1228,7 +1228,7 @@ function genKeys() {
       const stabs = [[2, 1.5], [6, 1.5], [10, 1.5], [13, 1], [14, 2]];
       for (const [b, d] of stabs) ev.push({ beat: bar * BPB() + b / SPB(), notes: voicing, dur: d / SPB(), vel: 0.42 + rng() * 0.14, inst: 'keys' });
     } else if (patch === 'bossa' || (patch === 'comp' && styleKey === 'bossa' && rng() < 0.5)) {
-      for (const [b, d] of BOSSA_KEYS) ev.push({ beat: bar * BPB() + b, notes: voicing, dur: Math.min(d, BPB() - b), vel: 0.55 + rng() * 0.1, inst: 'keys' });
+      for (const [b, d] of BOSSA_KEYS) ev.push({ beat: bar * BPB() + b, notes: voicing, dur: Math.min(d, BPB() - b), vel: (b === 0 || b === 2) ? 0.62 : 0.48, inst: 'keys' }); /* v36：Jobim 钢琴同 batida 形 */
     } else if (patch === 'comp' && styleKey === 'funk') {
       /* funk 默认伴奏 = clavinet 式十六分顿奏（同 auto 分支语汇，Rhodes 短 stab 近似 clav 咬合） */
       for (const s of [0, 3, 6, 8, 11, 14]) ev.push({ beat: bar * BPB() + s / SPB(), notes: voicing, dur: 0.16, vel: (s % 8 === 0 ? 0.55 : 0.38) + rng() * 0.08, inst: 'keys' });
@@ -1248,6 +1248,12 @@ function genKeys() {
         [[2.5, 1], [3.5, 1.5], [3.75, 1]],
       ];
       for (const [b, d] of pick(rng, NEO_COMP2)) ev.push({ beat: bar * BPB() + b, notes: voicing, dur: Math.min(d, BPB() - b), vel: 0.44 + rng() * 0.12, inst: 'keys' });
+      /* v36：吉他和弦垫层——十首参考曲（Best Part/Japanese Denim/Untitled/Heartbreak Anniversary/Snooze/On & On/Brown Sugar/Love Song/Easy/Focus）共性：
+         Rhodes 背后有 clean guitar 轻铺和弦，是"那味儿"的关键织体层 */
+      if (rng() < 0.75) {
+        const gStabs = pick(rng, [[2.5], [1.5, 3.5], [2.5, 3.75], [1.5]]);
+        for (const s of gStabs) ev.push({ beat: bar * BPB() + s, notes: voicing, dur: 0.45, vel: 0.3 + rng() * 0.08, inst: 'guitar:clean' });
+      }
     } else if (patch === 'pad') {
       ev.push({ beat: bar * BPB(), notes: voicing, dur: Math.max(1, BPB() - 0.2), vel: 0.42, inst: 'keys' });
     } else {
@@ -2238,8 +2244,10 @@ function interlockPass() {
     if (snareBeats.some(s => Math.abs(e.beat - s) <= 0.04)) e.beat += 0.25;
   }
   /* 3) 键盘避让旋律：comping 撞旋律 onset → 后移 1/16 成应答（撞=糊；让=call-response）
-        v32：窗口保持 ±60ms（贝斯锁鼓的 0.25 窗口太激进——会把差 0.1 拍的键盘挪到下一个十六分，反而撞上新旋律音） */
+        v32：窗口保持 ±60ms（贝斯锁鼓的 0.25 窗口太激进——会把差 0.1 拍的键盘挪到下一个十六分，反而撞上新旋律音）
+        v36：bossa 跳过——João Gilberto batida 的根音必须钉在 1/3 拍，挪位会毁掉 batida */
   for (const e of keysEvents) {
+    if (state.styles.length === 1 && state.styles[0] === 'bossa') break;
     if (melodyEvents.some(m => Math.abs(m.beat - e.beat) <= 0.06)) e.beat += 0.25;
   }
   /* 4) 吸合去重 + 边界回收 */
@@ -3152,10 +3160,17 @@ function scheduleAll() {
       const kduck = duckMulAt(e.beat, 0.85); /* B6：kick/snare 后和声闪避（v15 0.68→0.85：深度闪避把 comping 泵没了） */
       Tone.getTransport().schedule(tt2 => { const tt = Math.max(0, tt2 + koff); /* v24：负微时值钳 0 */
         const gi = e.inst && e.inst.startsWith('guitar:') ? e.inst.slice(7) : null;
-        const gInst = gi && sampOf(SAMP_GUITAR[gi], 'guitar');
-        /* v19：play 返回 false=音未解码 → 继续走下方 keys 兜底链 */
+        /* v36：guitar: comp 层优先走真采样（Karoryfer），GM SF 只做兜底——rock 强力和弦/afro chop/rnb 吉他层音质升级 */
+        if (gi) {
+          let gPlayed = false;
+          const styk = styleOfBar(e.beat);
+          for (const n of e.notes) gPlayed = playGuitarReal(gi, n, tt, dur, e.vel * kduck, null, false, styk) || gPlayed;
+          const gInst = sampOf(SAMP_GUITAR[gi], 'guitar');
+          if (!gPlayed && gInst) { sfBright('guitar', e.vel * kduck, tt); for (const n of e.notes) gPlayed = gInst.play(n, tt, { duration: dur, gain: e.vel * kduck, cents: sfRepeatCents('guitar', n, tt) }) !== false || gPlayed; }
+          if (!gPlayed) AE.guitar.triggerAttackRelease(names, dur, tt, e.vel * kduck);
+          return;
+        }
         let gPlayed = false;
-        if (gInst) { sfBright('guitar', e.vel * kduck, tt); for (const n of e.notes) gPlayed = gInst.play(n, tt, { duration: dur, gain: e.vel * 1.0 * kduck, cents: sfRepeatCents('guitar', n, tt) }) !== false || gPlayed; }
         if (!gPlayed && ks === '@vibes') AE.keysVibes.triggerAttackRelease(names, dur, tt, e.vel * 0.95 * kduck); /* v35：0.85→0.95 可闻性 */
         else if (!gPlayed && ks === '@fmrhodes') {
           /* v13 优先级：smplr Wurlitzer 采样 → v12 FM tine 兜底（v21：FM tine 已离线渲染成采样，~40ms/次 → <0.5ms）

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Motif Lab · 电吉他动机旋律生成器</title>
-<link rel="stylesheet" href="style.css?v=35">
+<link rel="stylesheet" href="style.css?v=36">
 <script src="lib/Tone.js"></script>
 <script src="lib/soundfont-player.min.js"></script>
 </head>
@@ -16,7 +16,7 @@
     <div class="brand">
       <div class="logo">🎸</div>
       <div>
-        <h1>Motif Lab <span style="font-size:11px;font-weight:400;opacity:.45;vertical-align:middle">v35</span></h1>
+        <h1>Motif Lab <span style="font-size:11px;font-weight:400;opacity:.45;vertical-align:middle">v36</span></h1>
         <p>电吉他动机旋律 · 和弦驱动编曲工作台</p>
       </div>
     </div>
@@ -307,11 +307,11 @@
     </footer>
   </main>
 </div>
-<script src="theory.js?v=35"></script>
-<script src="cells.js?v=35"></script>
-<script src="specs.js?v=35"></script>
-<script src="rules.js?v=35"></script>
-<script src="app.js?v=35"></script>
+<script src="theory.js?v=36"></script>
+<script src="cells.js?v=36"></script>
+<script src="specs.js?v=36"></script>
+<script src="rules.js?v=36"></script>
+<script src="app.js?v=36"></script>
 <script>
 /* v17 性能：注册 Service Worker，预缓存静态资源与鼓采样，二次访问秒开 */
 try {
@@ -330,7 +330,7 @@ try {
 /* v23 缓存幽灵根治②：版本探测兜底——拿线上 sw.js 缓存名对比本页版本（?bust 强制走网络、
    绕开旧 SW 的缓存优先），不一致说明本页是旧 SW 端的旧版 → 强制刷新一次。 */
 (function () {
-  var PAGE_VER = 'v35'; /* 发版三件套：?v=N + 徽章 + 这里 */
+  var PAGE_VER = 'v36'; /* 发版三件套：?v=N + 徽章 + 这里 */
   try {
     fetch('sw.js?bust=' + Date.now()).then(function (r) { return r.text(); }).then(function (t) {
       var m = /motiflab-(v\d+)/.exec(t);
