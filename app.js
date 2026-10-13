@@ -1452,15 +1452,15 @@ function genDrums() {
       if (Pv.kick && kickRow[s]) {
         if (subtract && s % 4 !== 0) { /* B5 减法：正拍 kick 保留，其余抽掉 */ }
         else {
-          push('kick', (patName === 'jazz' ? 0.3 : (patName === 'bossa' ? 0.55 : (patName === 'afro' ? 0.7 : 1))) * (s % 4 === 0 ? 1.0 : 0.85) * (0.9 + rng() * 0.2)); /* v15 ±10% 力度随机 */
+          push('kick', (patName === 'jazz' ? 0.45 : (patName === 'bossa' ? 0.55 : (patName === 'afro' ? 0.7 : 1))) * (s % 4 === 0 ? 1.0 : 0.85) * (0.9 + rng() * 0.2)); /* v15 ±10% 力度随机；v35：jazz feather 0.3→0.45（可闻但轻） */
           /* B2 强 kick 叠 808 次低音层（rnb/hiphop） */
           if ((styleKey === 'rnb' || styleKey === 'hiphop') && s % 8 === 0) ev[ev.length - 1].sub = true;
         }
       }
       if (patName === 'jazz') {
         /* 爵士军鼓 = 反拍应答 comping，不是摇滚式 backbeat；填充落在 7/11/15 步轻击 */
-        if (snareRow && snareRow[s] && !isThinSec && rng() < 0.35) push('snare', 0.5);
-        if ((s === 6 || s === 10 || s === 14) && !isThinSec && rng() < 0.22) push('snare', 0.32);
+        if (snareRow && snareRow[s] && !isThinSec && rng() < 0.55) push('snare', 0.62); /* v35：35%→55%、0.5→0.62（可闻但轻） */
+        if ((s === 6 || s === 10 || s === 14) && !isThinSec && rng() < 0.3) push('snare', 0.38); /* v35：22%→30% */
       } else if (snareRow && snareRow[s]) {
         if (!isThinSec) {
           if (patName === 'bossa') {
@@ -1488,7 +1488,7 @@ function genDrums() {
       if (Pv.ohat && Pv.ohat[s] && density !== 'lite') push('ohat', 0.6);
       /* N5 rock verse 开镲：15% 概率在反拍点开镲（GNR 式动态） */
       if (patName === 'rock' && !rockChorus && s % 4 === 2 && rng() < 0.15) push('ohat', 0.5);
-      if (Pv.ride && Pv.ride[s]) push('ride', s % 4 === 0 ? 0.8 : 0.5);
+      if (Pv.ride && Pv.ride[s]) push('ride', s % 4 === 0 ? 0.9 : 0.62); /* v35：ride 提量（jazz spang-a-lang 是律动轴，得听见） */
       if (Pv.crash && Pv.crash[s] && (bar % 4 === 0 || rockChorus)) push('crash', styleKey === 'rock' ? 0.5 : 0.7);
       if (Pv.congaH && Pv.congaH[s]) push('congaH', 0.7);
       if (Pv.congaL && Pv.congaL[s]) push('congaL', 0.65);
@@ -1778,7 +1778,8 @@ function buildAudio() {
     for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; c[i] = Math.tanh(x * 1.6) / Math.tanh(1.6); }
     return c;
   })(), 1024);
-  AE.masterClip.oversample = '2x';
+  /* v35：去掉 2x 过采样——全混音都过这个软削波器，2x=主链 CPU×2（低端机 rock 实时播放"卡"的嫌疑主犯）；
+     tanh 曲线本身是平滑的，欠采样混叠可忽略 */
   AE.limiterRef = new Tone.Limiter(-0.5);
   AE.master.connect(AE.masterEq);
   AE.masterEq.connect(AE.masterMB);
@@ -1982,7 +1983,7 @@ function buildAudio() {
     modulation: { type: 'sine' },
     modulationEnvelope: { attack: 0.002, decay: 0.25, sustain: 0.3, release: 0.5 },
   }).connect(nativeInputOf(AE.keysVol)); /* v14：颤音琴也过键盘层推子 */
-  AE.keysVibes.volume.value = -4;
+  AE.keysVibes.volume.value = -2; /* v35：-4→-2，jazz 颤音琴可闻（"jazz 只有贝斯声"修复） */
   AE.drumsVol.connect(AE.drumsComp);
   AE.drumsVol.connect(AE.drumsPar);
   AE.drumsPar.connect(AE.drumsParGain);
@@ -2053,7 +2054,7 @@ const GUITAR_SETS = {
 const GUITAR_PATCH_MAP = { clean:'electric', crunch:'electric', dist:'electric', jazz:'electric', muted:'electric', harmonics:'electric', delay:'electric', steel:'acoustic', nylon:'acoustic' };
 /* v4 吉他双源（§2.1）：rnb/jazz/bossa = SoundFont 连音乐句（滑音/长音可控）；
    rock/hiphop/afro = 真实单音采样（颗粒/riff 质感优先），SoundFont 兜底 */
-const GUITAR_SRC_BY_STYLE = { rnb: 'samp', jazz: 'sf', bossa: 'sf', rock: 'samp', hiphop: 'samp', afro: 'samp',
+const GUITAR_SRC_BY_STYLE = { rnb: 'samp', jazz: 'samp', bossa: 'samp', rock: 'samp', hiphop: 'samp', afro: 'samp', /* v35：jazz/bossa 弃 GM 吉他采样 → 真采样（GM 吉他=气若游丝+塑料，是"jazz 只有贝斯声"的原因之一） */
   funk: 'samp', soul: 'sf', reggae: 'samp', afrobeats: 'samp' }; /* v4.2 rnb 走采样：滑音/揉弦/前音闪避才谈得上流动性 */
 /* funk/reggae/afrobeats = 打击化 chop/拨弦 → 真实单音采样；soul = 长连音歌唱线 → SoundFont（同 jazz/bossa 理由） */
 /* 按 patch 的音色塑造：真实采样只有两套库，风格差异靠效果链分家。
@@ -3155,7 +3156,7 @@ function scheduleAll() {
         /* v19：play 返回 false=音未解码 → 继续走下方 keys 兜底链 */
         let gPlayed = false;
         if (gInst) { sfBright('guitar', e.vel * kduck, tt); for (const n of e.notes) gPlayed = gInst.play(n, tt, { duration: dur, gain: e.vel * 1.0 * kduck, cents: sfRepeatCents('guitar', n, tt) }) !== false || gPlayed; }
-        if (!gPlayed && ks === '@vibes') AE.keysVibes.triggerAttackRelease(names, dur, tt, e.vel * 0.85 * kduck);
+        if (!gPlayed && ks === '@vibes') AE.keysVibes.triggerAttackRelease(names, dur, tt, e.vel * 0.95 * kduck); /* v35：0.85→0.95 可闻性 */
         else if (!gPlayed && ks === '@fmrhodes') {
           /* v13 优先级：smplr Wurlitzer 采样 → v12 FM tine 兜底（v21：FM tine 已离线渲染成采样，~40ms/次 → <0.5ms）
              v24：Wurli 绑死 live context，离线渲染（isOffline）时跳过，走 FM 电钢兜底 */
@@ -4264,7 +4265,7 @@ function applyStyleFx(styleKey) {
 const STYLE_SETUP = {
   /* swing 字段量纲 = 奇数 16 分后移量（sharedSwingSec 的 state.swing×100）：
      记谱 swing% = (1+swing/100)/2×100，即 字段值 = (swing% − 50) × 2。下列为热歌实测换算值 */
-  rnb:   { guitar: 'clean',  keys: 'comp',  drums: 'full',  swing: 12, bpm: 78,  synth: 'choir',  preset: 'rnb-drift' }, /* v34：swing 10→12（57% 摇摆 16 分=Neo-Soul 律动核心） */
+  rnb:   { guitar: 'clean',  keys: 'comp',  drums: 'full',  swing: 12, bpm: 78,  synth: 'choir',  preset: 'rnb-fong' }, /* v34：swing 10→12；v35：默认走向换方大同式 1-5-6-4（原 ♭VII 漂移保留在预设里，听感"怪异"主要是和声漂移+旋律难跟） */
   jazz:  { guitar: 'jazz',   keys: 'comp',  drums: 'auto',  swing: 24, bpm: 120, synth: 'warm',   preset: 'jazz-2516' }, /* Fly Me to the Moon ~120 / 62% */
   rock:  { guitar: 'dist',   keys: 'auto',  drums: 'drive', swing: 0,  bpm: 115, synth: 'sweep',  preset: 'rock-min' }, /* Back in Black~Teen Spirit 115 / 直拍 */
   bossa: { guitar: 'nylon',  keys: 'auto',  drums: 'auto',  swing: 4,  bpm: 126, synth: 'warm',   preset: 'bossa-251' }, /* Ipanema ~126 / 52% 近直拍 */

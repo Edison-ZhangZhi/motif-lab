@@ -1,6 +1,6 @@
 /* MotifLab Service Worker — v17 性能：预缓存静态资源 + 鼓采样，二次访问秒开 */
 'use strict';
-var CACHE = 'motiflab-v34';
+var CACHE = 'motiflab-v35';
 var PRECACHE = [
   './',
   'index.html',
