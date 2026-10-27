@@ -40,14 +40,19 @@ const STATIC = [
   ['拍号·UI 接线',           SRC.includes('ctl-meter'),              '拍号选择器必须接入 regenerate'],
   ['和声·九和弦扩展表',        SRC.includes('EXT_UP'),                '非 rock 风格扩展和弦升级路径'],
   ['结构·vamp 让位',          SRC.includes('secChange'),              '段落切换不硬切断和弦垫'],
-  ['体系·六风格规格卡完整', (() => {
+  ['体系·十风格规格卡完整', (() => {
     try {
-      const res = vm.runInContext("Object.keys(SPEC_META).map(k => specCompleteness(k))", ctx);
-      const bad = res.filter(c => !c.ok).map((c, i) => ['rnb','jazz','rock','bossa','afro','hiphop'][i] + ':' + c.missing.join(','));
+      const res = vm.runInContext("Object.keys(SPEC_META).map(k => ({ key:k, result:specCompleteness(k) }))", ctx);
+      const bad = res.filter(c => !c.result.ok).map(c => c.key + ':' + c.result.missing.join(','));
       if (bad.length) console.log('    规格缺失 ' + bad.join(' | '));
-      return bad.length === 0;
+      return res.length === 10 && bad.length === 0;
     } catch (e) { console.log('    规格检查异常: ' + e.message); return false; }
-  })(), 'SPEC 卡六件齐（参考曲/细胞/鼓/音色/律动/DNA/预设）'],
+  })(), '十种风格的密度/音区/贝斯/鼓/Pad/音色配置必须完整'],
+  ['风格·参考规则沉淀', (() => {
+    try {
+      return vm.runInContext("['soul','rock','rnb','hiphop','afrobeats'].every(k => { const p = STYLE_REFERENCE_RULES[k]; return p && p.bassPattern && p.drumPattern && p.keysPattern && p.pad && p.register; })", ctx);
+    } catch (e) { return false; }
+  })(), '参考歌曲群的音区和声部策略必须沉淀到普通风格'],
 ];
 const staticPass = STATIC.filter(s => s[1]).length;
 
@@ -179,6 +184,24 @@ for (let i = 0; i < sigs.length; i++) for (let j = i + 1; j < sigs.length; j++) 
   minDist = Math.min(minDist, d);
 }
 return { styles, boundsBad, minDist, meters: Object.keys(meterCov), dirRuns };
+})()`, ctx);
+
+const REFERENCE_BAD = vm.runInContext(`(function(){
+const bad = [];
+for (const [key, p] of Object.entries(STYLE_REFERENCE_RULES)) {
+  state.styles = [key]; state.mode = 'major'; state.bpm = 96;
+  state.keyRoot = 9; state.meter = 'm44'; state.structure = 'loop'; state.motiveText = ''; state.seedSalt = 0;
+  state.slots = [{d:1,q:'maj7'},{d:4,q:'maj7'},{d:6,q:'min7'},{d:5,q:'7'}];
+  state.layers.bass.patch = 'auto'; state.layers.keys.patch = 'comp'; state.layers.drums.patch = 'auto';
+  buildChordTimeline(); genMelody(); genBass(); genKeys(); genSynthPad(); genDrums();
+  const mr = p.register.melody, br = p.register.bass;
+  if (melodyEvents.some(e => e.midi < mr[0] - 2 || e.midi > mr[1] + 2)) bad.push(key + ':旋律音区');
+  if (bassEvents.some(e => e.midi < br[0] || e.midi > br[1])) bad.push(key + ':贝斯音区');
+  if (!drumEvents.length) bad.push(key + ':鼓事件为空');
+  if (Math.abs(sectionAt(0).energy - SPEC_META[key].sectionDensity.verse) > 1e-9) bad.push(key + ':密度未接入');
+  if (styleArrangement(key).bassPattern !== p.bassPattern) bad.push(key + ':规则读取失败');
+}
+return bad;
 })()`, ctx);
 
 /* ---------- 评分 ---------- */
@@ -355,14 +378,17 @@ for (const [name, score, note] of dims) {
 const overall = sum / dims.length;
 out += LINE + NL;
 out += ` 静态链审计 ${staticPass}/${STATIC.length} 项通过` + NL;
+out += ` 风格参考动态检查 ${REFERENCE_BAD.length ? '失败' : '5/5 项通过'}` + NL;
 if (STATIC.some(s => !s[1])) for (const [name, ok, why] of STATIC) if (!ok) out += `  ✗ ${name}：${why}` + NL;
+if (REFERENCE_BAD.length) out += `  ✗ ${REFERENCE_BAD.join(' | ')}` + NL;
 out += ` 总分 ${overall.toFixed(2)} / 10` + NL;
 const PASS_LINE = 8.0, EXCELLENT = 9.0;
 const failed = dims.filter(d => d[1] < PASS_LINE);
 if (DYN.boundsBad.length) out += ` ✗ 事件越界 ${DYN.boundsBad.length} 处：${DYN.boundsBad.slice(0, 5).join(', ')}` + NL;
 if (failed.length) out += ` ✗ 未达合格线(${PASS_LINE})：${failed.map(f => f[0] + ' ' + f[1].toFixed(1)).join('、')}` + NL;
-out += failed.length === 0 && DYN.boundsBad.length === 0
+const auditOK = failed.length === 0 && DYN.boundsBad.length === 0 && REFERENCE_BAD.length === 0 && staticPass === STATIC.length;
+out += auditOK
   ? (overall >= EXCELLENT ? ` ✔ 审核通过（优秀线 ${EXCELLENT} 达成，允许上线）` : ` ✔ 审核通过（达合格线 ${PASS_LINE}，未达优秀线）`)
   : ' ✗ 审核不通过，禁止上线' + NL;
 console.log(out);
-process.exit(failed.length === 0 && DYN.boundsBad.length === 0 ? 0 : 1);
+process.exit(auditOK ? 0 : 1);

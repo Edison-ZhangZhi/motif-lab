@@ -4,11 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Motif Lab · 电吉他动机旋律生成器</title>
-<link rel="stylesheet" href="style.css?v=53">
+<link rel="stylesheet" href="style.css?v=55">
 <script src="lib/Tone.js"></script>
 <script src="lib/soundfont-player.min.js"></script>
-<script src="lib/three.min.js?v=53" defer></script>
-<script src="studio3d.js?v=53" defer></script>
 </head>
 <body>
   <canvas id="starfield" aria-hidden="true"></canvas>
@@ -47,7 +45,7 @@
         <div class="brand-title">
           <div class="logo" aria-hidden="true">M/</div>
           <div>
-            <h1>Motif Lab <span class="ver-badge" id="ver-badge" title="点击强制更新到最新版" style="font-size:11px;font-weight:400;opacity:.45;vertical-align:middle;cursor:pointer">v53</span></h1>
+            <h1>Motif Lab <span class="ver-badge" id="ver-badge" title="点击强制更新到最新版" style="font-size:11px;font-weight:400;opacity:.45;vertical-align:middle;cursor:pointer">v55</span></h1>
             <p>电吉他动机 · 和弦驱动编曲</p>
           </div>
         </div>
@@ -156,13 +154,6 @@
           <button class="chip" data-style="afrobeats">Afrobeats</button>
         </div>
         <p class="hint" id="fusion-hint">已选：RnB · 多风格按小节融合</p>
-        <div class="chart-reference">
-          <label for="chart-select">Billboard 热歌参考 <span>2026.10.24 · Hot 100</span></label>
-          <select id="chart-select">
-            <option value="">选择一首，应用原创同风格编曲规则</option>
-          </select>
-          <div id="chart-detail" class="chart-detail">提取和声与织体，不复制旋律。</div>
-        </div>
         <div class="sf-row">
           <label>音色库</label>
           <select id="ctl-sfbase">
@@ -370,7 +361,7 @@
             <span class="ted-barlabel" id="ted-bar-label"></span>
             <button id="ted-next" class="btn small">后 4 小节 <svg class="icon" aria-hidden="true"><use href="#i-chevron"/></svg></button>
           </div>
-          <div id="ted-tracks"></div>
+          <div class="ted-grid-scroll"><div id="ted-tracks"></div></div>
         </details>
       </details>
     </section>
@@ -387,7 +378,27 @@
           <button id="btn-reset-melody" class="btn small"><svg class="icon" aria-hidden="true"><use href="#i-reset"/></svg> 重新生成</button>
         </div>
       </div>
+      <div class="roll-viewbar">
+        <label for="roll-view">视窗
+          <select id="roll-view">
+            <option value="0">全部小节</option><option value="1">1 小节</option><option value="2">2 小节</option><option value="4">4 小节</option><option value="8">8 小节</option>
+          </select>
+        </label>
+        <button id="roll-prev" class="btn small" aria-label="向前查看小节">←</button>
+        <output id="roll-range"></output>
+        <button id="roll-next" class="btn small" aria-label="向后查看小节">→</button>
+      </div>
       <div class="roll-frame"><canvas id="roll" height="230"></canvas></div>
+      <div class="note-inspector" id="note-inspector" hidden>
+        <div class="note-inspector-head"><strong>选中音符</strong><output id="note-summary"></output><button id="note-duplicate" class="btn small">复制音符</button></div>
+        <div class="note-fields">
+          <label for="note-midi">音高<input id="note-midi" type="number" min="24" max="108" step="1" inputmode="numeric"></label>
+          <label for="note-beat">起点（拍）<input id="note-beat" type="number" min="0" step="0.01" inputmode="decimal"></label>
+          <label for="note-dur">时值（拍）<input id="note-dur" type="number" min="0.0625" step="0.01" inputmode="decimal"></label>
+          <label for="note-artic">演奏法<select id="note-artic"><option value="">自动</option><option value="sus">延音</option><option value="port">半断奏</option><option value="stacc">断奏</option></select></label>
+          <label class="note-velocity" for="note-vel">力度<input id="note-vel" type="range" min="10" max="100" step="1"><output id="note-vel-value"></output></label>
+        </div>
+      </div>
       <div class="melody-foot">
         <div class="stats" id="melody-stats"></div>
       </div>
@@ -428,12 +439,27 @@
     </footer>
   </main>
 </div>
-<script src="theory.js?v=53"></script>
-<script src="cells.js?v=53"></script>
-<script src="specs.js?v=53"></script>
-<script src="rules.js?v=53"></script>
-<script src="chart_styles.js?v=53"></script>
-<script src="app.js?v=53"></script>
+<script src="theory.js?v=55"></script>
+<script src="cells.js?v=55"></script>
+<script src="specs.js?v=55"></script>
+<script src="rules.js?v=55"></script>
+<script src="app.js?v=55"></script>
+<script>
+(function () {
+  var lite = window.matchMedia('(max-width: 760px), (pointer: coarse)').matches ||
+    (navigator.connection && navigator.connection.saveData) || (navigator.deviceMemory && navigator.deviceMemory <= 4);
+  if (lite) return;
+  function load(src, done) {
+    var script = document.createElement('script');
+    script.src = src;
+    script.onload = done || null;
+    document.body.appendChild(script);
+  }
+  window.addEventListener('load', function () {
+    setTimeout(function () { load('lib/three.min.js?v=55', function () { load('studio3d.js?v=55'); }); }, 0);
+  });
+})();
+</script>
 <script>
 /* 静态资源预缓存；音频按需加载并由 Service Worker 运行时缓存 */
 try {
@@ -466,7 +492,7 @@ try {
    绕开旧 SW 的缓存优先），不一致说明本页是旧 SW 端的旧版。
    v46 升级：探测成功=网络已通 → 顺手清全部缓存+注销 SW 再硬刷新（一次到位），90 秒时间窗可重试 */
 (function () {
-  var PAGE_VER = 'v53'; /* 发版三件套：?v=N + 徽章 + 这里 */
+  var PAGE_VER = 'v55'; /* 发版三件套：?v=N + 徽章 + 这里 */
   try {
     fetch('sw.js?bust=' + Date.now()).then(function (r) { return r.text(); }).then(function (t) {
       var m = /motiflab-(v\d+)/.exec(t);

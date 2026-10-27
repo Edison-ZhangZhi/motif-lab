@@ -623,10 +623,16 @@
     if (canvas) canvas.hidden = true;
     var moonButton = document.getElementById('studio3d-moon');
     if (moonButton) moonButton.disabled = true;
-    setReadout('3D 音色控制需要 WebGL');
+    stage.querySelectorAll('[data-studio-view]').forEach(function (button) { button.disabled = true; });
+    setReadout('静态模式 · 播放与编辑可用');
   }
 
   function init() {
+    if (window.matchMedia('(max-width: 760px), (pointer: coarse)').matches || (navigator.connection && navigator.connection.saveData)) {
+      stage.classList.add('lite-mode');
+      fail();
+      return;
+    }
     try {
       canvas = document.createElement('canvas');
       canvas.className = 'studio3d-canvas';

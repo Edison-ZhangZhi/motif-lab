@@ -119,6 +119,34 @@ const SPEC_META = {
   },
 };
 
+const STYLE_REFERENCE_RULES = {
+  soul: {
+    register: { melody: [60, 83], bass: [36, 55], voicing: [55, 74] },
+    bassPattern: 'soul', drumPattern: 'soul', keysPattern: 'comp',
+    pad: { presence: 0.22, mode: 'pad', lpf: 4600 }, ghostProbability: 0.25, fillEvery: 4, swing: 0.12, openHatChorus: true,
+  },
+  rock: {
+    register: { melody: [58, 82], bass: [35, 54], voicing: [52, 72] },
+    bassPattern: 'eighth', drumPattern: 'rock', keysPattern: 'auto',
+    pad: { presence: 0.07, mode: 'gate', lpf: 4000 }, ghostProbability: 0.23, fillEvery: 8, swing: 0, openHatChorus: true,
+  },
+  rnb: {
+    register: { melody: [62, 84], bass: [35, 53], voicing: [52, 72] },
+    bassPattern: 'groove', drumPattern: 'rnb', keysPattern: 'comp',
+    pad: { presence: 0.32, mode: 'pad', lpf: 3800 }, ghostProbability: 0.24, fillEvery: 8, swing: 0.10,
+  },
+  hiphop: {
+    register: { melody: [58, 82], bass: [31, 50], voicing: [50, 72] },
+    bassPattern: 'hiphop', drumPattern: 'hiphop', keysPattern: 'pad',
+    pad: { presence: 0.55, mode: 'pad', lpf: 3400 }, ghostProbability: 0.18, fillEvery: 8, swing: 0.04, hatRollsTransitionOnly: true,
+  },
+  afrobeats: {
+    register: { melody: [58, 82], bass: [35, 52], voicing: [52, 74] },
+    bassPattern: 'afro', drumPattern: 'afrobeats', keysPattern: 'comp',
+    pad: { presence: 0.18, mode: 'air', lpf: 5200 }, ghostProbability: 0.22, fillEvery: 8, swing: 0.08,
+  },
+};
+
 /* 统一装配：一份权威规格（运行时懒装配，跨文件引用） */
 function getSpec(styleKey) {
   const meta = SPEC_META[styleKey];
@@ -144,6 +172,9 @@ function getSpec(styleKey) {
     timing: typeof TIMING_PROFILE !== 'undefined' ? TIMING_PROFILE[styleKey] : null,
     kit: typeof DRUM_KITS !== 'undefined' ? DRUM_KITS[styleKey] : null,
     budget: typeof DRUM_BUDGET !== 'undefined' ? DRUM_BUDGET[styleKey] : null,
+    bassPattern: typeof STYLES !== 'undefined' && STYLES[styleKey] ? STYLES[styleKey].bass : null,
+    drumPattern: typeof STYLES !== 'undefined' && STYLES[styleKey] ? STYLES[styleKey].drums : null,
+    pad: typeof PAD_BY_STYLE !== 'undefined' ? PAD_BY_STYLE[styleKey] : null,
     melDna: mel,
     dnaDensity: mel.density, dnaStepP: mel.stepP, dnaDur: mel.durBias, dnaRep: mel.rep,
     cellCount: (typeof CELL_LIB !== 'undefined' && CELL_LIB[styleKey]) ? CELL_LIB[styleKey].length : 0,
@@ -163,6 +194,10 @@ function specCompleteness(styleKey) {
   if (!s.timing) missing.push('TIMING_PROFILE');
   if (!s.kit) missing.push('DRUM_KITS');
   if (!s.budget && s.budget !== 0) missing.push('DRUM_BUDGET');
+  if (!s.bassPattern) missing.push('bass-pattern');
+  if (!s.drumPattern) missing.push('drum-pattern');
+  if (!s.pad) missing.push('PAD_BY_STYLE');
+  if (!s.sectionDensity || !['intro', 'verse', 'chorus', 'outro'].every(k => typeof s.sectionDensity[k] === 'number')) missing.push('section-density');
   if (!s.melDna || !Object.keys(s.melDna).length) missing.push('mel-DNA');
   if (s.cellCount < 4) missing.push('cells<4');
   if (!s.referenceSongs || !s.referenceSongs.length) missing.push('参考曲');

@@ -141,6 +141,50 @@ const CHART_STYLES = [
   },
 ];
 
+const CHART_ARRANGEMENTS = {
+  'hot100-20261024-01-patient-zero': {
+    bassPattern: 'soul', drumPattern: 'soul', keysPattern: 'comp',
+    pad: { presence: 0.22, mode: 'pad', lpf: 4600 }, ghostProbability: 0.25, fillEvery: 4, swing: 0.08, openHatChorus: true,
+  },
+  'hot100-20261024-02-choosin-texas': {
+    bassPattern: 'eighth', drumPattern: 'rock', keysPattern: 'auto',
+    pad: { presence: 0.05, mode: 'gate', lpf: 3800 }, ghostProbability: 0.22, fillEvery: 4, swing: 0,
+  },
+  'hot100-20261024-03-boston': {
+    bassPattern: 'eighth', drumPattern: 'rock', keysPattern: 'auto',
+    pad: { presence: 0.08, mode: 'gate', lpf: 4400 }, ghostProbability: 0.25, fillEvery: 8, swing: 0, openHatChorus: true,
+  },
+  'hot100-20261024-04-been-by-now': {
+    bassPattern: 'eighth', drumPattern: 'rock', keysPattern: 'comp',
+    pad: { presence: 0.10, mode: 'gate', lpf: 4200 }, ghostProbability: 0.20, fillEvery: 8, swing: 0,
+  },
+  'hot100-20261024-05-dracula': {
+    bassPattern: 'groove', drumPattern: 'rnb', keysPattern: 'comp',
+    pad: { presence: 0.40, mode: 'pad', lpf: 3200 }, ghostProbability: 0.22, fillEvery: 8, swing: 0.08,
+  },
+  'hot100-20261024-06-nicole-kidman': {
+    bassPattern: 'hiphop', drumPattern: 'hiphop', keysPattern: 'pad',
+    pad: { presence: 0.55, mode: 'pad', lpf: 3400 }, ghostProbability: 0.18, fillEvery: 8, swing: 0.04, hatRollsTransitionOnly: true,
+  },
+  'hot100-20261024-07-hate-that-i-made-you-love-me': {
+    bassPattern: 'groove', drumPattern: 'rnb', keysPattern: 'comp',
+    pad: { presence: 0.30, mode: 'pad', lpf: 4000 }, ghostProbability: 0.28, fillEvery: 8, swing: 0.12,
+  },
+  'hot100-20261024-08-stupid-song': {
+    bassPattern: 'eighth', drumPattern: 'rock', keysPattern: 'auto',
+    pad: { presence: 0.06, mode: 'gate', lpf: 3800 }, ghostProbability: 0.24, fillEvery: 8, swing: 0, openHatChorus: true,
+  },
+  'hot100-20261024-09-bby-wow': {
+    bassPattern: 'afro', drumPattern: 'afrobeats', keysPattern: 'comp',
+    pad: { presence: 0.18, mode: 'air', lpf: 5200 }, ghostProbability: 0.22, fillEvery: 8, swing: 0.08,
+  },
+  'hot100-20261024-10-babydoll': {
+    bassPattern: 'groove', drumPattern: 'rnb', keysPattern: 'comp',
+    pad: { presence: 0.26, mode: 'pad', lpf: 4200 }, ghostProbability: 0.22, fillEvery: 8, swing: 0.12, openHatChorus: true,
+  },
+};
+for (const preset of CHART_STYLES) preset.arrangement = CHART_ARRANGEMENTS[preset.id] || {};
+
 const CHART_MAJOR_OFFSETS = [0, 2, 4, 5, 7, 9, 11];
 const CHART_MINOR_OFFSETS = [0, 2, 3, 5, 7, 8, 10];
 const CHART_NOTE_PCS = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
