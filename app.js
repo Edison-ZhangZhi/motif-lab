@@ -3543,7 +3543,6 @@ let _arrRendering = false;
 let _arrSwapped = false;
 let _arrPromise = null;
 let _arrRevision = 0;
-let _preTimer = null;
 let _playToken = 0;
 
 async function awaitArrSamples(silent) {
@@ -3747,8 +3746,7 @@ function audioHealthCheck() {
   } catch (e) { console.warn('音频健康自检异常', e); }
 }
 
-/* v26 渲染提速：编排定稿 1.2s 后后台预渲染——用户点播放时 buffer 通常已就绪（零等待）。
-   并发安全：全站共用一份在途渲染 promise，播放/再次预渲染都等它，不重复渲染。 */
+/* WAV 导出专用：按需渲染，复用同一编曲 revision 的缓存。 */
 function ensureRendered(verbose) {
   if (!state.arrDirty && ARR.buf && ARR.revision === _arrRevision) return Promise.resolve(true);
   if (!_arrPromise) {
@@ -3764,17 +3762,6 @@ function ensureRendered(verbose) {
     return false;
   });
 }
-function preRenderArrangement() {
-  clearTimeout(_preTimer);
-  _preTimer = setTimeout(() => {
-    if (!state.arrDirty || state.playing || _arrRendering) return;
-    if (!state.audioReady || !AE.ready) return; /* 音频图未建不渲（warmup 完成后编排再改会再触发） */
-    /* v26：空闲时后台预渲染（点播放零等待）；v42：全量预渲染（实时路径已退役） */
-    const evCount2 = melodyEvents.length + bassEvents.length + keysEvents.length + synthEvents.length + hornEvents.length + drumEvents.length;
-    void evCount2;
-    ensureRendered(false);
-  }, 800); /* v48：1200→800ms——改动后更快预渲染，点播放零等待窗口更宽 */
-}
 function stopPlayback() {
   _playToken++; /* v44：作废在途异步渲染的开播意图（修复"点了停止，渲染回来又放起来"） */
   try { Tone.getTransport().stop(); } catch (e) {} /* 实时兜底模式下可能在走 */
@@ -3788,13 +3775,14 @@ function stopPlayback() {
 function startRealtimePlayback(isFallback) {
   state._gateDone = true;
   try {
+    stopBufferPlayback();
     restoreSampleBuses();
     scheduleAll();
     Tone.getTransport().start();
     state.playing = true;
     updatePlayBtn();
-    setTimeout(audioHealthCheck, 2500); /* v24：播放健康自检（链路坏死时提示+自动重建一次） */
-    sampStatus(isFallback ? '⚠ 编曲渲染失败，回退实时播放' + (ARR.lastError ? '（' + ARR.lastError + '）' : '') : '');
+    setTimeout(audioHealthCheck, 2500);
+    sampStatus(isFallback ? '⚠ 编曲渲染失败，回退实时播放' + (ARR.lastError ? '（' + ARR.lastError + '）' : '') : '实时播放');
   } catch (playErr) {
     /* v19 防弹：排程/启动失败要可见，不能按钮静默失灵 */
     console.error('播放启动失败', playErr);
@@ -3816,26 +3804,14 @@ async function togglePlay() {
     updatePlayBtn();
     return;
   }
-  stopGameMetro(); /* v26：主播放与新手模式节拍器互斥 */
-  if (!_arrSwapped) { applyMix(); restoreSampleBuses(); }
-  const tok = ++_playToken; /* v44：本次开播意图；后续 await 完成时若令牌已变（用户点了停止）则放弃 */
-  /* v24：已有新鲜 buffer → 直接开播（零排程零建节点） */
-  if (!state.arrDirty && ARR.buf) {
-    if (tok === _playToken) { startBufferPlayback(); sampStatus(''); }
-    return;
+  stopGameMetro();
+  if (_arrSwapped && _arrPromise) {
+    sampStatus('正在完成后台音频任务…');
+    await _arrPromise;
   }
-  /* v48：实时路径彻底退役（v44 为秒开恢复实时路径，弱机实测"点播放又开始卡"）——
-     所有编曲一律预渲染 buffer 播放（零卡顿）；等待由三件套兜底：
-     ① 空闲预渲染（点播放零等待）② 渲染中点击=等待+进度提示（v47）③ 渲染完成自动续播 */
-  void melodyEvents; void bassEvents; void keysEvents; void synthEvents; void hornEvents; void drumEvents;
-  /* v42：长编曲走预渲染 buffer（零卡顿）；渲染完成时校验令牌——渲染期间用户点了停止就不开播 */
-  if (await ensureRendered(true)) {
-    if (tok !== _playToken) return;
-    if (!state.arrDirty) { startBufferPlayback(); sampStatus(''); return; }
-    if (await ensureRendered(true)) { if (tok === _playToken) { startBufferPlayback(); sampStatus(''); } return; } /* 渲染期间又改 → 再渲一版（罕见） */
-  }
-  /* 渲染失败兜底：回退实时排程路径（v19 原逻辑，保留可用性） */
-  if (tok === _playToken) startRealtimePlayback(true);
+  applyMix();
+  restoreSampleBuses();
+  startRealtimePlayback(false);
   } catch (playFail) {
     console.error('播放启动异常', playFail);
     sampStatus('⚠ 播放启动异常：' + (playFail && playFail.message ? playFail.message : playFail));
@@ -3858,36 +3834,16 @@ function updatePlayBtn() {
   syncVisualState();
 }
 
-/* v24 buffer 架构：任何编排改动只打脏标记，正在播的旧 buffer 继续播完；
-   实时兜底模式（渲染失败回退）下保留旧行为——播放中改动立即重排 */
+/* 默认实时播放；离线渲染只服务 WAV 导出，避免后台换挂 context 影响发声。 */
 function reScheduleIfPlaying() {
   _arrRevision++;
   state.arrDirty = true;
-  if (state.playing && ARR.src) sampStatus('编曲已改，旧版继续播放，后台准备新版…');
-  else if (state.playing && state.audioReady) scheduleAll();
-  preRenderArrangement();
+  if (state.playing && state.audioReady) scheduleAll();
 }
 let _rsTimer = null;
 function reScheduleDebounced() {
   clearTimeout(_rsTimer);
-  _rsTimer = setTimeout(() => {
-    reScheduleIfPlaying();
-    if (state.playing && ARR.src) {
-      sampStatus('编曲已改，正在后台刷新（旧版不停）…');
-      const tok = _playToken;
-      (async () => {
-        try {
-          let ok = await ensureRendered(true);
-          for (let i = 0; ok && state.arrDirty && i < 3 && tok === _playToken; i++) ok = await ensureRendered(true);
-          if (tok !== _playToken || !state.playing) return;
-          if (ok && !state.arrDirty) { startBufferPlayback(); sampStatus(''); }
-          else if (!ok) sampStatus('⚠ 新版渲染失败，继续播放旧版；可修改后重试');
-        } catch (e) {
-          if (tok === _playToken && state.playing) sampStatus('⚠ 新版渲染异常，继续播放旧版');
-        }
-      })();
-    }
-  }, 500);
+  _rsTimer = setTimeout(reScheduleIfPlaying, 500);
 }
 
 async function auditionLayer(layer) {
@@ -4375,7 +4331,7 @@ function exportMidi() {
   setTimeout(() => URL.revokeObjectURL(a.href), 60000); /* v21：立即 revoke 会在部分浏览器取消下载 */
 }
 
-/* WAV 直接来自播放使用的同一份离线母带：不再实时重录，不等待整曲时长，也不会把卡顿录进成品。 */
+/* WAV 使用独立离线母带；实时播放只在用户点播放时运行，导出前会先停止。 */
 let _audioExporting = false;
 async function exportAudio() {
   if (typeof Tone === 'undefined') { alert('音频引擎加载失败，请检查网络后刷新页面'); return; }
@@ -4383,6 +4339,7 @@ async function exportAudio() {
   const btn = document.getElementById('btn-audio');
   _audioExporting = true;
   if (btn) { btn.disabled = true; btn.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-reroll"/></svg> 准备 WAV…'; }
+  if (state.playing) stopPlayback();
   try {
     if (!(await ensureRendered(true)) || !ARR.buf) throw new Error('编曲渲染未完成，请重试');
     const ab = ARR.buf;

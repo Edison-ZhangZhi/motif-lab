@@ -90,13 +90,13 @@
 
 ---
 
-## 六、当前状态与已知问题（2026-10-27，版本 v52）
+## 六、当前状态与已知问题（2026-10-27，版本 v53）
 
-- **audit 9.79/10，静态链 14/14**。v48 播放/音源/热歌规则；v49 月面视觉；v50 Three.js；v51 声音控制；v52 输出健康检查并移除Pad。
+- **audit 9.79/10，静态链 14/14**。v53 默认恢复实时播放，离线 Buffer 只服务 WAV 导出。
 - **界面**：月黑/大理石白/少量古典金，希腊回纹/凹槽柱线/雕刻衬线。真实 WebGL 吉他与月球，CSS模型保留fallback。Pad视角和模型已移除，月球缩小移远、吉他下移，reset不再拥挤。和弦卡独立整行，移动端单栏。
 - **3D控制桥**：点击月球调用`window.motif3DMoon()`切换近场/月夜空间；吉他两实体旋钮控制guitar b/s。`window.motif3DControl`同步state/滑杆/localStorage/applyTone/reSchedule。`applyTone`已修复synth→pad名称映射，合成器Pad普通滑杆保留且真正生效。
 - **3D性能**：pixelRatio≤1.5，idle限30fps；播放、音频渲染、性能模式、后台标签、减少动态效果时完全停止rAF。
-- **播放**：整曲离线渲染 → 单 BufferSource。采样按需、并发去重、超时重试；播放中改参数保留旧Buffer。v52 渲染后逐样本检查peak，静音Buffer禁止假播放；ARR.out接Analyser，连续3次无输出才回退实时兼容播放，正常时显示“音频输出正常”。本地实测播放/停止和输出电平通过。冷渲染仍需时间，缓存重播直接复用。
+- **播放**：v53 `togglePlay`直接`startRealtimePlayback(false)`，不再等待离线渲染或后台换挂context；播放中编辑直接`scheduleAll()`。停止/重复播放本地实测均立即进入播放且主链健康检查通过。`ensureRendered`和静音Buffer检查仅保留给WAV导出，导出前先停止实时播放。不要再默认启用后台preRender。
 - **WAV**：直接导出 ARR.buf，不再用 MediaRecorder 实时重录整曲；Buffer 走独立 Gain 直出，避免二次母带。母带只压缩/限制一次，峰值 ceiling -1dB。实测导出双声道 48kHz WAV 非静音，峰值/RMS 可测量。
 - **音源**：`guitar2/hq/` 与 `bass/hq/` 共 94 个 Karoryfer 原始 24-bit WAV（Shinyguitar / Growlybass），每音双 RR；首播只等 RR1，RR2 后台补齐。来源与许可在各目录 LICENSE.txt。取消随机跑调式“人性化”，双轨使用另一遍真实录制。旧 MP3 与 SoundFont 只作部分音色/回退，不应声称全站所有声音都是无损多力度。
 - **Billboard**：`chart_styles.js` 收录 2026-10-24 官方 Hot 100 Top10 的原创风格规则，UI 可一键应用调性/BPM/风格/和声骨架；`validateChartHarmony` 自动检查调性、风格许可、斜线低音、跨和弦解决并显示分数。公开转录骨架不是官方谱/GTP，不复制旋律。多轨 MIDI 可导入 Guitar Pro/库乐队继续编辑。
