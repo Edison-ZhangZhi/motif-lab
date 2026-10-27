@@ -46,6 +46,7 @@ const state = {
   sfBase: (typeof localStorage !== 'undefined' && localStorage.getItem('motif_sf')) || 'soundfont2',
   perf: (typeof localStorage !== 'undefined' && localStorage.getItem('motif_perf') === '1'),
   structure: 'loop',
+  moonSpace: (typeof localStorage !== 'undefined' && localStorage.getItem('motif_moonspace') === '1'),
   tone: (typeof localStorage !== 'undefined' && JSON.parse(localStorage.getItem('motif_tone') || '{}')) || {},
   toneCustom: (typeof localStorage !== 'undefined' && JSON.parse(localStorage.getItem('motif_tonecustom') || '{}')) || {},
 };
@@ -4389,34 +4390,35 @@ const STYLE_TONE = {
 };
 function applyTone(layer) {
   if (!AE.ready) return;
-  const t = (state.tone[layer] || { b: 0.5, s: 0.3, t: 0.2 });
+  const audioLayer = layer === 'synth' ? 'pad' : layer;
+  const t = (state.tone[audioLayer] || state.tone[layer] || { b: 0.5, s: 0.3, t: 0.2 });
   const perfMul = state.perf ? 0.5 : 1;
   const brightDb = -12 + t.b * 26;
-  if (layer === 'guitar' && AE.toneEqGuitar) {
-    AE.toneEqGuitar.high.value = brightDb + 1.5; /* v26：吉他存在感 +1.5dB（用户反馈糊/闷） */
-    AE.toneEqGuitar.low.value = -3.5 + t.t * 4; /* v26：300Hz 泥区再挖 1.5dB */
-    AE.toneEqGuitar.mid.value = 0.5 + t.t * 2.5; /* v5.1 琴体归位：塑料感=中频掏空，糊该由低频频段管 */
+  if (audioLayer === 'guitar' && AE.toneEqGuitar) {
+    AE.toneEqGuitar.high.value = brightDb + 1.5;
+    AE.toneEqGuitar.low.value = -3.5 + t.t * 4;
+    AE.toneEqGuitar.mid.value = 0.5 + t.t * 2.5;
     AE.toneDistGuitar.distortion = t.t * 0.35;
-    AE.sendGuitar.gain.value = t.s * 0.65 * perfMul; /* v4.3 混响发送收敛 */
-  } else if (layer === 'keys' && AE.toneEqKeys) {
+    AE.sendGuitar.gain.value = t.s * 0.65 * perfMul;
+  } else if (audioLayer === 'keys' && AE.toneEqKeys) {
     AE.toneEqKeys.high.value = brightDb;
-    AE.toneEqKeys.low.value = -3.5 + t.b * 3; /* v5.2 Rhodes 低中收掉：250-500Hz 和吉他/贝斯抢 = 难听根源 */
+    AE.toneEqKeys.low.value = -3.5 + t.b * 3;
     AE.toneEqKeys.mid.value = -1 + t.b * 2;
     AE.toneDistKeys.distortion = t.t * 0.25;
-    AE.sendKeys.gain.value = t.s * 0.55 * perfMul; /* v5.2 0.9→0.55：电钢琴不再泡在大混响里 */
-  } else if (layer === 'bass' && AE.toneFilterBass) {
-    AE.toneFilterBass.frequency.value = 300 + t.b * 1200; /* 300Hz(闷)~1.5kHz(亮)，默认 ≈660Hz——旧公式 400+t.b*9000 实测 3100Hz，贝斯泛音全频抢戏 */
+    AE.sendKeys.gain.value = t.s * 0.55 * perfMul;
+  } else if (audioLayer === 'bass' && AE.toneFilterBass) {
+    AE.toneFilterBass.frequency.value = 300 + t.b * 1200;
     AE.sendBass.gain.value = t.s * 0.25;
-  } else if (layer === 'pad' && AE.toneEqPad) {
+  } else if (audioLayer === 'pad' && AE.toneEqPad) {
     AE.toneEqPad.high.value = brightDb;
-    AE.toneEqPad.low.value = -4; /* v4.3 低频让位贝斯 */
-    AE.toneEqPad.mid.value = -3; /* v4.3 中频让位吉他 */
-    AE.sendPad.gain.value = t.s * 0.25; /* pad 自带大混响，space 发送减半防糊 */
-  } else if (layer === 'drums' && AE.toneEqDrums) {
+    AE.toneEqPad.low.value = -4;
+    AE.toneEqPad.mid.value = -3;
+    AE.sendPad.gain.value = t.s * 0.25;
+  } else if (audioLayer === 'drums' && AE.toneEqDrums) {
     AE.toneEqDrums.high.value = brightDb;
-    AE.toneEqDrums.low.value = -2 + t.b * 5; /* v4.3 kick 低频权重随风格 */
-    AE.toneDistDrums.distortion = Math.max(0.06, t.t * 0.05); /* v2：饱和常开底线=鼓皮粘合感；v28：0.12→0.06 减失真毛刺（"炸麦"来源之一） */
-    AE.sendDrums.gain.value = t.s * 0.5 * perfMul; /* v4.3 鼓房发送收敛 */
+    AE.toneEqDrums.low.value = -2 + t.b * 5;
+    AE.toneDistDrums.distortion = Math.max(0.06, t.t * 0.05);
+    AE.sendDrums.gain.value = t.s * 0.5 * perfMul;
   }
 }
 function applyStyleTone(styleKey) {
@@ -4460,7 +4462,42 @@ function applyStyleFx(styleKey) {
   const keysMod = (styleKey === 'rnb' || styleKey === 'soul') ? 1 : 0;
   if (AE.keysTremolo) AE.keysTremolo.wet.value = keysMod;
   if (AE.keysChorus) AE.keysChorus.wet.value = keysMod;
+  if (state.moonSpace) {
+    AE.masterVerb.wet.value = Math.min(0.48, AE.masterVerb.wet.value + 0.16);
+    AE.masterVerb.decay = 2.2;
+  }
 }
+
+window.motif3DTone = function (target) {
+  const layer = target === 'synth' ? 'pad' : target;
+  return Object.assign({}, state.tone[layer] || { b: 0.5, s: 0.3, t: 0.2 });
+};
+window.motif3DControl = function ({ target, param, value }) {
+  if (!['guitar', 'synth'].includes(target) || !['b', 's'].includes(param)) return;
+  const layer = target === 'synth' ? 'pad' : target;
+  state.tone[layer] = state.tone[layer] || { b: 0.5, s: 0.3, t: 0.2 };
+  state.tone[layer][param] = clamp(Number(value) || 0, 0, 1);
+  state.toneCustom[layer] = true;
+  try {
+    localStorage.setItem('motif_tone', JSON.stringify(state.tone));
+    localStorage.setItem('motif_tonecustom', JSON.stringify(state.toneCustom));
+  } catch (e) {}
+  applyTone(target);
+  const slider = document.querySelector('.tone-slider[data-layer="' + target + '"][data-param="' + param + '"]');
+  if (slider) slider.value = Math.round(state.tone[layer][param] * 100);
+  reScheduleDebounced();
+};
+window.motif3DMoon = function () {
+  state.moonSpace = !state.moonSpace;
+  try { localStorage.setItem('motif_moonspace', state.moonSpace ? '1' : '0'); } catch (e) {}
+  applyStyleFx(state.styles[0]);
+  const stage = document.getElementById('instrument-stage');
+  if (stage) stage.classList.toggle('moon-space-on', state.moonSpace);
+  const readout = document.getElementById('studio3d-readout');
+  if (readout) readout.textContent = state.moonSpace ? '月夜空间 · 开启' : '声场 · 近场';
+  reScheduleIfPlaying();
+  return state.moonSpace;
+};
 
 /* ---------- 风格整体配置：切换风格 = 整套编曲画面变换 ---------- */
 const STYLE_SETUP = {
@@ -5466,6 +5503,10 @@ function loadPreset(id) {
 
 /* ---------- 事件绑定 ---------- */
 function bindEvents() {
+  const moonStage = document.getElementById('instrument-stage');
+  if (moonStage) moonStage.classList.toggle('moon-space-on', state.moonSpace);
+  const moonReadout = document.getElementById('studio3d-readout');
+  if (moonReadout) moonReadout.textContent = state.moonSpace ? '月夜空间 · 开启' : '声场 · 近场';
   /* 走带 */
   $('#btn-play').onclick = togglePlay;
   $('#ctl-bpm').oninput = e => {

@@ -21,6 +21,7 @@
   --acc-2: #fffdf7;
   --acc-tint: #2c2a31;
   --violet: #aaa0bb;
+  --gold: #b5a071;
   --mint: #c8c5ce;
   --serif: "Songti SC", "STSong", "Noto Serif CJK SC", "SimSun", Georgia, serif;
   --sans: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -89,6 +90,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   letter-spacing: .19em;
   text-transform: uppercase;
 }
+.brand-kicker::after { content: ""; flex: 0 0 58px; height: 12px; opacity: .55; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='12' viewBox='0 0 24 12'%3E%3Cpath d='M0 11V1H23V9H7V5H17' fill='none' stroke='%23b5a071' stroke-width='.7'/%3E%3C/svg%3E") repeat-x left center / 24px 12px; }
 .brand-mark {
   display: inline-grid;
   place-items: center;
@@ -104,19 +106,22 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .logo { margin-top: 10px; color: var(--violet); font-family: var(--serif); font-size: 25px; font-style: italic; line-height: 1; }
 .brand h1 {
   color: var(--ink);
-  font-family: "Manrope", sans-serif;
+  font-family: var(--serif);
   font-size: clamp(46px, 5.2vw, 74px);
-  font-weight: 500;
-  letter-spacing: -.065em;
+  font-weight: 400;
+  letter-spacing: -.055em;
   line-height: .96;
+  text-shadow: 0 1px rgba(255,253,247,.07), 0 -1px #000;
 }
 .brand h1 .ver-badge { margin-left: 10px; color: var(--ink-3); font-family: var(--mono); letter-spacing: 0; }
-.brand p { margin-top: 16px; color: var(--ink-2); font-family: var(--serif); font-size: 14px; letter-spacing: .14em; }
-.brand .hero-copy { max-width: 510px; margin-top: 30px; color: var(--ink); font-family: var(--serif); font-size: 20px; line-height: 1.75; letter-spacing: .12em; }
+.brand p { margin-top: 16px; color: var(--gold); font-family: var(--serif); font-size: 14px; letter-spacing: .14em; }
 .hero-status { display: flex; flex-wrap: wrap; gap: 10px 24px; margin-top: 26px; }
 .hero-status span { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-3); font-size: 10px; letter-spacing: .08em; white-space: nowrap; }
 .hero-status i { width: 4px; height: 4px; border-radius: 50%; background: var(--ink-2); box-shadow: 0 0 0 3px rgba(239,237,231,.035); }
-.hero-status span:first-child i { background: var(--violet); box-shadow: 0 0 0 3px rgba(170,160,187,.07); }
+.hero-status span:first-child i { background: var(--gold); box-shadow: 0 0 0 3px rgba(181,160,113,.07); }
+.temple-lines { display: flex; align-items: flex-end; gap: 10px; width: 126px; height: 25px; margin-top: 24px; padding: 5px 8px 0; border-top: 1px solid rgba(181,160,113,.32); border-bottom: 1px solid rgba(181,160,113,.13); }
+.temple-lines i { width: 15px; height: 18px; border: 1px solid rgba(239,237,231,.12); border-top: 2px solid rgba(181,160,113,.28); background: repeating-linear-gradient(90deg, transparent 0 3px, rgba(239,237,231,.1) 3px 4px); }
+.instrument-column { min-width: 0; }
 
 /* Layered CSS moon, eclipse and native 3D guitar */
 .instrument-stage {
@@ -318,6 +323,46 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .webgl-ready .stage-caption { left: auto; bottom: 11px; }
 .webgl-ready .stage-caption span { display: none; }
 .webgl-ready .stage-caption b { font-size: 20px; opacity: .65; }
+.studio3d-tooltip {
+  position: absolute;
+  top: 77px;
+  left: 18px;
+  z-index: 9;
+  padding: 4px 8px;
+  border: 1px solid rgba(181,160,113,.24);
+  border-radius: 4px;
+  background: rgba(12,12,15,.78);
+  color: #d0c4a7;
+  font-size: 9px;
+  line-height: 1.5;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s;
+}
+.studio3d-tooltip.visible { opacity: 1; }
+.studio3d-dock {
+  display: none;
+  align-items: center;
+  gap: 12px;
+  min-height: 38px;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border: 1px solid #2c2a2b;
+  border-radius: 7px;
+  background: linear-gradient(90deg, rgba(181,160,113,.035), rgba(21,21,23,.72));
+}
+.webgl-ready + .studio3d-dock { display: flex; }
+.studio3d-dock button {
+  flex: 0 0 auto;
+  min-height: 26px;
+  padding: 3px 10px;
+  border: 1px solid #625944;
+  border-radius: 4px;
+  color: #d1c5a7;
+  font-size: 10px;
+}
+.studio3d-dock button:hover, .studio3d-dock button[aria-pressed="true"] { border-color: var(--gold); background: rgba(181,160,113,.1); color: #f0e7d2; }
+.studio3d-dock output { min-width: 0; color: var(--ink-3); font-family: var(--mono); font-size: 9px; line-height: 1.5; }
 
 /* Transport */
 .transport {
@@ -473,11 +518,12 @@ textarea::placeholder, input::placeholder { color: #79777b; opacity: 1; }
 .tone-reset:hover, .ted-reset:hover { border-color: var(--violet); color: var(--acc); }
 
 /* Harmony */
+.harmony-card { grid-column: 1 / -1 !important; }
 .prog-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
 .prog-toolbar select { min-width: 0; max-width: 360px; }
 .prog-desc { flex: 1; min-width: 160px; color: var(--ink-2); font-size: 11px; line-height: 1.7; }
-.slots { display: flex; gap: 9px; max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; padding: 1px 1px 12px; scrollbar-gutter: stable; }
-.slot { flex: 0 0 142px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #121214; transition: border-color .16s, transform .16s; }
+.slots { display: grid; grid-auto-flow: column; grid-auto-columns: 142px; grid-template-rows: 1fr; gap: 9px; max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; padding: 1px 1px 12px; scrollbar-gutter: stable; }
+.slot { width: 142px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: #121214; transition: border-color .16s, transform .16s; }
 .slot:hover { border-color: #77717e; transform: translateY(-2px); }
 .slot-head { display: flex; align-items: center; gap: 5px; margin-bottom: 8px; }
 .bar-num { color: var(--ink-3); font-family: var(--mono); font-size: 9px; letter-spacing: .08em; font-variant-numeric: tabular-nums; }
@@ -490,7 +536,9 @@ textarea::placeholder, input::placeholder { color: #79777b; opacity: 1; }
 .slot select { margin-top: 4px; padding-left: 6px; font-size: 10px; }
 .chord-tones { margin-top: 8px; color: var(--ink-2); font-size: 10px; letter-spacing: .06em; }
 .chord-func { margin-top: 3px; color: var(--ink-3); font-size: 10px; }
-.prog-explain { margin-top: 12px; padding: 13px 2px 0; border-top: 1px solid var(--line-2); color: var(--ink-2); font-size: 12px; line-height: 1.9; }
+.prog-explain { display: grid; grid-template-columns: minmax(0,1.3fr) minmax(260px,.7fr); column-gap: 24px; margin-top: 12px; padding: 13px 2px 0; border-top: 1px solid var(--line-2); color: var(--ink-2); font-size: 12px; line-height: 1.9; }
+.prog-explain > div:not(.harmony-audit) { grid-column: 1; }
+.prog-explain .harmony-audit { grid-column: 2; grid-row: 1 / span 3; align-self: start; margin-top: 0; }
 .prog-explain b { color: var(--ink); font-weight: 550; }
 .prog-explain .deg-flow { margin-bottom: 5px; color: var(--ink); font-family: var(--serif); font-size: 17px; letter-spacing: .06em; }
 
@@ -603,7 +651,6 @@ footer { padding: 22px 0 2px; color: var(--ink-3); font-size: 10px; line-height:
 @media (max-width: 980px) {
   .hero { grid-template-columns: minmax(0,1fr) 350px; min-height: 330px; }
   .brand h1 { font-size: 47px; }
-  .brand .hero-copy { font-size: 17px; }
   .instrument-stage { height: 310px; }
   .moon { width: 172px; height: 172px; }
   .eclipse-halo { width: 188px; height: 188px; }
@@ -626,9 +673,15 @@ footer { padding: 22px 0 2px; color: var(--ink-3); font-size: 10px; line-height:
   .logo { font-size: 21px; }
   .brand h1 { font-size: clamp(38px,10vw,50px); }
   .brand p { font-size: 12px; letter-spacing: .08em; }
-  .brand .hero-copy { margin-top: 19px; font-size: 16px; }
   .hero-status { gap: 8px 15px; margin-top: 17px; }
+  .temple-lines { margin-top: 18px; }
   .instrument-stage { width: 100%; height: 240px; border-radius: 13px; }
+  .studio3d-help { font-size: 7px; }
+  .studio3d-dock { gap: 8px; }
+  .studio3d-dock output { font-size: 8px; }
+  .prog-explain { grid-template-columns: minmax(0,1fr); }
+  .prog-explain > div:not(.harmony-audit), .prog-explain .harmony-audit { grid-column: 1; grid-row: auto; }
+  .prog-explain .harmony-audit { margin-top: 12px; }
   .moon { left: 59%; top: 43%; width: 142px; height: 142px; }
   .eclipse-halo { left: 59%; top: 43%; width: 155px; height: 155px; }
   .lunar-orbit { left: 59%; top: 43%; }
@@ -664,7 +717,6 @@ footer { padding: 22px 0 2px; color: var(--ink-3); font-size: 10px; line-height:
   .brand-kicker { gap: 9px; font-size: 8px; letter-spacing: .11em; }
   .brand h1 { font-size: 38px; }
   .brand h1 .ver-badge { margin-left: 3px; }
-  .brand .hero-copy { font-size: 15px; letter-spacing: .08em; }
   .hero-status { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; }
   .hero-status span { font-size: 10px; }
   .instrument-stage { height: 214px; }
@@ -674,6 +726,10 @@ footer { padding: 22px 0 2px; color: var(--ink-3); font-size: 10px; line-height:
   .orbit-inner { width: 165px; height: 64px; margin: -32px 0 0 -82px; }
   .guitar-scene { inset: 20px -32px 16px; transform: scale(.68); }
   .stage-meta, .stage-caption { left: 14px; right: 14px; font-size: 7px; }
+  .studio3d-controls { left: 12px; top: 38px; }
+  .studio3d-controls button { min-width: 38px; padding: 4px 7px; }
+  .studio3d-tooltip { left: 12px; }
+  .studio3d-help { left: 14px; bottom: 9px; max-width: calc(100% - 48px); }
   .transport { gap: 8px 10px; }
   .transport .ctl label { font-size: 9px; }
   .ctl-selects { grid-template-columns: minmax(0,1.3fr) minmax(72px,.8fr); }

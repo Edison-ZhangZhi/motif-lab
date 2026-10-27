@@ -90,11 +90,12 @@
 
 ---
 
-## 六、当前状态与已知问题（2026-10-27，版本 v50）
+## 六、当前状态与已知问题（2026-10-27，版本 v51）
 
-- **audit 9.79/10，静态链 14/14**。v48 完成播放/音源/热歌规则；v49 完成月面视觉；v50 升级为真实交互 Three.js 建模。
-- **界面**：月黑/银白/冷紫；`studio3d.js` + 本地 `lib/three.min.js` 实现真实 WebGL 电吉他（ExtrudeGeometry 厚度倒角、96 部件、22 品、6 弦）和 SphereGeometry 月球（贴图+凹凸）。支持拖动/滚轮/双击/键盘及月球/吉他/复位视角；CSS 模型保留为 WebGL 失败 fallback。自托管 Manrope + 宋体标题 + SVG 图标。320px 无横向溢出。
-- **3D 性能**：pixelRatio≤1.5，idle 限 30fps；播放、性能模式、后台标签、减少动态效果时完全停止 rAF，交互恢复时重绘。Three.js r150 UMD 有上游弃用警告但不影响运行。
+- **audit 9.79/10，静态链 14/14**。v48 播放/音源/热歌规则；v49 月面视觉；v50 Three.js；v51 让3D成为真实音色控制器并优化古希腊美学/和声排版。
+- **界面**：月黑/大理石白/少量古典金，希腊回纹/凹槽柱线/雕刻衬线。真实 WebGL 吉他、月球和Pad XY，CSS模型保留fallback。自托管 Manrope + 宋体标题 + SVG 图标。320px无横向溢出；和弦卡独立整行，说明/检查桌面分栏、移动单栏。
+- **3D控制桥**：点击月球调用`window.motif3DMoon()`切换近场/月夜空间（混响wet/decay并触发重渲染）；吉他两实体旋钮控制guitar b/s；Pad XY控制synth b/s。`window.motif3DControl`同步state/滑杆/localStorage/applyTone/reSchedule。`applyTone`已修复synth→pad名称映射，旧Pad滑杆现在真正生效。
+- **3D性能**：pixelRatio≤1.5，idle限30fps；播放、性能模式、后台标签、减少动态效果时完全停止rAF。Three.js r150 UMD有上游弃用警告但不影响运行。
 - **播放**：整曲离线渲染 → 单 BufferSource。采样只加载当前编曲实际音高/鼓件，3–4 路并发、请求去重、超时与重试；播放中改参数保留旧 Buffer，成功后才切换。revision 防止旧渲染覆盖新编曲。播放与导出共用同一渲染任务和缓存。冷渲染仍需时间，不能宣传“所有情况零等待”；缓存重播直接复用。
 - **WAV**：直接导出 ARR.buf，不再用 MediaRecorder 实时重录整曲；Buffer 走独立 Gain 直出，避免二次母带。母带只压缩/限制一次，峰值 ceiling -1dB。实测导出双声道 48kHz WAV 非静音，峰值/RMS 可测量。
 - **音源**：`guitar2/hq/` 与 `bass/hq/` 共 94 个 Karoryfer 原始 24-bit WAV（Shinyguitar / Growlybass），每音双 RR；首播只等 RR1，RR2 后台补齐。来源与许可在各目录 LICENSE.txt。取消随机跑调式“人性化”，双轨使用另一遍真实录制。旧 MP3 与 SoundFont 只作部分音色/回退，不应声称全站所有声音都是无损多力度。

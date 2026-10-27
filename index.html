@@ -4,11 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Motif Lab · 电吉他动机旋律生成器</title>
-<link rel="stylesheet" href="style.css?v=50">
+<link rel="stylesheet" href="style.css?v=51">
 <script src="lib/Tone.js"></script>
 <script src="lib/soundfont-player.min.js"></script>
-<script src="lib/three.min.js?v=50" defer></script>
-<script src="studio3d.js?v=50" defer></script>
+<script src="lib/three.min.js?v=51" defer></script>
+<script src="studio3d.js?v=51" defer></script>
 </head>
 <body>
   <canvas id="starfield" aria-hidden="true"></canvas>
@@ -47,18 +47,19 @@
         <div class="brand-title">
           <div class="logo" aria-hidden="true">M/</div>
           <div>
-            <h1>Motif Lab <span class="ver-badge" id="ver-badge" title="点击强制更新到最新版" style="font-size:11px;font-weight:400;opacity:.45;vertical-align:middle;cursor:pointer">v50</span></h1>
+            <h1>Motif Lab <span class="ver-badge" id="ver-badge" title="点击强制更新到最新版" style="font-size:11px;font-weight:400;opacity:.45;vertical-align:middle;cursor:pointer">v51</span></h1>
             <p>电吉他动机 · 和弦驱动编曲</p>
           </div>
         </div>
-        <p class="hero-copy">一个动机，生长为完整编配。</p>
         <div class="hero-status" aria-label="工作站能力">
           <span><i></i>离线播放</span>
           <span><i></i>多轨编辑</span>
           <span><i></i>和声参考</span>
         </div>
+        <div class="temple-lines" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
       </div>
-      <div class="instrument-stage" id="instrument-stage" role="region" aria-label="交互式三维电吉他与月球模型" aria-describedby="studio3d-help" tabindex="0">
+      <div class="instrument-column">
+      <div class="instrument-stage" id="instrument-stage" role="region" aria-label="交互式三维电吉他、月球与合成器音色控制" aria-describedby="studio3d-help" tabindex="0">
         <div class="stage-meta"><span>LUNAR STUDY / 001</span><span>SOLID BODY · 6 STRING</span></div>
         <div class="lunar-system">
           <div class="eclipse-halo"></div>
@@ -94,10 +95,17 @@
         <div class="studio3d-controls" role="group" aria-label="三维模型视角">
           <button type="button" data-studio-view="moon" aria-pressed="false">月球</button>
           <button type="button" data-studio-view="guitar" aria-pressed="false">吉他</button>
+          <button type="button" data-studio-view="pad" aria-pressed="false">Pad</button>
           <button type="button" data-studio-view="reset" class="active" aria-pressed="true">复位</button>
         </div>
-        <p class="studio3d-help" id="studio3d-help">拖动旋转 · 滚轮缩放 · 双击复位 · 方向键与 +/− 可操作</p>
+        <div class="studio3d-tooltip" aria-hidden="true"></div>
+        <p class="studio3d-help" id="studio3d-help">拖动旋转 · 旋钮上下拖动 · Pad 拖动 XY · Q/A 亮度 · W/S 空间 · 触屏先横滑接管</p>
         <div class="stage-caption"><span>MUSIC IN LOW GRAVITY</span><b>06</b></div>
+      </div>
+      <div class="studio3d-dock">
+        <button type="button" id="studio3d-moon" aria-pressed="false">月夜空间</button>
+        <output id="studio3d-readout" aria-live="polite">3D 音色控制需要 WebGL</output>
+      </div>
       </div>
     </div>
   </header>
@@ -312,7 +320,7 @@
     </div>
 
     <!-- ===================== 和弦进行 ===================== -->
-    <section class="card">
+    <section class="card harmony-card">
       <h2><span class="step">4</span> 和弦进行 <em>选择走向 · 点和弦试听</em></h2>
       <div class="prog-toolbar">
         <select id="preset-select"></select>
@@ -421,12 +429,12 @@
     </footer>
   </main>
 </div>
-<script src="theory.js?v=50"></script>
-<script src="cells.js?v=50"></script>
-<script src="specs.js?v=50"></script>
-<script src="rules.js?v=50"></script>
-<script src="chart_styles.js?v=50"></script>
-<script src="app.js?v=50"></script>
+<script src="theory.js?v=51"></script>
+<script src="cells.js?v=51"></script>
+<script src="specs.js?v=51"></script>
+<script src="rules.js?v=51"></script>
+<script src="chart_styles.js?v=51"></script>
+<script src="app.js?v=51"></script>
 <script>
 /* 静态资源预缓存；音频按需加载并由 Service Worker 运行时缓存 */
 try {
@@ -459,7 +467,7 @@ try {
    绕开旧 SW 的缓存优先），不一致说明本页是旧 SW 端的旧版。
    v46 升级：探测成功=网络已通 → 顺手清全部缓存+注销 SW 再硬刷新（一次到位），90 秒时间窗可重试 */
 (function () {
-  var PAGE_VER = 'v50'; /* 发版三件套：?v=N + 徽章 + 这里 */
+  var PAGE_VER = 'v51'; /* 发版三件套：?v=N + 徽章 + 这里 */
   try {
     fetch('sw.js?bust=' + Date.now()).then(function (r) { return r.text(); }).then(function (t) {
       var m = /motiflab-(v\d+)/.exec(t);
