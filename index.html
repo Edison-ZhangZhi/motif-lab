@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Motif Lab · 电吉他动机旋律生成器</title>
-<link rel="stylesheet" href="style.css?v=47">
+<link rel="stylesheet" href="style.css?v=49">
 <script src="lib/Tone.js"></script>
 <script src="lib/soundfont-player.min.js"></script>
 </head>
@@ -12,51 +12,122 @@
   <canvas id="starfield" aria-hidden="true"></canvas>
   <div class="orb orb-a" aria-hidden="true"></div>
   <div class="orb orb-b" aria-hidden="true"></div>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7Z"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="m13 2-2 7-7 2 7 2 2 9 2-9 7-2-7-2Z"/></symbol>
+    <symbol id="i-reroll" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 8a7 7 0 0 1 11.7-1L20 12M4 12l2.2 5a7 7 0 0 0 11.7-1"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 18v3h16v-3"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h7l2 3h9v11H3Z"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3m-4 0h8"/></symbol>
+    <symbol id="i-studio" viewBox="0 0 24 24"><path d="M3 12h2l2-6 3 12 3-15 3 15 2-9 2 6h1"/></symbol>
+    <symbol id="i-tracks" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></symbol>
+    <symbol id="i-guitar" viewBox="0 0 24 24"><path d="m14 4 6-2-2 6-5 5M15 5l4 4M6 21c-4 0-5-4-3-7 1-2 3-2 4-4s4-1 5 1 0 4-2 5-2 3-4 5Z"/><circle cx="8" cy="14" r="1.5"/></symbol>
+    <symbol id="i-keys" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 5v9m4-9v9m4-9v9M6 5v6h4V5m4 0v6h4V5"/></symbol>
+    <symbol id="i-bass" viewBox="0 0 24 24"><path d="M9 21c-5 0-7-4-5-8s6-4 8-1c3 5-1 9-3 9ZM11 12 19 2m-3 1 4 4M7 16l8-9"/></symbol>
+    <symbol id="i-drums" viewBox="0 0 24 24"><ellipse cx="12" cy="7" rx="8" ry="3"/><path d="M4 7v10c0 4 16 4 16 0V7M4 12c0 4 16 4 16 0M3 3l5 5m13-5-5 5"/></symbol>
+    <symbol id="i-pad" viewBox="0 0 24 24"><path d="M3 15c3-8 5 8 8 0s5 8 10 0M3 8c3-5 5 5 8 0s5 5 10 0"/></symbol>
+    <symbol id="i-game" viewBox="0 0 24 24"><path d="M8 6h8l4 12c1 3-3 4-5 1l-1-2H10l-1 2c-2 3-6 2-5-1Z"/><path d="M8 10v6m-3-3h6m6-2h.01M18 14h.01"/></symbol>
+    <symbol id="i-reset" viewBox="0 0 24 24"><path d="M4 4v6h6M5 15a8 8 0 1 0 1-8L4 10"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10h.01"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1"/><path d="M4 10h16M4 15h16M10 4v16M15 4v16"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+  </svg>
 <div class="app">
 
-  <!-- ===================== 顶部：走带控制 ===================== -->
+  <!-- ===================== 品牌与走带控制 ===================== -->
   <header class="topbar">
-    <div class="brand">
-      <div class="logo">🎸</div>
-      <div>
-        <h1>Motif Lab <span class="ver-badge" id="ver-badge" title="点击强制更新到最新版" style="font-size:11px;font-weight:400;opacity:.45;vertical-align:middle;cursor:pointer">v47</span></h1>
-        <p>电吉他动机旋律 · 和弦驱动编曲工作台</p>
+    <div class="hero">
+      <div class="brand">
+        <div class="brand-kicker"><span class="brand-mark">ML</span><span>Lunar music sketching system</span></div>
+        <div class="brand-title">
+          <div class="logo" aria-hidden="true">M/</div>
+          <div>
+            <h1>Motif Lab <span class="ver-badge" id="ver-badge" title="点击强制更新到最新版" style="font-size:11px;font-weight:400;opacity:.45;vertical-align:middle;cursor:pointer">v49</span></h1>
+            <p>电吉他动机 · 和弦驱动编曲</p>
+          </div>
+        </div>
+        <p class="hero-copy">一个动机，生长为完整编配。</p>
+        <div class="hero-status" aria-label="工作站能力">
+          <span><i></i>离线播放</span>
+          <span><i></i>多轨编辑</span>
+          <span><i></i>和声参考</span>
+        </div>
+      </div>
+      <div class="instrument-stage" id="instrument-stage" aria-hidden="true">
+        <div class="stage-meta"><span>LUNAR STUDY / 001</span><span>SOLID BODY · 6 STRING</span></div>
+        <div class="lunar-system">
+          <div class="eclipse-halo"></div>
+          <div class="lunar-orbit orbit-outer"><i></i></div>
+          <div class="lunar-orbit orbit-inner"></div>
+          <div class="moon"><span class="moon-texture"></span><span class="moon-terminator"></span></div>
+        </div>
+        <div class="guitar-scene">
+          <div class="guitar-shadow"></div>
+          <div class="guitar">
+            <div class="guitar-body body-back"></div>
+            <div class="guitar-body body-edge"></div>
+            <div class="guitar-body body-front">
+              <span class="body-highlight"></span>
+              <span class="pickguard"></span>
+              <span class="pickup pickup-neck"></span>
+              <span class="pickup pickup-bridge"></span>
+              <span class="bridge"></span>
+              <span class="knob knob-a"></span>
+              <span class="knob knob-b"></span>
+            </div>
+            <div class="neck neck-back"></div>
+            <div class="neck">
+              <span class="fret fret-1"></span><span class="fret fret-2"></span>
+              <span class="fret fret-3"></span><span class="fret fret-4"></span>
+              <span class="fret fret-5"></span><span class="fret fret-6"></span>
+              <span class="fret-dot dot-1"></span><span class="fret-dot dot-2"></span><span class="fret-dot dot-3"></span>
+            </div>
+            <div class="headstock"><span class="nut"></span><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="strings"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          </div>
+        </div>
+        <div class="stage-caption"><span>MUSIC IN LOW GRAVITY</span><b>06</b></div>
       </div>
     </div>
-    <div class="transport">
-      <button id="btn-play" class="btn btn-play">▶ 播放</button>
-      <div class="ctl">
-        <label>速度 <b id="bpm-val">92</b> BPM</label>
+  </header>
+  <div class="transport" aria-label="走带控制">
+      <button id="btn-play" class="btn btn-play"><span class="play-icon"><svg class="icon"><use href="#i-play"/></svg></span> 播放</button>
+      <div class="ctl ctl-bpm">
+        <label for="ctl-bpm">速度 <b id="bpm-val">92</b> <small>BPM</small></label>
         <input type="range" id="ctl-bpm" min="60" max="180" value="92">
       </div>
-      <div class="ctl">
-        <label>Swing <b id="swing-val">18</b>%</label>
+      <div class="ctl ctl-swing">
+        <label for="ctl-swing">Swing <b id="swing-val">18</b><small>%</small></label>
         <input type="range" id="ctl-swing" min="0" max="70" value="18">
       </div>
-      <div class="ctl">
-        <label>调性</label>
+      <div class="ctl ctl-key">
+        <label for="ctl-key">调性</label>
         <select id="ctl-key"></select>
       </div>
-      <div class="ctl">
-        <label>结构</label>
-        <select id="ctl-structure"><option value="loop">循环体</option><option value="song">歌曲结构·40小节</option><option value="groove">Afro 长 Groove·32小节</option></select>
-        <select id="ctl-meter"><option value="m44">4/4</option><option value="m34">3/4 华尔兹</option><option value="m68">6/8·12/8 摇曳</option></select>
+      <div class="ctl ctl-structure">
+        <label for="ctl-structure">结构 / 拍号</label>
+        <div class="ctl-selects">
+          <select id="ctl-structure"><option value="loop">循环体</option><option value="song">歌曲结构·40小节</option><option value="groove">Afro 长 Groove·32小节</option></select>
+          <select id="ctl-meter"><option value="m44">4/4</option><option value="m34">3/4 华尔兹</option><option value="m68">6/8·12/8 摇曳</option></select>
+        </div>
       </div>
-      <div class="ctl">
-        <label>总音量</label>
+      <div class="ctl ctl-master">
+        <label for="ctl-master">总音量</label>
         <input type="range" id="ctl-master" min="0" max="100" value="80">
       </div>
     </div>
-    <p id="ios-hint" hidden>🔇 iPhone 上无声？请先拨动手机左侧的「静音开关」（网页音频遵守硬件静音），并调大音量，然后重新点播放</p>
-    <p id="samp-status" class="samp-status"></p>
-  </header>
+  <p id="ios-hint" hidden>iPhone 无声？请关闭硬件静音并调大音量，再点播放。</p>
+  <p id="samp-status" class="samp-status"></p>
 
   <main>
     <!-- ===================== 第一行：风格 / 动机 / 编配 ===================== -->
     <div class="grid-3">
 
       <section class="card">
-        <h2><span class="step">1</span> 选择风格 <em>可多选 → 自动融合</em></h2>
+        <h2><span class="step">1</span> 选择风格 <em>可多选</em></h2>
         <div class="style-chips" id="style-chips">
           <button class="chip active" data-style="rnb">RnB</button>
           <button class="chip" data-style="jazz">Jazz</button>
@@ -69,14 +140,21 @@
           <button class="chip" data-style="reggae">Reggae</button>
           <button class="chip" data-style="afrobeats">Afrobeats</button>
         </div>
-        <p class="hint" id="fusion-hint">已选：RnB · 融合时节奏型 / 音阶 / 律动按小节交替混合</p>
+        <p class="hint" id="fusion-hint">已选：RnB · 多风格按小节融合</p>
+        <div class="chart-reference">
+          <label for="chart-select">Billboard 热歌参考 <span>2026.10.24 · Hot 100</span></label>
+          <select id="chart-select">
+            <option value="">选择一首，应用原创同风格编曲规则</option>
+          </select>
+          <div id="chart-detail" class="chart-detail">提取和声与织体，不复制旋律。</div>
+        </div>
         <div class="sf-row">
           <label>音色库</label>
           <select id="ctl-sfbase">
             <option value="soundfont2">MusyngKite · 高保真</option>
             <option value="soundfont">FluidR3 · 经典</option>
           </select>
-          <span class="sf-note">随时对比切换，偏好自动保存</span>
+          <span class="sf-note">切换音色，自动保存</span>
         </div>
         <div class="keymap" id="scale-display"></div>
         <div id="spec-panel"></div>
@@ -84,10 +162,10 @@
 
       <section class="card">
         <h2><span class="step">2</span> 描述你的动机</h2>
-        <textarea id="motive-text" rows="3" placeholder="例如：上行级进、明亮开阔，中段有个大跳到高音再波浪式回落……"></textarea>
+        <textarea id="motive-text" rows="3" placeholder="例如：上行级进、明亮开阔，中段大跳后波浪式回落……"></textarea>
         <div class="motive-btns">
-          <button id="btn-gen" class="btn btn-primary">⚡ 生成旋律</button>
-          <button id="btn-reroll" class="btn" title="换一个随机版本">🎲 换一版</button>
+          <button id="btn-gen" class="btn btn-primary"><svg class="icon" aria-hidden="true"><use href="#i-spark"/></svg> 生成旋律</button>
+          <button id="btn-reroll" class="btn" title="换一个随机版本"><svg class="icon" aria-hidden="true"><use href="#i-reroll"/></svg> 换一版</button>
         </div>
         <div class="examples" id="examples">
           <span>试试：</span>
@@ -101,13 +179,13 @@
       </section>
 
       <section class="card">
-        <h2><span class="step">3</span> 编曲 · 声部开关 <label class="perf-toggle"><input type="checkbox" id="ctl-perf"> 性能模式（低端手机）</label></h2>
+        <h2><span class="step">3</span> 编曲 · 声部开关 <label class="perf-toggle"><input type="checkbox" id="ctl-perf"> 性能模式</label></h2>
         <div class="layers" id="layers">
           <div class="layer" data-layer="guitar">
             <label class="switch"><input type="checkbox" checked><span></span></label>
-            <span class="lname">🎸 旋律吉他</span>
+            <span class="lname"><svg class="icon" aria-hidden="true"><use href="#i-guitar"/></svg> 旋律吉他</span>
             <select class="patch">
-              <optgroup label="电吉他 · 真实采样">
+              <optgroup label="电吉他 · 24-bit WAV 双轮询">
                 <option value="clean">清音 Clean</option>
                 <option value="crunch" selected>过载 Overdriven</option>
                 <option value="dist">失真 Distortion</option>
@@ -115,8 +193,8 @@
                 <option value="muted">闷音 Muted</option>
                 <option value="harmonics">泛音 Harmonics</option>
               </optgroup>
-              <optgroup label="木吉他 · 真实采样">
-                <option value="steel">钢弦民谣 Steel</option>
+              <optgroup label="原声吉他 · 真实采样">
+                <option value="steel">原声琴体 Archtop · 24-bit</option>
                 <option value="nylon">尼龙古典 Nylon</option>
               </optgroup>
               <optgroup label="合成器">
@@ -129,12 +207,12 @@
               <div class="tone-ctl"><label>亮度</label><input type="range" class="tone-slider" data-layer="guitar" data-param="b" min="0" max="100" value="50"></div>
               <div class="tone-ctl"><label>空间</label><input type="range" class="tone-slider" data-layer="guitar" data-param="s" min="0" max="100" value="50"></div>
               <div class="tone-ctl"><label>厚度</label><input type="range" class="tone-slider" data-layer="guitar" data-param="t" min="0" max="100" value="50"></div>
-              <button class="tone-reset" data-layer="guitar">↺ 恢复风格默认</button>
+              <button class="tone-reset" data-layer="guitar"><svg class="icon" aria-hidden="true"><use href="#i-reset"/></svg> 恢复默认</button>
             </div>
           </div>
           <div class="layer" data-layer="keys">
             <label class="switch"><input type="checkbox" checked><span></span></label>
-            <span class="lname">🎹 电钢琴</span>
+            <span class="lname"><svg class="icon" aria-hidden="true"><use href="#i-keys"/></svg> 电钢琴</span>
             <select class="patch">
               <optgroup label="智能">
                 <option value="auto">跟随风格（自动分配乐器）</option>
@@ -154,12 +232,12 @@
               <div class="tone-ctl"><label>亮度</label><input type="range" class="tone-slider" data-layer="keys" data-param="b" min="0" max="100" value="50"></div>
               <div class="tone-ctl"><label>空间</label><input type="range" class="tone-slider" data-layer="keys" data-param="s" min="0" max="100" value="50"></div>
               <div class="tone-ctl"><label>厚度</label><input type="range" class="tone-slider" data-layer="keys" data-param="t" min="0" max="100" value="50"></div>
-              <button class="tone-reset" data-layer="keys">↺ 恢复风格默认</button>
+              <button class="tone-reset" data-layer="keys"><svg class="icon" aria-hidden="true"><use href="#i-reset"/></svg> 恢复默认</button>
             </div>
           </div>
           <div class="layer" data-layer="bass">
             <label class="switch"><input type="checkbox" checked><span></span></label>
-            <span class="lname">🎻 贝斯</span>
+            <span class="lname"><svg class="icon" aria-hidden="true"><use href="#i-bass"/></svg> 贝斯</span>
             <select class="patch">
               <option value="auto">自动跟随风格</option>
               <option value="walk">Walking 行走</option>
@@ -173,19 +251,19 @@
               <div class="tone-ctl"><label>亮度</label><input type="range" class="tone-slider" data-layer="bass" data-param="b" min="0" max="100" value="50"></div>
               <div class="tone-ctl"><label>空间</label><input type="range" class="tone-slider" data-layer="bass" data-param="s" min="0" max="100" value="50"></div>
               <div class="tone-ctl"><label>厚度</label><input type="range" class="tone-slider" data-layer="bass" data-param="t" min="0" max="100" value="50"></div>
-              <button class="tone-reset" data-layer="bass">↺ 恢复风格默认</button>
+              <button class="tone-reset" data-layer="bass"><svg class="icon" aria-hidden="true"><use href="#i-reset"/></svg> 恢复默认</button>
             </div>
           </div>
           <div class="layer" data-layer="drums">
             <label class="switch"><input type="checkbox" checked><span></span></label>
-            <span class="lname">🥁 鼓组</span>
+            <span class="lname"><svg class="icon" aria-hidden="true"><use href="#i-drums"/></svg> 鼓组</span>
             <select class="patch">
               <option value="auto">自动跟随风格</option>
               <option value="full">标准</option>
               <option value="lite">简洁</option>
               <option value="drive">加密驱动</option>
               <option value="808">808 嘻哈鼓组</option>
-              <option value="user">🎙 我的采样</option>
+              <option value="user">我的采样</option>
               <option value="beach">沙滩 · 无鼓组（shaker+贝斯riff）</option>
             </select>
             <input type="range" class="vol" min="0" max="100" value="70">
@@ -194,12 +272,12 @@
               <div class="tone-ctl"><label>亮度</label><input type="range" class="tone-slider" data-layer="drums" data-param="b" min="0" max="100" value="50"></div>
               <div class="tone-ctl"><label>空间</label><input type="range" class="tone-slider" data-layer="drums" data-param="s" min="0" max="100" value="50"></div>
               <div class="tone-ctl"><label>力度</label><input type="range" class="tone-slider" data-layer="drums" data-param="t" min="0" max="100" value="50"></div>
-              <button class="tone-reset" data-layer="drums">↺ 恢复风格默认</button>
+              <button class="tone-reset" data-layer="drums"><svg class="icon" aria-hidden="true"><use href="#i-reset"/></svg> 恢复默认</button>
             </div>
           </div>
           <div class="layer" data-layer="synth">
             <label class="switch"><input type="checkbox" checked><span></span></label>
-            <span class="lname">🎛 合成器 Pad</span>
+            <span class="lname"><svg class="icon" aria-hidden="true"><use href="#i-pad"/></svg> 合成器 Pad</span>
             <select class="patch">
               <optgroup label="迷幻摇滚">
                 <option value="halo" selected>光环 · 迷幻空间</option>
@@ -218,7 +296,7 @@
               <div class="tone-ctl"><label>亮度</label><input type="range" class="tone-slider" data-layer="synth" data-param="b" min="0" max="100" value="50"></div>
               <div class="tone-ctl"><label>空间</label><input type="range" class="tone-slider" data-layer="synth" data-param="s" min="0" max="100" value="50"></div>
               <div class="tone-ctl"><label>厚度</label><input type="range" class="tone-slider" data-layer="synth" data-param="t" min="0" max="100" value="50"></div>
-              <button class="tone-reset" data-layer="synth">↺ 恢复风格默认</button>
+              <button class="tone-reset" data-layer="synth"><svg class="icon" aria-hidden="true"><use href="#i-reset"/></svg> 恢复默认</button>
             </div>
           </div>
         </div>
@@ -227,7 +305,7 @@
 
     <!-- ===================== 和弦进行 ===================== -->
     <section class="card">
-      <h2><span class="step">4</span> 和弦进行 <em>选一个走向 · 点和弦名试听</em></h2>
+      <h2><span class="step">4</span> 和弦进行 <em>选择走向 · 点和弦试听</em></h2>
       <div class="prog-toolbar">
         <select id="preset-select"></select>
       </div>
@@ -236,89 +314,113 @@
     </section>
 
     <!-- ===================== 我的采样 ===================== -->
-    <section class="card">
-      <h2>🎙 我的采样 <em>导入或录制你的声音 → 用软件的鼓点/和声一起创作</em></h2>
-      <div class="us-bar">
-        <button id="btn-us-import" class="btn small">📁 导入音频</button>
-        <button id="btn-us-record" class="btn small">🎤 录制</button>
-        <label class="us-use"><input type="checkbox" id="us-use"> 鼓组使用我的采样</label>
-        <span class="prog-desc" id="us-status"></span>
-        <input type="file" id="us-file" accept="audio/*" hidden>
-      </div>
-      <div class="us-pads" id="us-pads"></div>
+    <section class="card sampling-card">
+      <details class="advanced-panel">
+        <summary><span>我的采样</span><em>导入、录制并编入鼓组</em></summary>
+        <div class="advanced-content">
+          <div class="us-bar">
+            <button id="btn-us-import" class="btn small"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg> 导入音频</button>
+            <button id="btn-us-record" class="btn small"><svg class="icon" aria-hidden="true"><use href="#i-mic"/></svg> 录制</button>
+            <label class="us-use"><input type="checkbox" id="us-use"> 鼓组使用我的采样</label>
+            <span class="prog-desc" id="us-status"></span>
+            <input type="file" id="us-file" accept="audio/*" hidden>
+          </div>
+          <div class="us-pads" id="us-pads"></div>
+        </div>
+      </details>
     </section>
 
     <!-- ===================== 轨道编辑 ===================== -->
-    <section class="card">
-      <details class="ted" id="track-editor">
-        <summary>🎚 轨道编辑 · 像玩游戏一样改曲子</summary>
+    <section class="card workspace-card track-card">
+      <div class="section-heading"><span>EDIT / PERFORMANCE</span><span>实时写入 · 逐轨精修</span></div>
+      <details class="ted" id="track-editor" open>
+        <summary><svg class="icon" aria-hidden="true"><use href="#i-tracks"/></svg> 轨道编辑 <em>点击录入，逐轨精修</em></summary>
         <div class="ted-game">
           <div class="ted-game-bar">
-            <span class="ted-game-title">🎮 新手模式</span>
-            <button class="btn small game-mode on" data-gmode="drums">🥁 打鼓</button>
-            <button class="btn small game-mode" data-gmode="melody">🎸 弹旋律</button>
-            <button class="btn small game-mode" data-gmode="chords">🎹 弹和弦</button>
-            <button id="btn-game-metro" class="btn small">▶ 跟节拍器玩</button>
+            <span class="ted-game-title"><svg class="icon" aria-hidden="true"><use href="#i-game"/></svg> 新手模式</span>
+            <button class="btn small game-mode on" data-gmode="drums"><svg class="icon" aria-hidden="true"><use href="#i-drums"/></svg> 打鼓</button>
+            <button class="btn small game-mode" data-gmode="melody"><svg class="icon" aria-hidden="true"><use href="#i-guitar"/></svg> 弹旋律</button>
+            <button class="btn small game-mode" data-gmode="chords"><svg class="icon" aria-hidden="true"><use href="#i-keys"/></svg> 弹和弦</button>
+            <button id="btn-game-metro" class="btn small"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg> 跟节拍器玩</button>
             <span class="game-beat" id="game-beat"><i></i><i></i><i></i><i></i></span>
             <span class="ted-barlabel" id="game-bar-label"></span>
           </div>
           <div id="game-pads" class="game-pads"></div>
-          <div class="ted-feedback" id="ted-feedback" role="status">💡 先点「跟节拍器玩」，再跟着节奏点大按钮——你点的声音会写进编曲，点 ▶ 播放 就能听到！</div>
+          <div class="ted-feedback" id="ted-feedback" role="status"><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg> 开启节拍器，点击大按钮即可写入演奏。</div>
         </div>
         <details class="ted-advanced">
-          <summary>🔧 专业网格（进阶）</summary>
+          <summary><svg class="icon" aria-hidden="true"><use href="#i-grid"/></svg> 专业网格</summary>
           <div class="ted-toolbar">
-            <button id="ted-prev" class="btn small">◀ 前 4 小节</button>
+            <button id="ted-prev" class="btn small"><svg class="icon flip" aria-hidden="true"><use href="#i-chevron"/></svg> 前 4 小节</button>
             <span class="ted-barlabel" id="ted-bar-label"></span>
-            <button id="ted-next" class="btn small">后 4 小节 ▶</button>
+            <button id="ted-next" class="btn small">后 4 小节 <svg class="icon" aria-hidden="true"><use href="#i-chevron"/></svg></button>
           </div>
           <div id="ted-tracks"></div>
         </details>
       </details>
     </section>
 
-    <!-- ===================== 旋律 ===================== -->
-    <section class="card">
-      <h2><span class="step">5</span> 生成结果 <em>钢琴卷帘 · 可直接编辑旋律 · 改和弦后自动重配</em></h2>
+    <!-- ===================== 旋律工作区 ===================== -->
+    <section class="card workspace-card melody-card">
+      <div class="section-heading"><span>MELODY / PIANO ROLL</span><span>非破坏性编辑</span></div>
+      <h2><span class="step">5</span> 生成结果 <em>钢琴卷帘 · 点击编辑</em></h2>
       <div class="roll-tools">
-        <span class="roll-hint">编辑卷帘：点空白添加音符 · 拖动移动 · 拖右缘改时值 · 双击删除 · 手动改动不会被覆盖</span>
-        <button id="btn-del-note" class="btn small">✕ 删除选中</button>
-        <button id="btn-rematch" class="btn small" hidden>⚡ 让旋律适配新和弦</button>
-        <button id="btn-reset-melody" class="btn small">↺ 重新生成旋律</button>
+        <span class="roll-hint">点击添加 · 拖动移动 · 右缘改时值 · 双击删除</span>
+        <div class="roll-actions">
+          <button id="btn-del-note" class="btn small"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg> 删除选中</button>
+          <button id="btn-rematch" class="btn small" hidden><svg class="icon" aria-hidden="true"><use href="#i-spark"/></svg> 适配新和弦</button>
+          <button id="btn-reset-melody" class="btn small"><svg class="icon" aria-hidden="true"><use href="#i-reset"/></svg> 重新生成</button>
+        </div>
       </div>
-      <canvas id="roll" height="230"></canvas>
+      <div class="roll-frame"><canvas id="roll" height="230"></canvas></div>
       <div class="melody-foot">
         <div class="stats" id="melody-stats"></div>
-        <div class="exports">
-          <button id="btn-midi" class="btn">⬇ 导出 MIDI（全编配）</button>
-          <button id="btn-audio" class="btn" title="录下完整混音并自动转 WAV，同时输出频谱体检——把 WAV 发给 AI 可做根因分析">⬇ 导出音频（WAV·含体检）</button>
-        </div>
-        <div class="studio-row">
-          <input type="password" id="replicate-token" placeholder="Replicate API Token（仅存本机浏览器）" autocomplete="off">
-          <button id="btn-studio" class="btn btn-primary">🎙 渲染成唱片</button>
-          <button id="btn-copy-prog" class="btn small">📋 复制和弦走向</button>
-        </div>
-        <p class="studio-status" id="studio-status"></p>
-        <div class="studio-variants" id="studio-variants" hidden></div>
-        <div class="studio-result" id="studio-result" hidden>
-          <audio id="studio-audio" controls style="width:100%"></audio>
-          <a id="studio-dl" class="btn small" download="motif-lab-studio.wav">⬇ 下载音频</a>
-        </div>
       </div>
     </section>
 
+    <!-- ===================== 导出与 AI Studio ===================== -->
+    <section class="card export-card">
+      <div class="export-heading">
+        <div><span class="section-index">06 / OUTPUT</span><h2>导出作品</h2></div>
+        <p>完整编配，随时继续。</p>
+      </div>
+      <div class="export-actions">
+        <div class="exports">
+          <button id="btn-midi" class="btn"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> 导出 MIDI <small>全编配</small></button>
+          <button id="btn-audio" class="btn" title="直接导出与播放一致的离线混音 WAV，无需实时等待；同时输出频谱体检"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> 导出音频 <small>WAV · 含体检</small></button>
+        </div>
+        <button id="btn-copy-prog" class="btn small"><svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg> 复制和弦走向</button>
+      </div>
+      <details class="advanced-panel ai-panel">
+        <summary><span>AI Studio</span><em>云端渲染 · Token 仅存本机</em></summary>
+        <div class="advanced-content">
+          <div class="studio-row">
+            <input type="password" id="replicate-token" placeholder="Replicate API Token（仅存本机）" autocomplete="off">
+            <button id="btn-studio" class="btn btn-primary"><svg class="icon" aria-hidden="true"><use href="#i-studio"/></svg> 渲染成唱片</button>
+          </div>
+          <p class="studio-status" id="studio-status"></p>
+          <div class="studio-variants" id="studio-variants" hidden></div>
+          <div class="studio-result" id="studio-result" hidden>
+            <audio id="studio-audio" controls style="width:100%"></audio>
+            <a id="studio-dl" class="btn small" download="motif-lab-studio.wav"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> 下载音频</a>
+          </div>
+        </div>
+      </details>
+    </section>
+
     <footer>
-      <p>半专业编曲向工具 · 理论内核：和弦音优先 + 调式音阶经过音 + 可播种随机 · 支持 ii-V-I / 12 小节布鲁斯 / 小调 iiø-V-i 等经典走向 · 所有声音由 Tone.js 实时合成</p>
+      <p>Motif Lab · 原创多轨编曲与 MIDI 导出</p>
     </footer>
   </main>
 </div>
-<script src="theory.js?v=47"></script>
-<script src="cells.js?v=47"></script>
-<script src="specs.js?v=47"></script>
-<script src="rules.js?v=47"></script>
-<script src="app.js?v=47"></script>
+<script src="theory.js?v=49"></script>
+<script src="cells.js?v=49"></script>
+<script src="specs.js?v=49"></script>
+<script src="rules.js?v=49"></script>
+<script src="chart_styles.js?v=49"></script>
+<script src="app.js?v=49"></script>
 <script>
-/* v17 性能：注册 Service Worker，预缓存静态资源与鼓采样，二次访问秒开 */
+/* 静态资源预缓存；音频按需加载并由 Service Worker 运行时缓存 */
 try {
   if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
     navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(function () {});
@@ -349,7 +451,7 @@ try {
    绕开旧 SW 的缓存优先），不一致说明本页是旧 SW 端的旧版。
    v46 升级：探测成功=网络已通 → 顺手清全部缓存+注销 SW 再硬刷新（一次到位），90 秒时间窗可重试 */
 (function () {
-  var PAGE_VER = 'v47'; /* 发版三件套：?v=N + 徽章 + 这里 */
+  var PAGE_VER = 'v49'; /* 发版三件套：?v=N + 徽章 + 这里 */
   try {
     fetch('sw.js?bust=' + Date.now()).then(function (r) { return r.text(); }).then(function (t) {
       var m = /motiflab-(v\d+)/.exec(t);
@@ -387,6 +489,26 @@ window.addEventListener('load', function () {
     } else { done(); }
   }, 8000);
 });
+</script>
+<script>
+(function () {
+  var hero = document.querySelector('.hero');
+  var stage = document.getElementById('instrument-stage');
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+  if (!hero || !stage) return;
+  hero.addEventListener('pointermove', function (event) {
+    if (reduced.matches || document.body.dataset.playing === 'true' || document.body.dataset.perfMode === 'true') return;
+    var rect = hero.getBoundingClientRect();
+    var x = (event.clientX - rect.left) / rect.width - 0.5;
+    var y = (event.clientY - rect.top) / rect.height - 0.5;
+    stage.style.setProperty('--guitar-ry', (-7 + x * 7).toFixed(2) + 'deg');
+    stage.style.setProperty('--guitar-rx', (-y * 5).toFixed(2) + 'deg');
+  }, { passive: true });
+  hero.addEventListener('pointerleave', function () {
+    stage.style.setProperty('--guitar-ry', '-7deg');
+    stage.style.setProperty('--guitar-rx', '0deg');
+  });
+})();
 </script>
 </body>
 </html>

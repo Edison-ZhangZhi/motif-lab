@@ -1,6 +1,6 @@
-/* MotifLab Service Worker — v17 性能：预缓存静态资源 + 鼓采样，二次访问秒开 */
+/* MotifLab Service Worker — 静态资源预缓存；音频按实际编曲加载并运行时缓存。 */
 'use strict';
-var CACHE = 'motiflab-v47';
+var CACHE = 'motiflab-v49';
 var PRECACHE = [
   './',
   'index.html',
@@ -8,25 +8,13 @@ var PRECACHE = [
   'cells.js',
   'specs.js',
   'rules.js',
+  'chart_styles.js',
   'app.js',
   'style.css',
   'lib/Tone.js',
   'lib/soundfont-player.min.js',
-  'drums/brush_snare.mp3',
-  'drums/clap.mp3',
-  'drums/clave.mp3',
-  'drums/conga_h.mp3',
-  'drums/conga_l.mp3',
-  'drums/crash.mp3',
-  'drums/hat_808.mp3',
-  'drums/hat_closed.mp3',
-  'drums/kick_808.mp3',
-  'drums/kick_room.mp3',
-  'drums/rim_click.mp3',
-  'drums/shaker.mp3',
-  'drums/shekere.mp3',
-  'drums/snap.mp3',
-  'drums/snare_room.mp3'
+  'assets/manrope-latin-wght-normal.woff2',
+  'assets/moon-surface.jpg'
 ];
 
 self.addEventListener('install', function (e) {

@@ -1,0 +1,10 @@
+Growlybass — Karoryfer Samples
+Squier Jazz Bass, performed and mapped by the Karoryfer Samples contributors.
+Copyright 2014 Karoryfer Lecolds.
+Source: https://github.com/sfzinstruments/karoryfer.growlybass
+The upstream readme states: Royalty-free for all commercial and non-commercial use.
+Source notice: https://github.com/sfzinstruments/karoryfer.growlybass/blob/master/readme.txt
+
+MotifLab redistributes selected, unmodified 24-bit WAV sustained-note recordings.
+Filenames were normalized for the browser sampler. No original audio was
+converted from MP3.

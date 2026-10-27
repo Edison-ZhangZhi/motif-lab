@@ -28,6 +28,7 @@ const state = {
   mode: 'major',
   bpm: 92, swing: 0.18, master: 0.8, meter: 'm44',
   presetId: 'rnb-drift',
+  chartId: '',
   slots: [],             // { d, acc, q }
   motiveText: '',
   seedSalt: 0,
@@ -1572,6 +1573,7 @@ function genDrums() {
  * 音频引擎（Tone.js）
  * ============================================================ */
 const AE = { ready: false, nodes: {} };
+let LIVE_RAW = null;
 
 /* v21 根治"一播放就非常卡"：Tone.js MetalSynth 每次 triggerAttackRelease 要吃 ~14ms 主线程
    （6 载波+6 调制器调频 + 包络重建），播放中 hats/rides 每秒触发 6-12 次 = 主线程被吃掉一大半，
@@ -1764,6 +1766,7 @@ function makeCabImpulse() {
 
 function buildAudio() {
   if (AE.ready) return;
+  if (!Tone.getContext().isOffline) LIVE_RAW = Tone.getContext().rawContext;
   /* v17 性能：lookAhead 0.1→0.3s——事件密集（峰值 30+ 回调/s）时默认 0.1s 排程余量不足易爆；采样解码/GC 抖动下 0.3s 才稳 */
   try { Tone.context.lookAhead = 0.3; } catch (e) {}
   /* v4 Logic 级母带链：音量 → 三段EQ → 压缩 → 限制器 → 输出。
@@ -1772,24 +1775,20 @@ function buildAudio() {
      参数沿用低频段（-20/3）；动态塑形交给下游 Limiter。回退：换回调用处的注释块即可。
      各层推子仍汇入 AE.master；导出音频从限制器后分流（与听到的一致） */
   AE.master = new Tone.Volume(-1.5);
-  /* v25 母带链升级：低频暖（+1.5dB 搁架）+ 1k 收敛（-0.5dB 去纸箱感）+ 高频空气感（+1.5dB 搁架）——
-     整体更饱满、更贴"商业混音"听感（仍是引擎A天花板内，非网易云级） */
-  AE.masterEq = new Tone.EQ3({ low: 1.5, mid: -0.5, high: 1.5, lowFrequency: 110, highFrequency: 7500 });
-  AE.masterMB = new Tone.Compressor({ threshold: -16, ratio: 2.5, attack: 0.015, release: 0.2 }); /* v27：attack 30→15ms 更早抓住瞬态峰值 */
+  /* 保留低频暖度与轻微空气感；实测多窗频谱后收敛高频，避免镲片/拨片噪声盖过主体。 */
+  AE.masterEq = new Tone.EQ3({ low: 1.5, mid: -0.5, high: 0.5, lowFrequency: 110, highFrequency: 7500 });
+  AE.masterMB = new Tone.Compressor({ threshold: -14, ratio: 2, attack: 0.02, release: 0.22 });
   /* 回退用：AE.masterMB = new Tone.MultibandCompressor({ lowFrequency: 250, highFrequency: 2600,
      low: { threshold:-20, ratio:3, attack:0.02, release:0.15 }, mid: { threshold:-16, ratio:2.5, attack:0.015, release:0.12 },
      high:{ threshold:-13, ratio:3, attack:0.01, release:0.1 } }); */
-  AE.masterSat = new Tone.Distortion(0.02); /* v14：仅留染色底线，CPU 优先；v25 微增谐波暖度 */
-  AE.masterMakeup = new Tone.Gain(1.3); /* v25：限制器前 makeup ≈+2.3dB，提升整体响度（商业响度逼近） */
-  /* v27 防爆音：tanh 软削波在限幅器前把瞬时峰值圆滑压住——DAC 硬削波 = "一炸一炸"的根源 */
+  AE.masterSat = new Tone.Distortion(0.015);
+  AE.masterMakeup = new Tone.Gain(4); /* +12dB 补偿采样/混音余量；只提升一次，-1dB 限制器守住峰值 */
   AE.masterClip = new Tone.WaveShaper((() => {
     const n = 2048, c = new Float32Array(n);
-    for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; c[i] = Math.tanh(x * 1.6) / Math.tanh(1.6); }
+    for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; c[i] = Math.tanh(x * 1.1) / 1.1; }
     return c;
   })(), 1024);
-  /* v35：去掉 2x 过采样——全混音都过这个软削波器，2x=主链 CPU×2（低端机 rock 实时播放"卡"的嫌疑主犯）；
-     tanh 曲线本身是平滑的，欠采样混叠可忽略 */
-  AE.limiterRef = new Tone.Limiter(-0.5);
+  AE.limiterRef = new Tone.Limiter(-1);
   AE.master.connect(AE.masterEq);
   AE.masterEq.connect(AE.masterMB);
   AE.masterMB.connect(AE.masterSat);
@@ -2058,13 +2057,14 @@ function buildAudio() {
 
 /* ================= 真实电吉他采样引擎（Freesound CC0 单音录制） =================
  * 解决 SoundFont 吉他"像合成器"的问题：真实琴体采样 + 就近取音 + 微随机 + 滑音 */
-const GUITAR_SAMP = { buffers: {}, started: false };
-/* tonejs-instruments 真实采样（电吉他=Karoryfer, 木吉他=Iowa），音名 s=升号 */
+const GUITAR_SAMP = { buffers: {}, started: false, _rrIndex: 0 };
+/* Karoryfer Shinyguitar 24-bit 原始 WAV；每音两次真实录制 RR。nylon 保留 Iowa 旧库。 */
 const GUITAR_SETS = {
   electric: ['E2','Fs2','Cs2','A2','C3','Ds3','Fs3','A3','C4','Ds4','Fs4','A4','C5','Ds5','Fs5','A5','C6'],
-  acoustic: ['A2','As2','B2','C3','Cs3','D3','Ds3','E3','F3','Fs3','G3','Gs3','A3','As3','B3','C4','A4'],
+  acoustic: ['E2','Fs2','Cs2','A2','C3','Ds3','Fs3','A3','C4','Ds4','Fs4','A4','C5','Ds5','Fs5','A5','C6'],
+  nylon: ['A2','As2','B2','C3','Cs3','D3','Ds3','E3','F3','Fs3','G3','Gs3','A3','As3','B3','C4','A4'],
 };
-const GUITAR_PATCH_MAP = { clean:'electric', crunch:'electric', dist:'electric', jazz:'electric', muted:'electric', harmonics:'electric', delay:'electric', steel:'acoustic', nylon:'acoustic' };
+const GUITAR_PATCH_MAP = { clean:'electric', crunch:'electric', dist:'electric', jazz:'electric', muted:'electric', harmonics:'electric', delay:'electric', steel:'acoustic', nylon:'nylon' };
 /* v4 吉他双源（§2.1）：rnb/jazz/bossa = SoundFont 连音乐句（滑音/长音可控）；
    rock/hiphop/afro = 真实单音采样（颗粒/riff 质感优先），SoundFont 兜底 */
 const GUITAR_SRC_BY_STYLE = { rnb: 'samp', jazz: 'samp', bossa: 'samp', rock: 'samp', hiphop: 'samp', afro: 'samp', /* v35：jazz/bossa 弃 GM 吉他采样 → 真采样（GM 吉他=气若游丝+塑料，是"jazz 只有贝斯声"的原因之一） */
@@ -2159,62 +2159,147 @@ function noteNameToMidi(name) {
   const base = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }[m[1]];
   return (parseInt(m[3]) + 1) * 12 + base + (m[2] ? 1 : 0);
 }
+const AUDIO_INFLIGHT = new Map();
+function withTimeout(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error((label || '操作') + '超时')), ms); }),
+  ]).finally(() => clearTimeout(timer));
+}
+async function fetchData(url, type, ms, retries) {
+  let lastError;
+  for (let attempt = 0; attempt <= (retries === undefined ? 1 : retries); attempt++) {
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    try {
+      const response = await withTimeout(fetch(url, controller ? { signal: controller.signal } : {}), ms || 9000, url);
+      if (!response.ok) {
+        const err = new Error('HTTP ' + response.status);
+        err.noRetry = response.status >= 400 && response.status < 500;
+        throw err;
+      }
+      return await withTimeout(type === 'text' ? response.text() : response.arrayBuffer(), ms || 9000, url);
+    } catch (e) {
+      lastError = e;
+      if (controller) try { controller.abort(); } catch (ignore) {}
+      if (e.noRetry) break;
+    }
+  }
+  throw lastError;
+}
+function loadAudioBuffer(key, url, raw) {
+  if (AUDIO_INFLIGHT.has(key)) return AUDIO_INFLIGHT.get(key);
+  const promise = (async () => {
+    try {
+      const data = await fetchData(url, 'arrayBuffer', 8000, 1);
+      return await withTimeout(raw.decodeAudioData(data), 10000, '解码 ' + url);
+    } catch (e) {
+      console.warn('采样加载失败（可重试）' + url, e);
+      return null;
+    } finally {
+      AUDIO_INFLIGHT.delete(key);
+    }
+  })();
+  AUDIO_INFLIGHT.set(key, promise);
+  return promise;
+}
+async function audioBatch(items, limit, worker) {
+  let next = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const item = items[next++];
+      await worker(item);
+      await new Promise(r => setTimeout(r, 0));
+    }
+  });
+  await Promise.all(runners);
+}
+function nearestSampleNote(notes, midi, maxDistance) {
+  let best = null, distance = Infinity;
+  for (const note of notes) {
+    const d = Math.abs(noteNameToMidi(note) - midi);
+    if (d < distance) { distance = d; best = note; }
+  }
+  return distance <= maxDistance ? best : null;
+}
+function variantBuffer(entry, salt) {
+  if (!entry) return null;
+  if (!Array.isArray(entry)) return entry;
+  const available = entry.filter(Boolean);
+  return available.length ? available[Math.abs(salt || 0) % available.length] : null;
+}
 function loadGuitarSamples() {
-  if (GUITAR_SAMP.started) return;
   GUITAR_SAMP.started = true;
   const raw = Tone.getContext().rawContext;
-  for (const set of ['electric', 'acoustic']) GUITAR_SAMP.buffers[set] = {};
-  /* v19 防风暴：34 个 mp3 全并发 fetch+decode 是首播卡死共犯——改逐个 await + 每个之间让出主线程 */
-  GUITAR_SAMP.promise = (async () => { /* v24：promise 外暴露，离线渲染前可等全 */
-    for (const set of ['electric', 'acoustic']) {
-      for (const note of GUITAR_SETS[set]) {
-        try {
-          const r = await fetch('guitar2/' + set + '/' + note + '.mp3');
-          if (!r.ok) continue;
-          const buf = await raw.decodeAudioData(await r.arrayBuffer());
-          
-          GUITAR_SAMP.buffers[set][noteNameToMidi(note)] = buf;
-        } catch (e) {}
-        await new Promise(res => setTimeout(res, 0));
-      }
+  const used = melodyEvents.map(e => e.midi);
+  const set = GUITAR_PATCH_MAP[state.layers.guitar.patch] || 'electric';
+  const bank = GUITAR_SAMP.buffers[set] || (GUITAR_SAMP.buffers[set] = {});
+  const needed = new Set();
+  for (const midi of used) {
+    const note = nearestSampleNote(GUITAR_SETS[set], midi, 5);
+    if (note) needed.add(note);
+  }
+  if (!used.length) GUITAR_SETS[set].slice(0, 4).forEach(n => needed.add(n));
+  const tasks = [...needed].filter(note => !bank[noteNameToMidi(note)]);
+  GUITAR_SAMP.promise = audioBatch(tasks, 3, async note => {
+    const midi = noteNameToMidi(note);
+    if (set === 'nylon') {
+      const buf = await loadAudioBuffer('guitar:nylon:' + note, 'guitar2/acoustic/' + note + '.mp3', raw);
+      if (buf) bank[midi] = [buf];
+      return;
     }
-  })();
+    const first = await loadAudioBuffer('guitar:hq:' + set + ':' + note + ':1', 'guitar2/hq/' + set + '/' + note + '_rr1.wav', raw);
+    if (first) bank[midi] = [first];
+    if (!first) {
+      const fallback = await loadAudioBuffer('guitar:fallback:' + set + ':' + note, 'guitar2/' + (set === 'acoustic' ? 'acoustic' : 'electric') + '/' + note + '.mp3', raw);
+      if (fallback) bank[midi] = [fallback];
+    }
+    loadAudioBuffer('guitar:hq:' + set + ':' + note + ':2', 'guitar2/hq/' + set + '/' + note + '_rr2.wav', raw).then(second => {
+      if (!second) return;
+      if (!bank[midi]) bank[midi] = [];
+      bank[midi][1] = second;
+    });
+  });
+  return GUITAR_SAMP.promise;
 }
-/* ================= v31 真实电贝斯采样（tonejs-instruments bass-electric，与吉他一族）
- * 库内采样为小三度网格（As/Cs/E/G），就近映射最远 ±1.5 半音（回放速率 ±9%），
- * 取代 GM 指弹贝斯（25 年前采样=贝斯塑料感主犯）；GM 保留为兜底。 */
-const BASS_SAMP = { buffers: {}, started: false, _rrMidi: null, _rrT: 0 };
-const BASS_NOTES = ['Cs1','E1','G1','As1','Cs2','E2','G2','As2','Cs3','E3','G3','As3','Cs4','E4','G4','As4','Cs5'];
+/* Karoryfer Growlybass：24-bit WAV、真实双 RR；首播只等第一组，第二组后台补齐。 */
+const BASS_SAMP = { buffers: {}, started: false, _rrMidi: null, _rrT: 0, _rrIndex: 0 };
+const BASS_NOTES = ['Cs2','E2','Fs2','A2','C3','Ds3','Fs3','A3','C4','Ds4','Fs4','A4','C5'];
 function loadBassSamples() {
-  if (BASS_SAMP.started || typeof Tone === 'undefined') return;
+  if (typeof Tone === 'undefined') return Promise.resolve();
   BASS_SAMP.started = true;
   const raw = Tone.getContext().rawContext;
-  BASS_SAMP.promise = (async () => {
-    for (const note of BASS_NOTES) {
-      try {
-        const r = await fetch('bass/' + note + '.mp3');
-        if (!r.ok) continue;
-        const buf = await raw.decodeAudioData(await r.arrayBuffer());
-        BASS_SAMP.buffers[noteNameToMidi(note)] = buf;
-      } catch (e) {}
-      await new Promise(res => setTimeout(res, 0));
-    }
-  })();
+  const used = bassEvents.filter(e => !e.b808).map(e => e.midi);
+  const needed = new Set();
+  for (const midi of used) {
+    const note = nearestSampleNote(BASS_NOTES, midi, 4);
+    if (note) needed.add(note);
+  }
+  if (!used.length) ['E2', 'A2', 'C3'].forEach(n => needed.add(n));
+  const tasks = [...needed].filter(note => !BASS_SAMP.buffers[noteNameToMidi(note)]);
+  BASS_SAMP.promise = audioBatch(tasks, 3, async note => {
+    const midi = noteNameToMidi(note);
+    const first = await loadAudioBuffer('bass:hq:' + note + ':1', 'bass/hq/' + note + '_rr1.wav', raw);
+    if (first) BASS_SAMP.buffers[midi] = [first];
+    loadAudioBuffer('bass:hq:' + note + ':2', 'bass/hq/' + note + '_rr2.wav', raw).then(second => {
+      if (!second) return;
+      if (!BASS_SAMP.buffers[midi]) BASS_SAMP.buffers[midi] = [];
+      BASS_SAMP.buffers[midi][1] = second;
+    });
+  });
+  return BASS_SAMP.promise;
 }
 function playBassReal(midi, t, dur, vel) {
   const keys = Object.keys(BASS_SAMP.buffers).map(Number);
   if (!keys.length) return false;
   let best = keys[0], bd = 99;
   for (const k of keys) { const d = Math.abs(k - midi); if (d < bd) { bd = d; best = k; } }
-  if (bd > 4) return false; /* 小三度网格：正常覆盖内最远 ±1.5 半音，>4 判定越界 */
-  if (midi === BASS_SAMP._rrMidi && t - BASS_SAMP._rrT < 0.6) {
-    const alts = keys.filter(k => k !== best && Math.abs(k - midi) <= 4);
-    if (alts.length) best = alts[Math.floor(Math.random() * alts.length)];
-  }
+  if (bd > 4) return false;
   BASS_SAMP._rrMidi = midi; BASS_SAMP._rrT = t;
   const raw = Tone.getContext().rawContext;
   const src = raw.createBufferSource();
-  src.buffer = BASS_SAMP.buffers[best];
+  src.buffer = variantBuffer(BASS_SAMP.buffers[best], BASS_SAMP._rrIndex++);
+  if (!src.buffer) return false;
   src.playbackRate.value = Math.pow(2, (midi - best) / 12);
   const g = raw.createGain();
   const v = Math.max(0.04, vel);
@@ -2232,37 +2317,34 @@ function playBassReal(midi, t, dur, vel) {
 /* ================= v41 自托管 Wurlitzer 电钢（tonejs/audio casio 采样，与 smplr 同源）
  * 取代 CDN smplr（jsdelivr/unpkg 国内不稳）——真实电钢采样本地化，rnb/soul 键盘首选；FM tine 兜底 */
 const WURLI_SAMP = { buffers: {}, started: false };
-const WURLI_NOTES = ['C2','Cs2','D2','Ds2','E2','F2','Fs2','G2','Gs2','A2','As2','B2','C3','Cs3','D3','Ds3','E3','F3','Fs3','G3','Gs3','A3','As3','B3','C4','Cs4','D4','Ds4','E4','F4','Fs4','G4','Gs4','A4','As4','B4','C5','Cs5','D5'];
+const WURLI_NOTES = ['C2','Cs2','D2','Ds2','E2','F2','Fs2','G2','A2'];
 function loadWurliSamples() {
-  if (WURLI_SAMP.started || typeof Tone === 'undefined') return;
+  if (typeof Tone === 'undefined') return Promise.resolve();
   WURLI_SAMP.started = true;
   const raw = Tone.getContext().rawContext;
-  WURLI_SAMP.promise = (async () => {
-    /* v43：8 路并行加载（旧串行 39 文件=数秒级；缺文件 404 快速跳过） */
-    const batch = async (list) => {
-      for (const note of list) {
-        try {
-          const r = await fetch('wurli/' + note + '.mp3');
-          if (!r.ok) continue;
-          const buf = await raw.decodeAudioData(await r.arrayBuffer());
-          WURLI_SAMP.buffers[noteNameToMidi(note)] = buf;
-        } catch (e) {}
-      }
-    };
-    const chunks = [];
-    for (let i = 0; i < WURLI_NOTES.length; i += 8) chunks.push(WURLI_NOTES.slice(i, i + 8));
-    await Promise.all(chunks.map(c => batch(c)));
-  })();
+  const needed = new Set();
+  for (const e of keysEvents) for (const midi of e.notes || []) {
+    const note = nearestSampleNote(WURLI_NOTES, midi, 3);
+    if (note) needed.add(note);
+  }
+  if (!keysEvents.length) WURLI_NOTES.forEach(n => needed.add(n));
+  const tasks = [...needed].filter(note => !WURLI_SAMP.buffers[noteNameToMidi(note)]);
+  WURLI_SAMP.promise = audioBatch(tasks, 3, async note => {
+    const buf = await loadAudioBuffer('wurli:' + note, 'wurli/' + note + '.mp3', raw);
+    if (buf) WURLI_SAMP.buffers[noteNameToMidi(note)] = buf;
+  });
+  return WURLI_SAMP.promise;
 }
 function playWurliReal(notes, t, dur, vel) {
   const keys = Object.keys(WURLI_SAMP.buffers).map(Number);
-  if (!keys.length) return false;
-  let played = false;
   const raw = Tone.getContext().rawContext;
   for (const n of notes) {
     let best = keys[0], bd = 99;
     for (const k of keys) { const d = Math.abs(k - n); if (d < bd) { bd = d; best = k; } }
-    if (bd > 3) continue; /* 就近映射，>3 半音走兜底 */
+    if (!keys.length || bd > 3) {
+      if (!playSynthBuf('keysEP', n, t, vel, dur)) AE.keysEP.triggerAttackRelease(midiName(n), dur, t, vel);
+      continue;
+    }
     const src = raw.createBufferSource();
     src.buffer = WURLI_SAMP.buffers[best];
     src.playbackRate.value = Math.pow(2, (n - best) / 12);
@@ -2274,9 +2356,8 @@ function playWurliReal(notes, t, dur, vel) {
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.4);
     src.connect(g); g.connect(nativeInputOf(AE.keysVol));
     src.start(t); src.stop(t + dur + 0.5);
-    played = true;
   }
-  return played;
+  return notes.length > 0;
 }
 /* ================= v42 我的采样（导入/录制） =================
  * 小白录入任意声音 → 映射到鼓件（kick/snare/hat/clap/snap/fx）→ 用本软件鼓点/和声一起创作。
@@ -2379,20 +2460,17 @@ function playGuitarReal(patch, midi, t, dur, vel, slideFrom, legato, styleKey, a
   let best = keys[0], bd = 99;
   for (const k of keys) { const d = Math.abs(k - midi); if (d < bd) { bd = d; best = k; } }
   if (bd > 5) return false; /* v5.1：>5 半音 playbackRate 共振峰漂移=塑料味，交还 SoundFont */
-  /* v5.6 轮播微差：同音高 0.6s 内连击时换邻近采样位（真人两连音不可能完全同音色） */
-  if (keys.length > 1 && midi === GUITAR_SAMP._rrMidi && t - GUITAR_SAMP._rrT < 0.6) {
-    const alts = keys.filter(k => k !== best && Math.abs(k - midi) <= Math.min(5, Math.max(bd + 2, 2)));
-    if (alts.length) best = alts.reduce((a, b) => Math.abs(a - midi) <= Math.abs(b - midi) ? a : b);
-  }
   GUITAR_SAMP._rrMidi = midi; GUITAR_SAMP._rrT = t;
   const fx = Object.assign({}, GUITAR_PATCH_FX[patch] || GUITAR_PATCH_FX.clean, GUITAR_STYLE_FX[styleKey] || {});
   const out = guitarFxChain(patch, Tone.getContext().rawContext, styleKey);
   if (fx.gate < 1) dur = Math.max(0.07, Math.min(dur, 0.08 + dur * fx.gate));
   else dur = Math.min(dur, 2.5); /* v4：自然衰减上限，采样像真琴一样"散掉"而非锯住 */
   const raw = Tone.getContext().rawContext;
+  const rrIndex = GUITAR_SAMP._rrIndex++;
   const src = raw.createBufferSource();
-  src.buffer = bank[best];
-  src.playbackRate.value = Math.pow(2, (midi - best) / 12) * (1 + (Math.random() * 0.016 - 0.008)); /* v5.6 ±0.8%：真人手指压力差 */
+  src.buffer = variantBuffer(bank[best], rrIndex);
+  if (!src.buffer) return false;
+  src.playbackRate.value = Math.pow(2, (midi - best) / 12);
   if (slideFrom && slideFrom !== midi && Math.abs(midi - slideFrom) <= 7) {
     /* 滑音：从前一音高滑到目标（≤7 半音才滑，大跳保持干净分离） */
     src.playbackRate.setValueAtTime(Math.pow(2, (slideFrom - best) / 12), t);
@@ -2429,7 +2507,7 @@ function playGuitarReal(patch, midi, t, dur, vel, slideFrom, legato, styleKey, a
   /* v5.6 拨弦瞬态：吉他的身份在前 15ms 拨片噪声里；attack 包络把它磨没了，单独补一发 */
   const pk = raw.createBiquadFilter(); pk.type = 'bandpass'; pk.frequency.value = 2200 + Math.random() * 1200; pk.Q.value = 1.0; /* v5.7 收敛：拨片太亮=粗糙感 */
   const pg = raw.createGain();
-  const pgv = Math.min(0.85, vel * 0.55) * (artic === 'stacc' ? 1.1 : 1) * (styleKey === 'jazz' ? 0.5 : 1); /* v5.7 收敛 */
+  const pgv = Math.min(0.3, vel * 0.18) * (artic === 'stacc' ? 1.1 : 1) * (styleKey === 'jazz' ? 0.5 : 1);
   pg.gain.setValueAtTime(pgv, t);
   pg.gain.exponentialRampToValueAtTime(0.0001, t + 0.012 + Math.random() * 0.01);
   const pkSrc = raw.createBufferSource(); pkSrc.buffer = guitarPickNoise(raw);
@@ -2446,13 +2524,15 @@ function playGuitarReal(patch, midi, t, dur, vel, slideFrom, legato, styleKey, a
   GUITAR_SAMP._lastG = g;
   GUITAR_SAMP._lastVel = Math.max(vel, 0.05);
   GUITAR_SAMP._lastT = t + dur;
-  /* 双轨录制：厚度>0.5 时叠第二轨（±声像/微延迟/微失谐） */
+  /* 双轨使用另一遍真实录制；没有第二 RR 时保持单轨，避免失谐/Haas 人造梳状。 */
   const th = state.tone.guitar ? state.tone.guitar.t : 0.2;
-  if (th > 0.08) { /* 默认双轨：t=0.15 的 RnB/Jazz 不再是单薄单轨 */
+  const doubleBuffer = Array.isArray(bank[best]) && bank[best].filter(Boolean).length > 1
+    ? variantBuffer(bank[best], rrIndex + 1) : null;
+  if (th > 0.08 && doubleBuffer) {
     const raw2 = Tone.getContext().rawContext;
     const src2 = raw2.createBufferSource();
-    src2.buffer = bank[best];
-    src2.playbackRate.value = Math.pow(2, (midi - best) / 12) * (1.003 + Math.random() * 0.006); /* v5.7 每音随机失谐：固定 0.6% 会产生可闻拍频 */
+    src2.buffer = doubleBuffer;
+    src2.playbackRate.value = Math.pow(2, (midi - best) / 12);
     const g2 = raw2.createGain();
     const v2 = vel * (0.2 + th * 0.5); /* v5.4 副轨轻一点：宽度让位给融合 */
     const h2 = 0.006 + Math.random() * 0.01; /* v5.4 Haas 随机 6~16ms，不再固定 12ms 梳状感 */
@@ -2535,73 +2615,70 @@ const DRUM_KITS = {
   reggae:   { kick:'sal_kick', snare:'rim_click', hat:'sal_hat', ohat:'sal_ohat', ride:'sal_ride', crash:'sal_crash', congaH:null, congaL:null, ghost:'rim_click' },
   afrobeats:{ kick:'kick_808', snare:'clap', hat:'shaker', ohat:'shaker', ride:'shaker', crash:'sal_crash', congaH:null, congaL:null, ghost:null }, /* v29：kick 808=log drum 语汇保留，镲换真采样 */
 };
-function loadDrumSamples(isRetry) {
-  if ((!isRetry && DRUM_SAMP.started) || DRUM_SAMP.loading || !AE.ready) return;
+function requiredDrumFiles() {
+  const wanted = new Set();
+  const byKey = new Map(DRUM_FILES.map(name => [name.replace(/\.(mp3|flac|wav)$/i, ''), name]));
+  const addName = name => {
+    if (!name) return;
+    if (DRUM_SETS[name]) {
+      for (const layer of ['ff', 'f', 'p']) for (const key of DRUM_SETS[name][layer] || []) wanted.add(byKey.get(key));
+    } else if (byKey.has(name)) wanted.add(byKey.get(name));
+  };
+  for (const e of drumEvents) {
+    const kit = (e.kit && typeof e.kit === 'object' ? e.kit : DRUM_KITS[e.kit]) || DRUM_KITS[state.styles[0]] || DRUM_KITS.rnb;
+    addName(kit[e.inst]);
+  }
+  if (bassEvents.some(e => e.b808)) addName('kick_808');
+  if (!wanted.size) ['sal_kick', 'sal_snare', 'sal_hat'].forEach(addName);
+  wanted.delete(undefined);
+  return [...wanted];
+}
+function loadDrumSamples() {
+  if (DRUM_SAMP.loading || !AE.ready) return DRUM_SAMP.promise || Promise.resolve();
   DRUM_SAMP.started = true; DRUM_SAMP.loading = true;
   const raw = Tone.getContext().rawContext;
-  DRUM_SAMP.bus = raw.createGain();
-  DRUM_SAMP.bus.gain.value = 1;
-  DRUM_SAMP.bus.connect(nativeInputOf(AE.drumsVol));
-  /* 单次击打最大时长（秒）：防止把 loop/长采样整段叠放 */
+  if (!DRUM_SAMP.bus) {
+    DRUM_SAMP.bus = raw.createGain();
+    DRUM_SAMP.bus.gain.value = 1;
+    DRUM_SAMP.bus.connect(nativeInputOf(AE.drumsVol));
+  }
   const DRUM_MAXDUR = { hat_closed: 0.8, hat_808: 1.2, shaker: 2.2, shekere: 2.0, snare_room: 1.5, snap: 1.0, rim_click: 1.0, clap: 1.3, brush_snare: 1.8, kick_room: 1.1, kick_808: 1.3, crash: 2.8, conga_h: 1.6, conga_l: 1.6, clave: 1.0,
-    /* v29 Salamander 长尾采样截断（原片 8-11.5s，只留击打+自然衰减段） */
     'crash1_OH_FF_1': 3.0, 'crash1_OH_FF_2': 3.0, 'ride2Crash_OH_FF_1': 3.0,
     'ride1_OH_FF_1': 2.2, 'ride1_OH_FF_2': 2.2, 'ride1_OH_MP_1': 2.2, 'ride1_OH_MP_2': 2.2,
     'hihatOpen_OH_F_1': 1.6, 'hihatOpen_OH_F_2': 1.6, 'hihatOpen_OH_P_1': 1.6,
-    'snare_OH_FF_1': 1.4, 'snare_OH_FF_2': 1.4, 'snare_OH_F_1': 1.4, 'snare_OH_F_2': 1.4, 'snare2_OH_FF_1': 1.4, 'snare2_OH_F_1': 1.4 }; /* v26：kick_808 1.6→1.3s 收敛长尾——808 尾巴与贝斯叠糊是"鼓糊"主因之一 */
-  /* v28：采样起始点校正——这些是长录音，开头常是静音/弱段（用 MP3 帧 global_gain 剖面实测选段）：
-     hat_closed 152s 录音，开头 gain≈56-67（≈静音，这就是"镲片没声音"的根因）→ 取 28.0s 处孤立击打(gain 168)；
-     kick_room 4.6s 录音，开头 gain≈55 → 取 3.9s 处最响一击(gain 81)。截断从起点改为按 offset 切段。 */
+    'snare_OH_FF_1': 1.4, 'snare_OH_FF_2': 1.4, 'snare_OH_F_1': 1.4, 'snare_OH_F_2': 1.4, 'snare2_OH_FF_1': 1.4, 'snare2_OH_F_1': 1.4 };
   const DRUM_OFFSETS = { hat_closed: 28.0, kick_room: 3.9 };
-  /* v19 防风暴：全并发 fetch+decode 与排程抢主线程——改逐个 await + 每个之间让出主线程 */
-  DRUM_SAMP.promise = (async () => { /* v24：promise 外暴露，离线渲染前可等全 */
-    for (const name of DRUM_FILES) {
-      try {
-        const key = name.replace(/\.(mp3|flac|wav)$/i, ''); /* v29：文件名自带扩展名，缓存键用裸名（与 kit/GAIN/MAXDUR 一致）；v40：+wav */
-        if (DRUM_SAMP.buffers[key]) continue; /* v29：重试只补缺，不重复下载 */
-        const r = await fetch('drums/' + name);
-        if (!r.ok) throw new Error('404');
-        let buf = await raw.decodeAudioData(await r.arrayBuffer());
-        /* v30：Salamander 头顶麦立体声 → 单声道下混——自带房间+鼓间串音是"不融合"的主因；
-           单声道采样由混音链统一给空间（鼓室发送），像真实混音里叠 close-mic 鼓件一样贴进编曲 */
-        if (/\.flac$/i.test(name) && buf.numberOfChannels > 1) {
-          const nb = raw.createBuffer(1, buf.length, buf.sampleRate);
-          const out = nb.getChannelData(0);
-          for (let ch = 0; ch < buf.numberOfChannels; ch++) {
-            const d = buf.getChannelData(ch);
-            for (let i = 0; i < d.length; i++) out[i] += d[i] / buf.numberOfChannels;
-          }
-          buf = nb;
-        }
-        const max = DRUM_MAXDUR[key] || 1.5;
-        const offSec = DRUM_OFFSETS[key] || 0; /* v28：长录音从实测的击打位置切段 */
-        if (buf.duration > offSec + max) {
-          const n = Math.floor(raw.sampleRate * max);
-          const start = Math.floor(raw.sampleRate * offSec);
-          const nb = raw.createBuffer(buf.numberOfChannels, n, raw.sampleRate);
-          for (let ch = 0; ch < buf.numberOfChannels; ch++) nb.getChannelData(ch).set(buf.getChannelData(ch).subarray(start, start + n));
-          buf = nb;
-        }
-        DRUM_SAMP.buffers[key] = buf;
-      } catch (e) { DRUM_SAMP.fail = (DRUM_SAMP.fail || 0) + 1; }
-      await new Promise(res => setTimeout(res, 0));
+  const required = requiredDrumFiles();
+  const tasks = required.filter(name => !DRUM_SAMP.buffers[name.replace(/\.(mp3|flac|wav)$/i, '')]);
+  DRUM_SAMP.promise = audioBatch(tasks, 4, async name => {
+    const key = name.replace(/\.(mp3|flac|wav)$/i, '');
+    let buf = await loadAudioBuffer('drum:' + name, 'drums/' + name, raw);
+    if (!buf) { DRUM_SAMP.fail = (DRUM_SAMP.fail || 0) + 1; return; }
+    if (/\.flac$/i.test(name) && buf.numberOfChannels > 1) {
+      const nb = raw.createBuffer(1, buf.length, buf.sampleRate);
+      const out = nb.getChannelData(0);
+      for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+        const d = buf.getChannelData(ch);
+        for (let i = 0; i < d.length; i++) out[i] += d[i] / buf.numberOfChannels;
+      }
+      buf = nb;
     }
-  })();
-  /* 12s 后清点（v29：44 个文件逐个下载，6s 太短）：缺失自动重试一次，仍失败明确提示（网络差时鼓会无声，必须可见） */
-  setTimeout(() => {
+    const max = DRUM_MAXDUR[key] || 1.5;
+    const offSec = DRUM_OFFSETS[key] || 0;
+    if (buf.duration > offSec + max) {
+      const n = Math.floor(raw.sampleRate * max);
+      const start = Math.floor(raw.sampleRate * offSec);
+      const nb = raw.createBuffer(buf.numberOfChannels, n, raw.sampleRate);
+      for (let ch = 0; ch < buf.numberOfChannels; ch++) nb.getChannelData(ch).set(buf.getChannelData(ch).subarray(start, start + n));
+      buf = nb;
+    }
+    DRUM_SAMP.buffers[key] = buf;
+  }).then(() => {
     DRUM_SAMP.loading = false;
-    const total = DRUM_FILES.length;
-    const missing = DRUM_FILES.filter(n => !DRUM_SAMP.buffers[n.replace(/\.(mp3|flac|wav)$/i, '')]).length;
-    if (missing && !DRUM_SAMP.retried) {
-      DRUM_SAMP.retried = true;
-      sampStatus('鼓采样 ' + missing + '/' + total + ' 未加载，重试中…');
-      loadDrumSamples(true);
-    } else if (missing) {
-      sampStatus('鼓采样 ' + missing + '/' + total + ' 加载失败（网络），已用合成鼓兜底');
-    } else {
-      sampStatus('鼓采样 ' + total + '/' + total + ' ✓ Salamander 真实鼓组就绪'); /* v7：正常状态也可见——"有没有鼓"从此不用猜 */
-    }
-  }, 12000);
+    const missing = required.filter(n => !DRUM_SAMP.buffers[n.replace(/\.(mp3|flac|wav)$/i, '')]).length;
+    if (missing && !state.playing) sampStatus('鼓采样 ' + missing + ' 个未加载（下次自动重试），已用合成鼓兜底');
+  }, () => { DRUM_SAMP.loading = false; });
+  return DRUM_SAMP.promise;
 }
 /* v19：drumsReady() 已随音色门一起删除——鼓采样缺失时 playDrumSample 返回 false，scheduleAll 走合成鼓兜底 */
 /* v29：Salamander 逻辑件——力度分层（FF/F/P，P 层用真实 ghost 录音）+ 层内轮询（真人鼓手手感）。
@@ -2623,8 +2700,8 @@ const DRUM_SETS = {
   conga_l:  { ff: ['conga_l_a', 'conga_l_b'], f: ['conga_l_a', 'conga_l_b'], p: ['conga_l_b'] },
 };
 const DRUM_GAIN = { shekere: 1.3, shaker: 0.9, snap: 1.1, clap: 1.3, hat_808: 0.9, kick_808: 1.25, crash: 0.95, rim_click: 1.1, kick_room: 1.45, snare_room: 1.2, brush_snare: 1.1, conga_h: 1.25, conga_l: 1.25, clave: 1.2,
-  /* v29：Salamander 头顶麦克风录音偏轻，增益补偿 */
-  sal_kick: 0.95, sal_kick2: 0.95, sal_snare: 0.95, sal_snare2: 0.95, sal_hat: 0.8, sal_ohat: 0.85, sal_ride: 0.8, sal_crash: 1.0 }; /* v30：头顶麦全频+自带房间，1.5-1.7 太响压过其他声部 → 回归融合级增益 */
+  /* playDrumSample 接收的是逻辑件名，增益必须挂在 kick/hat 而非永远不会命中的 sal_* 键。 */
+  kick: 0.95, snare: 0.95, hat: 0.5, ohat: 0.65, ride: 0.7 };
 function playDrumSample(name, t, vel, opts) {
   /* v29：逻辑件按力度选层 + 层内轮询；旧名单文件直查 */
   let buf;
@@ -2646,7 +2723,7 @@ function playDrumSample(name, t, vel, opts) {
   const raw = Tone.getContext().rawContext;
   const src = raw.createBufferSource();
   src.buffer = buf;
-  src.playbackRate.value = 1 + (Math.random() * 0.06 - 0.03);
+  src.playbackRate.value = 1;
   /* v40：真低康加（Tumba）采样已就位，删除 conga_l 旧 0.84 降调 hack（旧 conga_l 与 conga_h 同文件） */
   const g = raw.createGain();
   const v = vel * (DRUM_GAIN[name] || 1);
@@ -2880,7 +2957,7 @@ function roleOfName(name) {
 }
 /* v17：挂起队列，停止播放后由 flushDeferred 统一补执行。
    v19：SF 采样加载已改渐进式（createProgressiveSF，播放中解码安全），不再走这里；
-   本函数保留给 autoAlignTimbres（播放中不重排）与 loadWurli（CDN 拉取）使用，勿删 */
+   本函数保留给 autoAlignTimbres（播放中不重排）使用 */
 function deferLoad(key, fn) {
   if (SAMP._defKeys[key]) return;
   SAMP._defKeys[key] = 1;
@@ -2960,9 +3037,7 @@ function createProgressiveSF(name, base, cacheKey) {
   const live = SAMP.liveLoads || (SAMP.liveLoads = new Set());
   live.add(inst);
   return (async () => {
-    const resp = await fetch(base + '/' + name + '.js');
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    const data = await resp.text();
+    const data = await fetchData(base + '/' + name + '.js', 'text', 8000, 1);
     /* midiJsToJson 同款解析：MIDI.Soundfont.xxx = { "A0": "data:audio/mp3;base64,...", ... } */
     let b = data.indexOf('MIDI.Soundfont.');
     if (b < 0) throw new Error('格式不符');
@@ -3127,12 +3202,15 @@ async function autoAlignTimbres(styleKey) {
 }
 
 function loadInstruments() {
-  const ksCore = SAMP_KEYS_BY_STYLE[state.styles.length === 1 ? state.styles[0] : 'rnb'] || SAMP_KEYS;
+  const actStyles = state.styles.length ? state.styles : ['rnb'];
+  const sfGuitar = actStyles.some(k => (GUITAR_SRC_BY_STYLE[k] || 'samp') === 'sf');
+  const ksCore = SAMP_KEYS_BY_STYLE[state.styles.length === 1 ? state.styles[0] : 'rnb'];
   const core = [
-    SAMP_GUITAR[state.layers.guitar.patch], ksCore === '@vibes' ? SAMP_KEYS : ksCore, SAMP_BASS,
-  ].filter(Boolean); /* v31：Pad 弃 GM 采样（改合成垫），不再预载 */
+    sfGuitar ? SAMP_GUITAR[state.layers.guitar.patch] : null,
+    ksCore === '@vibes' ? SAMP_KEYS : ksCore,
+  ].filter(n => n && !n.startsWith('@'));
   let done = 0;
-  sampStatus(`正在加载采样音色 0/${core.length}…`);
+  if (core.length) sampStatus(`正在加载采样音色 0/${core.length}…`);
   core.forEach(n => ensureSample(n).then(() => {
     done++;
     sampStatus(done < core.length ? `正在加载采样音色 ${done}/${core.length}…` : '✓ 核心采样音色已就绪');
@@ -3176,7 +3254,8 @@ function applyGuitarPatch() {
 
 function applyMix() {
   if (!AE.ready) return;
-  AE.master.volume.value = Tone.gainToDb(state.master * state.master) + 1.5; /* v27：整体响度 +1.5dB（软削波兜底，不再有爆音） */
+  AE.master.volume.value = Tone.gainToDb(state.master * state.master) + 1.5;
+  if (ARR.out && !_arrSwapped) ARR.out.gain.setTargetAtTime(state.master * state.master, Tone.now(), 0.015);
   AE.guitarVol.mute = !state.layers.guitar.on;
   AE.keysVol.mute = !state.layers.keys.on;
   AE.bassVol.mute = !state.layers.bass.on;
@@ -3423,8 +3502,6 @@ function scheduleAll() {
   {
     const need = new Set();
     const add = n => { if (n && typeof n === 'string' && !n.startsWith('@')) need.add(n); };
-    add(SAMP_GUITAR[state.layers.guitar.patch]);
-    add(SAMP_BASS);
     const actStyles = state.styles.length ? state.styles : ['rnb'];
     for (const k of actStyles) {
       add(SAMP_KEYS_BY_STYLE[k]);
@@ -3443,17 +3520,12 @@ function warmupAudio() {
   try {
     buildAudio(); /* 建图不依赖 running state */
     state.audioReady = true;
-    /* v17 性能：预热按首播优先级排序——吉他采样最先（播放闸硬等它+主角音色），鼓第二（律动轴），
-       贝斯/键盘/pad 由 loadInstruments 紧随其后；Wurli 闲时再载 */
-    const gp = SAMP_GUITAR[state.layers.guitar.patch];
-    if (gp) ensureSample(gp);
     loadGuitarSamples();
     loadBassSamples(); /* v31：真贝斯采样（与吉他同族）第二优先 */
     loadDrumSamples();
     loadInstruments();
     loadWurliSamples(); /* v41：自托管 Wurli 取代 CDN smplr */
     const idleW = (fn) => { if (typeof requestIdleCallback === 'function') requestIdleCallback(fn, { timeout: 8000 }); else setTimeout(fn, 200); };
-    idleW(() => loadWurli()); /* 后台预热，fire-and-forget，不阻塞任何路径 */
     idleW(() => renderMetalBufs()); /* v21：MetalSynth 离屏渲染成采样，播放中触发从 14ms → <0.1ms */
   } catch (e) { console.warn('音频预热失败（不影响播放手势路径）', e); }
 }
@@ -3462,51 +3534,30 @@ function warmupAudio() {
  * v24 DAW 式播放：编曲整体离线渲染成一条 AudioBuffer，播放 = 单 BufferSource。
  * 实时排程（Transport 全曲 2400+ 回调 + 每音符现场建节点）在低端机上物理性卡死；
  * 渲染后播放零排程零建节点，不可能卡。
- * 渲染管线：等全部采样解码完 → Tone.setContext(离线 ctx) + AE 单例字段换挂离线新图 →
- * scheduleAll 排进离线 Transport → offCtx.render() → finally 恢复全局 context 与 live AE 图。
+ * 渲染管线：按需采样在有限时间内就绪（缺失走合成兜底）→ 离线换挂 AE 图 →
+ * scheduleAll 排进离线 Transport → offCtx.render() → finally 恢复原 context 与 live AE 图。
  * ============================================================ */
-const ARR = { buf: null, src: null, dur: 0 };
+const ARR = { buf: null, src: null, dur: 0, out: null, revision: -1 };
 let _arrRendering = false;
-let _arrSwapped = false; /* v26：离线渲染已换全局 context 的窗口标志（试听/建图需避让） */
-let _arrPromise = null;  /* v26：在途渲染 promise（播放与预渲染共用，绝不重复渲染） */
+let _arrSwapped = false;
+let _arrPromise = null;
+let _arrRevision = 0;
 let _preTimer = null;
-let _playToken = 0; /* v44：播放意图令牌——停止/新播放会使在途异步渲染的结果失效（防"点了停止还在放"） */
+let _playToken = 0;
 
-/* 渲染前等采样全量解码（离线渲染不能渐进）：SF 按本曲用音到齐（_usedReady），鼓/吉他等首轮 */
 async function awaitArrSamples(silent) {
-  loadGuitarSamples(); loadBassSamples(); loadDrumSamples(); loadInstruments(); loadWurliSamples(); /* v31：真贝斯采样同预热；v41：Wurli */
-  const need = new Set();
-  const add = n => { if (n && typeof n === 'string' && !n.startsWith('@')) need.add(n); };
-  add(SAMP_GUITAR[state.layers.guitar.patch]);
-  add(SAMP_BASS);
-  const actStyles = state.styles.length ? state.styles : ['rnb'];
-  for (const k of actStyles) {
-    add(SAMP_KEYS_BY_STYLE[k]);
-    if ((GUITAR_SRC_BY_STYLE[k] || 'samp') === 'sf') add(SAMP_GUITAR[state.layers.guitar.patch]);
-  }
-  const names = [...need];
-  for (let i = 0; i < names.length; i++) {
-    if (!silent) sampStatus(`渲染编曲中…采样 ${i + 1}/${names.length}`);
-    try {
-      const inst = await ensureSample(names[i]);
-      if (inst && inst._usedReady) {
-        await Promise.race([inst._usedReady, new Promise(r => setTimeout(r, 30000))]); /* 缺音/异常不死等 */
-      }
-    } catch (e) {}
-  }
-  if (!silent) sampStatus('渲染编曲中…鼓/吉他采样');
-  try { if (DRUM_SAMP.promise) await DRUM_SAMP.promise; } catch (e) {}
-  try { if (GUITAR_SAMP.promise) await GUITAR_SAMP.promise; } catch (e) {}
-  try { if (BASS_SAMP.promise) await BASS_SAMP.promise; } catch (e) {} /* v31：真贝斯采样 */
-  /* v43：Wurli 不阻塞渲染（缺文件的 404 串行等待=15s+，v42"播放放不了/等很久"主因）——Wurli 是增强音色，FM 电钢兜底，后台渐进就绪 */
-  /* v21 金属/FM 预渲染 buffer 跨 context 可播：等它在途渲染收尾，离线渲染直接复用（速度与音色一致） */
-  try {
-    if (!SYNTH_BUF._started) renderMetalBufs();
-    if (SYNTH_BUF._promise) await SYNTH_BUF._promise;
-  } catch (e) {}
+  const loads = [loadGuitarSamples(), loadBassSamples(), loadDrumSamples(), loadWurliSamples()];
+  loadInstruments(); /* GM 仅作后台增强/兜底，不作为真实吉他贝斯或首播门槛 */
+  if (!silent) sampStatus('渲染编曲中…按需准备当前声部采样');
+  try { await withTimeout(Promise.all(loads), 12000, '按需采样准备'); }
+  catch (e) { ARR.lastError = e.message; }
+  /* 金属/FM 预渲染仅作后续试听增强；整曲离线渲染可直接使用 Synth，不在首播前重复等待。 */
+  if (!SYNTH_BUF._started) renderMetalBufs();
 }
 
 async function renderArrangementToBuffer(silent) {
+  const revision = _arrRevision;
+  const renderStarted = performance.now();
   const prevCtx = Tone.getContext();
   /* AE 是全局单例且上百处 AE.xxx 引用：保留对象身份，字段整体快照 → 换挂离线新图 → 渲染完原样恢复 */
   const liveAE = {};
@@ -3519,7 +3570,8 @@ async function renderArrangementToBuffer(silent) {
   _arrRendering = true;
   try {
     await awaitArrSamples(silent);
-    if (!silent) sampStatus('渲染编曲中…');
+    ARR.sampleMs = Math.round(performance.now() - renderStarted);
+    sampStatus('采样就绪 · 正在离线混音…');
     for (const k of Object.keys(AE)) delete AE[k];
     AE.nodes = {}; AE.ready = false;
     SAMP.busByRole = null; SAMP.sendByRole = null; SAMP.filtByRole = null; SAMP.bus = null; SAMP.padBus = null;
@@ -3531,8 +3583,9 @@ async function renderArrangementToBuffer(silent) {
     const offCtx = new Tone.OfflineContext(2, totalSec + 1.5, sr); /* +1.5s 尾音余量 */
     Tone.setContext(offCtx);
     _arrSwapped = true; /* v26：全局 context 已换离线——此窗口内禁建 live 节点（试听/预热自检） */
-    buildAudio();          /* 全新一套图，节点全挂离线 context（末尾自调 applyMix） */
-    ensureBuses();         /* 采样总线/角色低通接离线 AE 推子 */
+    buildAudio();
+    AE.master.volume.value = 0; /* buffer 只含一次母带；用户总音量交给 live 直出 Gain */
+    ensureBuses();
     const oraw = offCtx.rawContext;
     DRUM_SAMP.bus = oraw.createGain(); DRUM_SAMP.bus.gain.value = 1; DRUM_SAMP.bus.connect(nativeInputOf(AE.drumsVol));
     if (SYNTH_BUF.hat) {   /* 预渲染金属/FM buffer 已就绪：只重挂总线到离线图 */
@@ -3543,10 +3596,15 @@ async function renderArrangementToBuffer(silent) {
     scheduleAll();                /* 全曲排进离线 Transport（回调内 AE/SAMP/DRUM_SAMP 均已是离线换挂） */
     Tone.getTransport().loop = false;  /* 只渲一遍：loop=true 会把开头 1.5s 重混进尾音余量 */
     Tone.getTransport().start(0);
-    const rendered = await offCtx.render(); /* ToneAudioBuffer；渲染期间全局已是离线 context，无并发窗口 */
-    ARR.buf = rendered.get ? rendered.get() : rendered;
-    ARR.dur = totalSec;
-    state.arrDirty = false;
+    const rendered = await offCtx.render();
+    ARR.renderMs = Math.round(performance.now() - renderStarted - ARR.sampleMs);
+    sampStatus(`缓冲就绪 · 采样 ${(ARR.sampleMs / 1000).toFixed(1)}s / 混音 ${(ARR.renderMs / 1000).toFixed(1)}s`);
+    if (revision === _arrRevision) {
+      ARR.buf = rendered.get ? rendered.get() : rendered;
+      ARR.dur = totalSec;
+      ARR.revision = revision;
+    }
+    state.arrDirty = _arrRevision !== revision;
     return true;
   } catch (e) {
     console.warn('编曲离线渲染失败', e);
@@ -3567,20 +3625,32 @@ async function renderArrangementToBuffer(silent) {
   }
 }
 
-/* 播放 = live context 上单个 BufferSource → AE.master（总音量推子对 buffer 仍然实时生效） */
 function startBufferPlayback() {
+  if (!ARR.buf) return false;
   const raw = Tone.getContext().rawContext;
+  if (!ARR.out || ARR.out._raw !== raw) {
+    ARR.out = raw.createGain();
+    ARR.out._raw = raw;
+    ARR.out.connect(raw.destination);
+  }
+  ARR.out.gain.setValueAtTime(state.master * state.master, raw.currentTime);
   const src = raw.createBufferSource();
   src.buffer = ARR.buf;
   src.loop = true;
   src.loopStart = 0;
-  src.loopEnd = ARR.dur; /* 尾音余量不进循环 */
-  src.connect(nativeInputOf(AE.master));
+  src.loopEnd = ARR.dur;
+  src.connect(ARR.out);
   src.start();
+  const previous = ARR.src;
   ARR.src = src;
+  if (previous) try { previous.stop(); } catch (e) {}
   state.playing = true;
   updatePlayBtn();
   setTimeout(audioHealthCheck, 2500);
+  setTimeout(() => {
+    if (state.playing && ARR.sampleMs != null) sampStatus(`缓存播放 · 采样 ${(ARR.sampleMs / 1000).toFixed(1)}s / 混音 ${(ARR.renderMs / 1000).toFixed(1)}s`);
+  }, 0);
+  return true;
 }
 function stopBufferPlayback() {
   if (ARR.src) { try { ARR.src.stop(); } catch (e) {} ARR.src = null; }
@@ -3588,28 +3658,24 @@ function stopBufferPlayback() {
 
 async function ensureAudio() {
   if (typeof Tone === 'undefined') return false;
-  /* v47："点播放没反应"根因修复——旧逻辑在后台预渲染换挂窗口内等 6 秒就放弃返回 false，
-     用户反复点都失败。改为：等渲染结束（≤15s、可见进度）再建 live 图；
-     仍超时则强制复位换挂标志兜底（渲染 finally 会自愈）。 */
-  let guard = 0;
-  while (_arrSwapped && guard++ < 50) {
-    if (guard === 1) sampStatus('⏳ 正在准备音频引擎（后台渲染收尾中）…');
-    await new Promise(r => setTimeout(r, 300));
+  if (state.audioReady) {
+    try {
+      const raw = _arrSwapped ? LIVE_RAW : Tone.getContext().rawContext;
+      if (raw && raw.state !== 'running') await raw.resume();
+    } catch (e) {}
   }
-  if (_arrSwapped) {
-    _arrSwapped = false; _arrRendering = false;
-    sampStatus('⚠ 后台渲染超时，已强制恢复音频引擎');
-  }
-  if (!state.audioReady) { buildAudio(); state.audioReady = true; ensureBuses(); /* v27：建图即建采样总线——游戏垫/试听不依赖 SF 加载才出声 */ const gp = SAMP_GUITAR[state.layers.guitar.patch]; if (gp) ensureSample(gp); loadGuitarSamples(); loadBassSamples(); loadDrumSamples(); loadInstruments(); loadWurliSamples(); renderMetalBufs(); /* v17：与 warmupAudio 同优先级序；v41：自托管 Wurli */ }
+  if (!_arrSwapped && !state.audioReady) { buildAudio(); state.audioReady = true; ensureBuses(); loadGuitarSamples(); loadBassSamples(); loadDrumSamples(); loadInstruments(); loadWurliSamples(); renderMetalBufs(); }
   try {
-    await Tone.start();
-    if (Tone.context.state !== 'running') await Tone.context.resume();
-    /* iOS 某些版本需要二次唤醒 */
-    if (Tone.context.state !== 'running') {
-      setTimeout(() => { try { Tone.context.resume(); } catch (e) {} }, 150);
+    if (_arrSwapped) {
+      if (LIVE_RAW && LIVE_RAW.state !== 'running') await LIVE_RAW.resume();
+    } else {
+      await Tone.start();
+      if (Tone.context.state !== 'running') await Tone.context.resume();
+      if (Tone.context.state !== 'running') setTimeout(() => { try { Tone.context.resume(); } catch (e) {} }, 150);
     }
   } catch (e) { /* 部分浏览器首次手势不完整，下一次点击会重试 */ }
-  return Tone.context.state === 'running';
+  const activeContext = _arrSwapped ? LIVE_RAW : Tone.context;
+  return !!(activeContext && activeContext.state === 'running');
 }
 
 /* v24 音频健康自检：播放 2.5s 后确认链路真的在出声。
@@ -3625,7 +3691,7 @@ function audioHealthCheck() {
     const curRaw = Tone.getContext().rawContext;
     const ctxMismatch = !!(AE.master && AE.master.context && AE.master.context.rawContext !== curRaw);
     let silent = false;
-    if (!ctxMismatch && Tone.context.state === 'running' && (Tone.getTransport().state === 'started' || !!ARR.src) /* v24 buffer 模式无 Transport */
+    if (!ctxMismatch && !ARR.src && Tone.context.state === 'running' && Tone.getTransport().state === 'started'
         && state.master > 0.01 && AE.masterMeter) {
       const lv = AE.masterMeter.getValue();
       silent = Array.isArray(lv) ? lv.every(v => !isFinite(v) || v === 0) : (!isFinite(lv) || lv === 0);
@@ -3648,12 +3714,19 @@ function audioHealthCheck() {
 /* v26 渲染提速：编排定稿 1.2s 后后台预渲染——用户点播放时 buffer 通常已就绪（零等待）。
    并发安全：全站共用一份在途渲染 promise，播放/再次预渲染都等它，不重复渲染。 */
 function ensureRendered(verbose) {
-  if (_arrPromise) return _arrPromise;
-  _arrPromise = (async () => {
-    try { return await renderArrangementToBuffer(!verbose); }
-    finally { _arrPromise = null; }
-  })();
-  return _arrPromise;
+  if (!state.arrDirty && ARR.buf && ARR.revision === _arrRevision) return Promise.resolve(true);
+  if (!_arrPromise) {
+    const task = (async () => {
+      try { return await renderArrangementToBuffer(!verbose); }
+      finally { if (_arrPromise === task) _arrPromise = null; }
+    })();
+    _arrPromise = task;
+  }
+  return withTimeout(_arrPromise, 45000, '编曲离线渲染').catch(e => {
+    ARR.lastError = e.message || String(e);
+    console.warn('编曲渲染等待失败（可在当前渲染安全收尾后重试）', e);
+    return false;
+  });
 }
 function preRenderArrangement() {
   clearTimeout(_preTimer);
@@ -3664,7 +3737,7 @@ function preRenderArrangement() {
     const evCount2 = melodyEvents.length + bassEvents.length + keysEvents.length + synthEvents.length + hornEvents.length + drumEvents.length;
     void evCount2;
     ensureRendered(false);
-  }, 1200);
+  }, 800); /* v48：1200→800ms——改动后更快预渲染，点播放零等待窗口更宽 */
 }
 function stopPlayback() {
   _playToken++; /* v44：作废在途异步渲染的开播意图（修复"点了停止，渲染回来又放起来"） */
@@ -3700,26 +3773,25 @@ async function togglePlay() {
   if (state.playing) { stopPlayback(); return; }
   /* v47：点击即时反馈（⏳），并把整条启动链包进 try/catch——任何异常都可见，绝不"点不动" */
   const bp = document.getElementById('btn-play');
-  if (bp) bp.textContent = '⏳ 启动…';
+  if (bp) bp.innerHTML = '<span class="play-icon"><svg class="icon" aria-hidden="true"><use href="#i-reroll"/></svg></span> 启动…';
   try {
   if (!(await ensureAudio())) {
-    sampStatus('⚠ 音频引擎未唤醒，请再点一次播放（浏览器自动播放限制）'); /* v19：原静默 return，用户以为按钮坏了 */
+    if (!_arrSwapped) sampStatus('⚠ 音频引擎未唤醒，请再点一次播放（浏览器自动播放限制）');
     updatePlayBtn();
     return;
   }
   stopGameMetro(); /* v26：主播放与新手模式节拍器互斥 */
-  applyMix();
-  restoreSampleBuses();
+  if (!_arrSwapped) { applyMix(); restoreSampleBuses(); }
   const tok = ++_playToken; /* v44：本次开播意图；后续 await 完成时若令牌已变（用户点了停止）则放弃 */
   /* v24：已有新鲜 buffer → 直接开播（零排程零建节点） */
   if (!state.arrDirty && ARR.buf) {
     if (tok === _playToken) { startBufferPlayback(); sampStatus(''); }
     return;
   }
-  /* v44：小循环恢复实时路径（秒开零等待；v42 全量 buffer 导致"按了半天不播放"）；
-     实时路径的卡顿源（主链过采样/大歌实时排程）已在 v35/v42 移除，小循环足够轻 */
-  const evCount = melodyEvents.length + bassEvents.length + keysEvents.length + synthEvents.length + hornEvents.length + drumEvents.length;
-  if (evCount < 400) { startRealtimePlayback(false); return; }
+  /* v48：实时路径彻底退役（v44 为秒开恢复实时路径，弱机实测"点播放又开始卡"）——
+     所有编曲一律预渲染 buffer 播放（零卡顿）；等待由三件套兜底：
+     ① 空闲预渲染（点播放零等待）② 渲染中点击=等待+进度提示（v47）③ 渲染完成自动续播 */
+  void melodyEvents; void bassEvents; void keysEvents; void synthEvents; void hornEvents; void drumEvents;
   /* v42：长编曲走预渲染 buffer（零卡顿）；渲染完成时校验令牌——渲染期间用户点了停止就不开播 */
   if (await ensureRendered(true)) {
     if (tok !== _playToken) return;
@@ -3734,40 +3806,49 @@ async function togglePlay() {
     updatePlayBtn();
   }
 }
+function syncVisualState() {
+  const root = document.documentElement;
+  if (root) {
+    root.dataset.playing = state.playing ? 'true' : 'false';
+    root.dataset.perfMode = (state.perf || state.playing) ? 'true' : 'false';
+  }
+  window.dispatchEvent(new Event('motif-visual-change'));
+}
 function updatePlayBtn() {
   const b = document.getElementById('btn-play');
-  b.textContent = state.playing ? '⏹ 停止' : '▶ 播放';
+  const icon = state.playing ? 'i-stop' : 'i-play';
+  b.innerHTML = `<span class="play-icon"><svg class="icon" aria-hidden="true"><use href="#${icon}"/></svg></span> ${state.playing ? '停止' : '播放'}`;
   b.classList.toggle('playing', state.playing);
+  syncVisualState();
 }
 
 /* v24 buffer 架构：任何编排改动只打脏标记，正在播的旧 buffer 继续播完；
    实时兜底模式（渲染失败回退）下保留旧行为——播放中改动立即重排 */
 function reScheduleIfPlaying() {
+  _arrRevision++;
   state.arrDirty = true;
-  if (state.playing && ARR.src) sampStatus('编曲已改，停止后再点播放渲染新版');
+  if (state.playing && ARR.src) sampStatus('编曲已改，旧版继续播放，后台准备新版…');
   else if (state.playing && state.audioReady) scheduleAll();
-  preRenderArrangement(); /* v26：改动停顿 1.2s 后自动后台渲染（点播放时零等待） */
+  preRenderArrangement();
 }
 let _rsTimer = null;
 function reScheduleDebounced() {
   clearTimeout(_rsTimer);
   _rsTimer = setTimeout(() => {
     reScheduleIfPlaying();
-    /* v39→v41 修复：buffer 播放中改编排 → 自动刷新续播。
-       v41 回归修复：不能"边播边渲"——离线渲染与实时播放抢 CPU = 卡顿回归主因。
-       改为顺序化：停旧 buffer → 渲染 → 起新 buffer（短暂静默，无卡顿）。 */
     if (state.playing && ARR.src) {
-      sampStatus('编曲已改，正在刷新…');
-      const tok = _playToken; /* v44：渲染期间用户若点了停止 → 不复活播放 */
+      sampStatus('编曲已改，正在后台刷新（旧版不停）…');
+      const tok = _playToken;
       (async () => {
         try {
-          stopBufferPlayback();
-          if (await ensureRendered(true)) {
-            if (tok === _playToken && state.playing) { startBufferPlayback(); sampStatus(''); }
-          } else if (tok === _playToken && state.playing) {
-            startRealtimePlayback(true);
-          }
-        } catch (e) {}
+          let ok = await ensureRendered(true);
+          for (let i = 0; ok && state.arrDirty && i < 3 && tok === _playToken; i++) ok = await ensureRendered(true);
+          if (tok !== _playToken || !state.playing) return;
+          if (ok && !state.arrDirty) { startBufferPlayback(); sampStatus(''); }
+          else if (!ok) sampStatus('⚠ 新版渲染失败，继续播放旧版；可修改后重试');
+        } catch (e) {
+          if (tok === _playToken && state.playing) sampStatus('⚠ 新版渲染异常，继续播放旧版');
+        }
       })();
     }
   }, 500);
@@ -3943,29 +4024,6 @@ async function browserGenerateChunk(prompt, temperature, onStatus) {
   const blob = encodeWav([audio], sr2);
   return await blob.arrayBuffer();
 }
-/* v13 smplr 采样电钢：WurlitzerEP200（GregSullivan E-Pianos 采样，带力度层）——RnB/Soul 的标志性键盘。
-   加载失败/超时自动回退 v12 的 FM tine；库走 jsdelivr/unpkg 双镜像（v14：加超时快切） */
-let _wurli = null, _wurliFailed = false;
-async function loadWurli() {
-  if (_wurli || _wurliFailed) return _wurli;
-  if (state.playing) { deferLoad('wurli', () => loadWurli()); return null; } /* v17 性能：播放中不发起 CDN 拉取+采样解码 */
-  try {
-    const raw = Tone.getContext().rawContext;
-    /* v14：jsdelivr 国内常长时间挂起——import 加 8s 超时快切 unpkg；本函数永远 fire-and-forget，不阻塞播放 */
-    const withTimeout = (p, ms, tag) => Promise.race([p, new Promise((_, rj) => setTimeout(() => rj(new Error(tag + ' 超时')), ms))]);
-    let mod = null;
-    try { mod = await withTimeout(import('https://cdn.jsdelivr.net/npm/smplr/+esm'), 8000, 'jsdelivr'); }
-    catch (e1) { mod = await withTimeout(import('https://unpkg.com/smplr/+esm'), 15000, 'unpkg'); }
-    const EP = mod.ElectricPiano;
-    if (!EP) throw new Error('no EP');
-    const inst = new EP(raw, { instrument: 'WurlitzerEP200' });
-    inst.connect(nativeInputOf(AE.keysVol)); /* v14：进键盘层推子（之前直连分工表链，推子对 Wurli 无效） */
-    if (inst.load) await withTimeout(inst.load(), 20000, '采样加载'); /* v14：45s→20s，失败回退 FM tine */
-    _wurli = inst;
-  } catch (e) { _wurliFailed = true; _wurli = null; }
-  return _wurli;
-}
-
 async function studioGenerateChunk(prompt, melodyURI, token, temperature) {
   /* provider 1：本机 musicgen_server.py（medium 模型，免费且质量高于 small） */
   try {
@@ -4136,28 +4194,34 @@ function studioHealthCheck(buf) {
   const st = state.styles[0], tg = AUDIO_TARGETS[st] || AUDIO_TARGETS.rnb;
   const L = buf.getChannelData(0), R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L;
   const n = L.length;
-  /* 动态：100ms 窗 RMS 的 dB 跨度 */
+  /* 动态取活跃窗的 10–90 百分位；稀疏编曲的近乎静音尾窗不再被误判为“动态过大”。 */
   const win = Math.floor(buf.sampleRate * 0.1);
-  let rmsMin = 1, rmsMax = 0.0001;
+  const windows = [];
+  let rmsMax = 0.0001;
   for (let i = 0; i < n; i += win) {
     let s2 = 0, c = 0;
     for (let j = i; j < Math.min(i + win, n); j++) { s2 += L[j] * L[j]; c++; }
     const r = Math.sqrt(s2 / c);
-    if (r > 0.0001 && r < rmsMin) rmsMin = r;
+    windows.push(r);
     if (r > rmsMax) rmsMax = r;
   }
-  const dyn = 20 * Math.log10(rmsMax / Math.max(rmsMin, 0.0001));
-  /* 频谱：4096 点 FFT 算质心 + 低/中/高能量比 */
-  const N = 4096, off2 = Math.floor(n * 0.3);
-  const re = new Float32Array(N), im = new Float32Array(N);
-  for (let i = 0; i < N; i++) re[i] = (L[off2 + i] || 0) * (0.5 - 0.5 * Math.cos(2 * Math.PI * i / (N - 1)));
-  _fft(re, im);
+  const activeDb = windows.filter(r => r > rmsMax * 0.02).map(r => 20 * Math.log10(r / rmsMax)).sort((a, b) => a - b);
+  const percentile = p => activeDb.length ? activeDb[Math.min(activeDb.length - 1, Math.floor((activeDb.length - 1) * p))] : 0;
+  const dyn = Math.max(0, percentile(0.9) - percentile(0.1));
+  /* 八个等距窗累计频谱，避免单窗恰好只抓到踩镲或静音而误判整曲过亮/缺低频。 */
+  const N = 4096, re = new Float32Array(N), im = new Float32Array(N);
   let num = 0, den = 0, eLow = 0, eMid = 0, eHigh = 0;
-  for (let k = 1; k < N / 2; k++) {
-    const mag = Math.hypot(re[k], im[k]);
-    const f = k * buf.sampleRate / N;
-    num += mag * f; den += mag;
-    if (f < 250) eLow += mag; else if (f < 4000) eMid += mag; else eHigh += mag;
+  for (let w = 0; w < 8; w++) {
+    const off2 = Math.floor(Math.max(0, n - N) * (w + 1) / 9);
+    re.fill(0); im.fill(0);
+    for (let i = 0; i < N; i++) re[i] = (L[off2 + i] || 0) * (0.5 - 0.5 * Math.cos(2 * Math.PI * i / (N - 1)));
+    _fft(re, im);
+    for (let k = 1; k < N / 2; k++) {
+      const mag = Math.hypot(re[k], im[k]);
+      const f = k * buf.sampleRate / N;
+      num += mag * f; den += mag;
+      if (f < 250) eLow += mag; else if (f < 4000) eMid += mag; else eHigh += mag;
+    }
   }
   const cent = clamp((num / Math.max(den, 1)) / 5000, 0, 1);
   const low = eLow / Math.max(eLow + eMid + eHigh, 0.0001);
@@ -4275,69 +4339,34 @@ function exportMidi() {
   setTimeout(() => URL.revokeObjectURL(a.href), 60000); /* v21：立即 revoke 会在部分浏览器取消下载 */
 }
 
-/* ============================================================
- * 音频导出（v4）：实时录一遍全曲 → WebM，与听到的完全一致（含 Logic 级母带链）
- * ============================================================ */
-let _audioRec = null;
+/* WAV 直接来自播放使用的同一份离线母带：不再实时重录，不等待整曲时长，也不会把卡顿录进成品。 */
+let _audioExporting = false;
 async function exportAudio() {
   if (typeof Tone === 'undefined') { alert('音频引擎加载失败，请检查网络后刷新页面'); return; }
-  if (!(await ensureAudio())) return;
-  if (_audioRec) return; /* 录制中防重入 */
+  if (_audioExporting || !(await ensureAudio())) return;
   const btn = document.getElementById('btn-audio');
-  const wasPlaying = state.playing;
-  applyMix();
-  Tone.getTransport().stop();
-  restoreSampleBuses();
-  scheduleAll();
-  Tone.getTransport().position = 0;
-  const stream = AE.recDest.stream;
-  const mime = (window.MediaRecorder && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) ? 'audio/webm;codecs=opus' : 'audio/webm';
-  const rec = new MediaRecorder(stream, { mimeType: mime });
-  const chunks = [];
-  rec.ondataavailable = ev => { if (ev.data.size) chunks.push(ev.data); };
-  const durMs = totalBars() * BPB() * (60000 / state.bpm) + 800; /* 全曲 + 尾音余量 */
-  rec.onstop = () => {
-    _audioRec = null;
-    Tone.getTransport().stop();
-    if (wasPlaying) { Tone.getTransport().start(); }
-    else { state.playing = false; silenceSampleBuses(); }
-    updatePlayBtn();
-    const blob = new Blob(chunks, { type: 'audio/webm' });
-    /* v7 诊断闭环：WebM 在页内解码重编码为 WAV——用户听到的声音变成可测量/可发送的文件，
-       导出同时自动跑成品体检（频谱/动态），把 WAV 发给 AI 即可做根因分析，不再靠形容词猜 */
-    (async () => {
-      try {
-        const actx = new (window.AudioContext || window.webkitAudioContext)();
-        const ab = await actx.decodeAudioData(await blob.arrayBuffer());
-        await actx.close();
-        const wav = encodeWav([ab.getChannelData(0), ab.numberOfChannels > 1 ? ab.getChannelData(1) : ab.getChannelData(0)], ab.sampleRate);
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(wav);
-        a.download = `motif_${pcName(state.keyRoot)}${state.mode}_${state.bpm}bpm.wav`;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(a.href), 60000); /* v21：立即 revoke 会在部分浏览器取消下载 */
-        try {
-          studioHealthCheck(ab);
-          const stEl = document.getElementById('studio-status');
-          if (stEl) sampStatus(stEl.textContent.split(String.fromCharCode(10)).pop()); /* 体检结果抄送到常驻状态行 */
-        } catch (e) {}
-      } catch (e) {
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = `motif_${pcName(state.keyRoot)}${state.mode}_${state.bpm}bpm.webm`;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(a.href), 60000); /* v21：立即 revoke 会在部分浏览器取消下载 */
-      }
-      if (btn) btn.textContent = '⬇ 导出音频（WAV）';
-    })();
-  };
-  _audioRec = rec;
-  if (btn) btn.textContent = '⏺ 录制中…';
-  rec.start();
-  state.playing = true;
-  updatePlayBtn();
-  Tone.getTransport().start();
-  setTimeout(() => { try { rec.stop(); } catch (e) {} }, durMs);
+  _audioExporting = true;
+  if (btn) { btn.disabled = true; btn.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-reroll"/></svg> 准备 WAV…'; }
+  try {
+    if (!(await ensureRendered(true)) || !ARR.buf) throw new Error('编曲渲染未完成，请重试');
+    const ab = ARR.buf;
+    const left = ab.getChannelData(0);
+    const right = ab.numberOfChannels > 1 ? ab.getChannelData(1) : left;
+    const wav = encodeWav([left, right], ab.sampleRate);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(wav);
+    a.download = `motif_${pcName(state.keyRoot)}${state.mode}_${state.bpm}bpm.wav`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    studioHealthCheck(ab);
+    const stEl = document.getElementById('studio-status');
+    if (stEl) sampStatus(stEl.textContent.split(String.fromCharCode(10)).pop());
+  } catch (e) {
+    sampStatus('WAV 导出失败：' + e.message);
+  } finally {
+    _audioExporting = false;
+    if (btn) { btn.disabled = false; btn.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> 导出音频 <small>WAV · 含体检</small>'; }
+  }
 }
 
 /* ============================================================
@@ -4466,14 +4495,81 @@ function syncPresetSelect() {
   if (state.presetId && PRESETS.some(p => p.id === state.presetId)) ps.value = state.presetId;
 }
 
-/* 风格档案面板：v42 只写风格名（参考曲/BPM 等细节不再展示） */
+function chartEscape(value) {
+  return String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function selectedChartPreset() {
+  return typeof CHART_STYLES !== 'undefined' ? CHART_STYLES.find(p => p.id === state.chartId) : null;
+}
+function renderChartReference() {
+  const select = $('#chart-select');
+  if (!select || typeof CHART_STYLES === 'undefined') return;
+  if (select.options.length <= 1) {
+    CHART_STYLES.forEach(p => {
+      const option = document.createElement('option');
+      option.value = p.id;
+      option.textContent = `#${p.rank} ${p.title} · ${p.artist}`;
+      select.appendChild(option);
+    });
+  }
+  select.value = state.chartId;
+  const preset = selectedChartPreset();
+  $('#chart-detail').innerHTML = preset
+    ? `<b>${chartEscape(preset.key)} ${preset.mode === 'minor' ? '小调' : '大调'} · ${preset.bpm} BPM</b> · 原创同风格规则 · <a href="${preset.sourceUrl}" target="_blank" rel="noopener">榜单 ↗</a>`
+    : '提取和声与织体，不复制旋律。';
+}
+function applyChartPreset(id) {
+  const preset = typeof CHART_STYLES !== 'undefined' ? CHART_STYLES.find(p => p.id === id) : null;
+  if (!preset) return;
+  const match = /^([A-G])([#b]?)$/.exec(preset.key);
+  const base = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }[match[1]];
+  state.chartId = id;
+  state.keyRoot = (base + (match[2] === '#' ? 1 : match[2] === 'b' ? -1 : 0) + 12) % 12;
+  state.mode = preset.mode;
+  state.bpm = preset.bpm;
+  state.presetId = preset.id;
+  state.slots = preset.progression.map(slot => ({ d: slot.d, acc: slot.acc || 0, q: slot.q || 'auto' }));
+  setStyles([preset.style]);
+  const cfg = STYLE_SETUP[preset.style];
+  if (cfg) {
+    for (const layer of ['guitar', 'keys', 'drums', 'synth']) state.layers[layer].patch = cfg[layer];
+    state.swing = (preset.id.endsWith('babydoll') ? 12 : cfg.swing) / 100;
+    applyGuitarPatch();
+    applyStyleFx(preset.style);
+    applyStyleTone(preset.style);
+  }
+  $('#ctl-key').value = state.keyRoot;
+  $('#ctl-bpm').value = state.bpm;
+  $('#bpm-val').textContent = state.bpm;
+  $('#ctl-swing').value = Math.round(state.swing * 100);
+  $('#swing-val').textContent = Math.round(state.swing * 100);
+  document.querySelectorAll('#layers .layer').forEach(row => {
+    row.querySelector('.patch').value = state.layers[row.dataset.layer].patch;
+  });
+  renderChartReference();
+  regenerate('preset');
+  sampStatus(`已应用 #${preset.rank} ${preset.title} 的原创风格规则；和声检查已更新`);
+}
+function renderHarmonyAudit() {
+  if (typeof validateChartHarmony === 'undefined') return '';
+  const preset = selectedChartPreset();
+  const report = validateChartHarmony({
+    key: state.keyRoot, mode: state.mode, degrees: chordTimeline,
+    melodyEvents, section: state.structure,
+  }, preset);
+  const issues = report.errors.concat(report.warnings).slice(0, 4);
+  const label = preset ? `#${preset.rank} ${preset.title} 风格匹配` : '基础语法与解决检查';
+  return `<div class="harmony-audit${issues.length ? ' has-warning' : ''}"><strong>和声检查 ${report.score}/100</strong> · ${chartEscape(label)} · ${report.errors.length} 错误 / ${report.warnings.length} 复核` +
+    (issues.length ? `<ul>${issues.map(issue => `<li>${chartEscape(issue)}</li>`).join('')}</ul>` : '<div>通过：未发现调性、低音或跨和弦解决错误。</div>') +
+    (report.licenses.length ? `<div class="audit-license">风格许可：${chartEscape(report.licenses[0])}</div>` : '') + '</div>';
+}
+
+/* 风格档案面板 */
 function renderSpecPanel() {
   const el = document.getElementById("spec-panel");
   if (!el) return;
   const sp = state.styles.length === 1 ? getSpec(state.styles[0]) : null;
-  el.innerHTML = sp
-    ? `<div class="spec-title">风格档案 · ${sp.name}</div>`
-    : `<div class="spec-title">风格档案 · ${state.styles.map(k => STYLES[k] ? STYLES[k].name : k).join(' + ')}</div>`;
+  el.innerHTML = `<div class="spec-title">${sp ? sp.name : state.styles.map(k => STYLES[k] ? STYLES[k].name : k).join(' + ')}</div>`;
 }
 
 function setStyles(list) {
@@ -4484,8 +4580,8 @@ function setStyles(list) {
   syncPresetSelect(); /* v4.1：预设列表随风格过滤 */
   renderSpecPanel();
   $('#fusion-hint').textContent = state.styles.length > 1
-    ? `已选：${state.styles.map(k => STYLES[k].name).join(' + ')} · 节奏/音阶/律动按小节交替融合，编曲配置保持你的设置`
-    : `已选：${STYLES[state.styles[0]].name} · 已自动配置该风格的吉他采样/鼓组/速度/Swing，可再微调`;
+    ? `已选 ${state.styles.map(k => STYLES[k].name).join(' + ')} · 按小节融合`
+    : `已选 ${STYLES[state.styles[0]].name} · 可多选融合`;
 }
 
 function applyStyleSetup(styleKey) {
@@ -4511,7 +4607,7 @@ function applyStyleSetup(styleKey) {
     if (p && p.styles.some(s => state.styles.includes(s))) loadPreset(cfg.preset);
   }
   const gn = SAMP_GUITAR[cfg.guitar];
-  if (gn) ensureSample(gn).then(() => autoAlignTimbres(styleKey));
+  if (gn && (GUITAR_SRC_BY_STYLE[styleKey] || 'samp') === 'sf') ensureSample(gn).then(() => autoAlignTimbres(styleKey));
   else autoAlignTimbres(styleKey);
 }
 
@@ -4527,6 +4623,7 @@ function populateStatic() {
   updatePresetDesc();
   const sfSel = document.getElementById('ctl-sfbase');
   if (sfSel) sfSel.value = state.sfBase;
+  renderChartReference();
 }
 
 function updatePresetDesc() {
@@ -4577,15 +4674,12 @@ function markCustom() {
 function renderExplain() {
   const names = chordTimeline.map(c => c.name);
   const degFlow = chordTimeline.map(c => `${c.roman}${c.ext}`).join(' – ');
-  const uniqFuncs = Array.from(new Set(chordTimeline.map(c => c.func.split('（')[0])));
-  const barWord = state.slots.length === 12 ? '12 小节布鲁斯式长循环' :
-    state.slots.length >= 8 ? '8 小节 AA\' 两段体循环' : state.slots.length + ' 小节循环';
+  const barWord = state.slots.length === 12 ? '12 小节布鲁斯' : state.slots.length + ' 小节循环';
   $('#prog-explain').innerHTML = `
     <div class="deg-flow">${degFlow}</div>
-    <div><b>走向：</b>${names.join(' → ')}（${barWord}，每小节一和弦）</div>
-    <div><b>级数功能：</b>${chordTimeline.map(c => `${c.roman}${c.ext}=${c.func}`).join('，')}</div>
-    <div><b>调性框架：</b>${pcName(state.keyRoot)} ${MODES[state.mode].name} · 功能分组：${uniqFuncs.join(' / ')}。
-    属功能和弦（${chordTimeline.filter(c => c.func.startsWith('属')).map(c => c.roman).join('、') || '无'}）制造张力，主/下属解决之。</div>`;
+    <div>${pcName(state.keyRoot)} ${MODES[state.mode].name} · ${barWord}</div>
+    <div class="chord-sequence">${names.join(' → ')}</div>
+    ${renderHarmonyAudit()}`;
 }
 
 /* ---------- 钢琴卷帘（可编辑） ---------- */
@@ -4593,14 +4687,26 @@ let selNote = null;    // 选中的旋律事件
 let drag = null;       // { mode, ev, grabDelta }
 const rollCache = { rects: [], lo: 0, hi: 127, cellW: 1, labelW: 54, topPad: 22, plotH: 1, total16: 16 };
 
+let _rollRaf = 0;
+function scheduleRollRender() {
+  if (_rollRaf) return;
+  _rollRaf = requestAnimationFrame(() => { _rollRaf = 0; renderRoll(); });
+}
 function renderRoll() {
   const cv = $('#roll');
-  const dpr = window.devicePixelRatio || 1;
-  const W = cv.clientWidth, H = 230;
-  cv.width = W * dpr; cv.height = H * dpr;
+  if (!cv) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const W = Math.max(1, cv.clientWidth), H = 230;
+  const pixelW = Math.round(W * dpr), pixelH = Math.round(H * dpr);
+  if (cv.width !== pixelW) cv.width = pixelW;
+  if (cv.height !== pixelH) cv.height = pixelH;
   const ctx = cv.getContext('2d');
-  ctx.scale(dpr, dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
+  const css = getComputedStyle(cv);
+  const color = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
+  const ink = color('--ink', '#24272A'), ink3 = color('--ink-3', '#9DA3A8');
+  const acc = color('--acc', '#C2452D'), acc2 = color('--acc-2', '#D96E52');
   const bars = totalBars();
   const labelW = 54, topPad = 30, botPad = 20;
   const plotW = W - labelW - 6, plotH = H - topPad - botPad;
@@ -4613,35 +4719,33 @@ function renderRoll() {
   lo -= 2; hi += 2;
   const yOf = m => topPad + (hi - m) / (hi - lo) * plotH;
 
-  /* 网格（纸面发丝线） */
   ctx.lineWidth = 1;
+  ctx.strokeStyle = ink;
   for (let s = 0; s <= total16; s++) {
     const x = labelW + s * cellW;
     ctx.beginPath(); ctx.moveTo(x, topPad); ctx.lineTo(x, H - botPad);
-    if (s % SBAR() === 0) { ctx.strokeStyle = 'rgba(36,39,42,.28)'; ctx.lineWidth = 1.2; }
-    else if (s % SPB() === 0) { ctx.strokeStyle = 'rgba(36,39,42,.09)'; ctx.lineWidth = 1; }
-    else { ctx.strokeStyle = 'rgba(36,39,42,.04)'; ctx.lineWidth = 1; }
+    if (s % SBAR() === 0) { ctx.globalAlpha = 0.28; ctx.lineWidth = 1.2; }
+    else if (s % SPB() === 0) { ctx.globalAlpha = 0.09; ctx.lineWidth = 1; }
+    else { ctx.globalAlpha = 0.04; ctx.lineWidth = 1; }
     ctx.stroke();
   }
-  /* 小节标签 + 和弦 */
+  ctx.globalAlpha = 0.55;
   ctx.font = '10px -apple-system, "PingFang SC", sans-serif';
   for (let b = 0; b < bars; b++) {
     const x = labelW + b * SBAR() * cellW;
-    ctx.fillStyle = 'rgba(36,39,42,.38)';
+    ctx.fillStyle = ink3;
     ctx.fillText(`${b + 1}`, x + 3, 22);
     const sec = sectionAt(b);
     if (sec.name && (b === 0 || sectionAt(b - 1).name !== sec.name)) {
-      ctx.fillStyle = 'rgba(194,69,45,.85)';
+      ctx.fillStyle = acc; ctx.globalAlpha = 0.85;
       ctx.font = '9px -apple-system, "PingFang SC", sans-serif';
       ctx.fillText(sec.name, x + 14, 12);
       ctx.font = '10px -apple-system, "PingFang SC", sans-serif';
-      ctx.fillStyle = 'rgba(36,39,42,.38)';
     }
     const chord = chordAtBar(b);
-    ctx.fillStyle = 'rgba(194,69,45,.9)';
+    ctx.fillStyle = acc; ctx.globalAlpha = 0.9;
     ctx.fillText(chord.name, x + 12, 14);
   }
-  /* 旋律音符（朱红笔触） */
   const rr = ctx.roundRect ? (x, y, w, h, r) => ctx.roundRect(x, y, w, h, r)
     : (x, y, w, h) => ctx.rect(x, y, w, h);
   rollCache.rects = [];
@@ -4650,14 +4754,15 @@ function renderRoll() {
     const w = Math.max(2.5, e.dur * 4 * cellW - 1);
     const y = yOf(e.midi);
     const grad = ctx.createLinearGradient(0, y, 0, y + 10);
-    grad.addColorStop(0, `rgba(217,110,82,${0.55 + e.vel * 0.45})`);
-    grad.addColorStop(1, `rgba(194,69,45,${0.55 + e.vel * 0.45})`);
+    grad.addColorStop(0, acc2);
+    grad.addColorStop(1, acc);
     ctx.fillStyle = grad;
+    ctx.globalAlpha = 0.55 + e.vel * 0.45;
     ctx.beginPath();
     rr(x, y, w, 9, 3);
     ctx.fill();
     if (e === selNote) {
-      ctx.strokeStyle = 'rgba(36,39,42,.85)';
+      ctx.strokeStyle = ink; ctx.globalAlpha = 0.85;
       ctx.lineWidth = 1.2;
       ctx.beginPath();
       rr(x - 1.5, y - 1.5, w + 3, 12, 4);
@@ -4666,16 +4771,16 @@ function renderRoll() {
     rollCache.rects.push({ ev: e, x, y, w });
   }
   Object.assign(rollCache, { lo, hi, cellW, labelW, topPad, plotH, total16, H });
-  /* 尾标注 */
+  ctx.fillStyle = ink3;
+  ctx.globalAlpha = 0.8;
   if (melodyEvents.length) {
-    ctx.fillStyle = 'rgba(36,39,42,.45)';
     ctx.font = '10px -apple-system, "PingFang SC", sans-serif';
     ctx.fillText(`${midiName(Math.min(...melodyEvents.map(e => e.midi)))} ~ ${midiName(Math.max(...melodyEvents.map(e => e.midi)))}`, 6, H - 6);
   } else {
-    ctx.fillStyle = 'rgba(36,39,42,.35)';
     ctx.font = '11px -apple-system, "PingFang SC", sans-serif';
     ctx.fillText('在上方描述动机并点击「生成旋律」，或直接点击网格空白处手写音符', labelW + 14, H / 2);
   }
+  ctx.globalAlpha = 1;
 }
 
 /* ---------- 卷帘编辑交互 ---------- */
@@ -4738,7 +4843,7 @@ function bindRollEditor() {
       drag.ev.dur = Math.min(end - drag.ev.beat, 8);
     }
     melodyEvents.sort((a, b) => a.beat - b.beat);
-    renderRoll();
+    scheduleRollRender();
     e.preventDefault();
   });
 
@@ -4888,7 +4993,7 @@ function tedCellCls(c, on, extra) {
 function editorRefresh() {
   const det = document.getElementById('track-editor');
   const host = document.getElementById('ted-tracks');
-  if (!det || !host || !det.open) return;
+  if (!det || !host || !det.open || !det.getClientRects().length) return;
   const bars = totalBars();
   const pages = Math.max(1, Math.ceil(bars / TED.per));
   TED.page = clamp(TED.page, 0, pages - 1);
@@ -4903,9 +5008,12 @@ function editorRefresh() {
   const mkTrack = (name, trackKey) => {
     const t = tedEl('div', 'ted-track');
     const head = tedEl('div', 'ted-track-head');
-    head.appendChild(tedEl('span', 'ted-tname', name));
+    const label = tedEl('span', 'ted-tname');
+    const icon = { melody: 'guitar', keys: 'keys', bass: 'bass', synth: 'pad', drums: 'drums' }[trackKey];
+    label.innerHTML = `<svg class="icon" aria-hidden="true"><use href="#i-${icon}"/></svg> ${name.replace(/^[^\w\u4e00-\u9fff]+/, '')}`;
+    head.appendChild(label);
     head.appendChild(tedEl('span', 'ted-thint', TED_HINTS[trackKey] || ''));
-    const rst = tedEl('button', 'ted-reset', '↺ 重置本轨');
+    const rst = tedEl('button', 'ted-reset', '重置');
     rst.onclick = () => tedResetTrack(trackKey);
     head.appendChild(rst);
     t.appendChild(head);
@@ -4922,7 +5030,7 @@ function editorRefresh() {
         const gs = gstepOf(c);
         const ev = melodyEvents.find(e => Math.round(e.beat * SPB()) === gs && e.midi === m);
         const cell = tedEl('button', tedCellCls(c, !!ev, ev && ev.ghost ? 'gh' : ''));
-        if (ev) cell.style.background = 'rgba(194,69,45,' + (0.35 + ev.vel * 0.6) + ')';
+        if (ev) cell.style.background = 'rgba(184,178,198,' + (0.35 + ev.vel * 0.6) + ')';
         cell.title = midiName(m);
         cell.onclick = () => tedTogglePitch('melody', m, gs);
         return cell;
@@ -4937,7 +5045,7 @@ function editorRefresh() {
       const gs = gstepOf(c);
       const ev = keysEvents.find(e => Math.round(e.beat * SPB()) === gs && !e.layer);
       const cell = tedEl('button', tedCellCls(c, !!ev));
-      if (ev) cell.style.background = 'rgba(36,39,42,' + (0.3 + ev.vel * 0.55) + ')';
+      if (ev) cell.style.background = 'rgba(130,128,140,' + (0.3 + ev.vel * 0.55) + ')';
       const bar = Math.floor(gs / SBAR());
       cell.title = (chordAtBar(bar) || {}).name || '';
       cell.onclick = () => tedToggleKeys(gs);
@@ -4954,7 +5062,7 @@ function editorRefresh() {
         const gs = gstepOf(c);
         const ev = bassEvents.find(e => Math.round(e.beat * SPB()) === gs && e.midi === m);
         const cell = tedEl('button', tedCellCls(c, !!ev));
-        if (ev) cell.style.background = 'rgba(120,84,40,' + (0.35 + ev.vel * 0.55) + ')';
+        if (ev) cell.style.background = 'rgba(128,148,160,' + (0.35 + ev.vel * 0.55) + ')';
         cell.title = midiName(m);
         cell.onclick = () => tedTogglePitch('bass', m, gs);
         return cell;
@@ -4987,7 +5095,7 @@ function editorRefresh() {
         const gs = gstepOf(c);
         const ev = drumEvents.find(e => Math.round(e.step16) === gs && e.inst === inst);
         const cell = tedEl('button', tedCellCls(c, !!ev));
-        if (ev) cell.style.background = 'rgba(36,39,42,' + (0.25 + ev.vel * 0.65) + ')';
+        if (ev) cell.style.background = 'rgba(130,128,140,' + (0.25 + ev.vel * 0.65) + ')';
         cell.onclick = () => tedToggleDrum(inst, gs);
         return cell;
       }));
@@ -5134,14 +5242,14 @@ function bindTrackEditor() {
  * ============================================================ */
 const GAME = { mode: 'drums', step: 0, running: false, timer: null, hits: 0, combo: 0 };
 const GAME_DRUM_PADS = [
-  ['kick', '底鼓', '🥁', '#C24D2D'],
-  ['snare', '军鼓', '🔵', '#C77B3A'],
-  ['clap', '拍手', '👏', '#4A7A4F'],
-  ['hat', '闭镲', '🔔', '#3A6EA5'],
-  ['ohat', '开镲', '✨', '#5B7FA6'],
-  ['congaH', '康加', '🪘', '#7A5BA6'],
+  ['kick', '底鼓', 'K', '#625e68'],
+  ['snare', '军鼓', 'S', '#77717e'],
+  ['clap', '拍手', 'C', '#686774'],
+  ['hat', '闭镲', 'H', '#59616c'],
+  ['ohat', '开镲', 'O', '#707988'],
+  ['congaH', '康加', 'G', '#756d82'],
 ];
-const GAME_FUN = ['🎯 正中节拍！', '🔥 好耶！', '💥 就是这个 feel！', '⭐ 漂亮！', '🎵 跟上节奏了！', '👏 手速可以！'];
+const GAME_FUN = ['正中节拍', '保持这个律动', '很好', '漂亮', '跟上节奏了', '继续'];
 
 function gameRange() {
   const bars = totalBars();
@@ -5270,7 +5378,7 @@ function startGameMetro() {
     restoreSampleBuses(); /* v27：stopPlayback 会静音采样总线——游戏垫要靠它们发声，必须恢复 */
     GAME.running = true; GAME.hits = 0; GAME.combo = 0; GAME.step = 0;
     const btn = document.getElementById('btn-game-metro');
-    if (btn) btn.textContent = '⏹ 停止节拍器';
+    if (btn) btn.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg> 停止节拍器';
     if (AE.metro) { try { AE.metro.dispose(); } catch (e) {} }
     AE.metro = new Tone.Synth({ oscillator: { type: 'square' }, envelope: { attack: 0.001, decay: 0.06, sustain: 0, release: 0.02 } });
     AE.metro.volume.value = -10; /* v27：-16→-10，节拍器要听得清 */
@@ -5298,10 +5406,10 @@ function stopGameMetro() {
   GAME.running = false;
   if (GAME.timer) { clearInterval(GAME.timer); GAME.timer = null; }
   const btn = document.getElementById('btn-game-metro');
-  if (btn) btn.textContent = '▶ 跟节拍器玩';
+  if (btn) btn.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-play"/></svg> 跟节拍器玩';
   document.querySelectorAll('#game-beat i').forEach(d => d.classList.remove('on'));
   const el = document.getElementById('ted-feedback');
-  if (wasRunning && el) el.textContent = '🎉 录制完成！点 ▶ 播放 听听你刚刚打的节奏';
+  if (wasRunning && el) el.textContent = '录制完成，点播放试听。';
   GAME.combo = 0;
 }
 function bindGameMode() {
@@ -5348,6 +5456,8 @@ function loadPreset(id) {
   const p = PRESETS.find(x => x.id === id);
   if (!p) return;
   state.presetId = id;
+  state.chartId = '';
+  renderChartReference();
   state.slots = p.slots.map(s => ({ d: s.d, acc: s.acc || 0, q: s.q || 'auto' }));
   if (p.mode) { state.mode = p.mode; const mEl = document.getElementById('ctl-mode'); if (mEl) mEl.value = p.mode; }
   updatePresetDesc();
@@ -5372,10 +5482,14 @@ function bindEvents() {
   const modeEl = document.getElementById('ctl-mode'); /* v42：调式选择已从 UI 移除（预设自带调式框架） */
   if (modeEl) modeEl.onchange = e => { state.mode = e.target.value; regenerate('mode'); };
   $('#ctl-master').oninput = e => { state.master = e.target.value / 100; applyMix(); };
+  const chartSelect = $('#chart-select');
+  if (chartSelect) chartSelect.onchange = e => { if (e.target.value) applyChartPreset(e.target.value); };
 
   /* 风格 */
   document.querySelectorAll('#style-chips .chip').forEach(chip => {
     chip.onclick = () => {
+      state.chartId = '';
+      renderChartReference();
       const s = chip.dataset.style;
       const idx = state.styles.indexOf(s);
       if (idx >= 0) {
@@ -5402,7 +5516,8 @@ function bindEvents() {
       state.layers[layer].patch = e.target.value;
       applyGuitarPatch();
       const pn = SAMP_GUITAR[e.target.value] || SAMP_PAD[e.target.value];
-      if (pn && !sampOf(pn)) {
+      const guitarNeedsSF = (state.styles.length ? state.styles : ['rnb']).some(k => (GUITAR_SRC_BY_STYLE[k] || 'samp') === 'sf');
+      if (pn && !sampOf(pn) && (!SAMP_GUITAR[e.target.value] || guitarNeedsSF)) {
         sampStatus('加载音色中…');
         ensureSample(pn).then(() => { sampStatus(''); regenerate('patch'); });
         if (!state.playing) regenerate('patch'); /* 未播放先刷新界面，声音用回退 */
@@ -5453,6 +5568,7 @@ function bindEvents() {
     perfEl.checked = state.perf;
     perfEl.onchange = () => {
       state.perf = perfEl.checked;
+      syncVisualState();
       try { localStorage.setItem('motif_perf', state.perf ? '1' : '0'); } catch (e) {}
       for (const layer of ['guitar','keys','bass','pad','drums']) applyTone(layer);
       regenerate('patch');
@@ -5511,23 +5627,37 @@ function bindEvents() {
     const stars = Array.from({ length: N }, () => ({ x: Math.random(), y: Math.random(), z: Math.random() * 0.9 + 0.1, r: Math.random() * 1.3 + 0.4, c: Math.random() }));
     const mx = { x: 0, y: 0 };
     addEventListener('mousemove', e => { mx.x = e.clientX / innerWidth - 0.5; mx.y = e.clientY / innerHeight - 0.5; }, { passive: true });
-    let last = 0;
-    (function draw(t) {
-      requestAnimationFrame(draw);
-      if (t - last < 50 || document.hidden) return; /* 20fps 足够顺滑且极省 CPU */
-      last = t;
-      if (W !== innerWidth || H !== innerHeight) { W = innerWidth; H = innerHeight; sfCanvas.width = W; sfCanvas.height = H; }
-      c.clearRect(0, 0, W, H);
-      const cx = W / 2 + mx.x * W * 0.05, cy = H / 2 + mx.y * H * 0.05;
-      for (const s of stars) {
-        s.z -= 0.0022; if (s.z <= 0.06) s.z = 0.96;
-        const px = cx + ((s.x - 0.5) * W / s.z) * 0.5;
-        const py = cy + ((s.y - 0.5) * H / s.z) * 0.5;
-        const a = (1 - s.z) * 0.85;
-        c.fillStyle = s.c < 0.55 ? 'rgba(124,108,255,' + a.toFixed(3) + ')' : (s.c < 0.82 ? 'rgba(79,163,255,' + a.toFixed(3) + ')' : 'rgba(232,234,246,' + a.toFixed(3) + ')');
-        c.beginPath(); c.arc(px, py, s.r * (1.25 - s.z), 0, 6.2832); c.fill();
+    let last = 0, raf = 0;
+    const active = () => !document.hidden && !state.playing && !state.perf;
+    function draw(t) {
+      raf = 0;
+      if (!active()) return;
+      if (t - last >= 50) {
+        last = t;
+        if (W !== innerWidth || H !== innerHeight) { W = innerWidth; H = innerHeight; sfCanvas.width = W; sfCanvas.height = H; }
+        c.clearRect(0, 0, W, H);
+        const cx = W / 2 + mx.x * W * 0.05, cy = H / 2 + mx.y * H * 0.05;
+        for (const s of stars) {
+          s.z -= 0.0022; if (s.z <= 0.06) s.z = 0.96;
+          const px = cx + ((s.x - 0.5) * W / s.z) * 0.5;
+          const py = cy + ((s.y - 0.5) * H / s.z) * 0.5;
+          const a = (1 - s.z) * 0.85;
+          c.fillStyle = s.c < 0.55 ? 'rgba(124,108,255,' + a.toFixed(3) + ')' : (s.c < 0.82 ? 'rgba(79,163,255,' + a.toFixed(3) + ')' : 'rgba(232,234,246,' + a.toFixed(3) + ')');
+          c.beginPath(); c.arc(px, py, s.r * (1.25 - s.z), 0, 6.2832); c.fill();
+        }
       }
-    })(0);
+      raf = requestAnimationFrame(draw);
+    }
+    const sync = () => {
+      if (!active()) {
+        if (raf) cancelAnimationFrame(raf);
+        raf = 0;
+        c.clearRect(0, 0, W, H);
+      } else if (!raf) raf = requestAnimationFrame(draw);
+    };
+    window.addEventListener('motif-visual-change', sync);
+    document.addEventListener('visibilitychange', sync);
+    sync();
   }
   /* v45：卡片 3D 倾斜移除——backdrop-filter + 3D transform 组合在 Chrome 会导致卡片内容消失（UI 组件加载不完全） */
   const addSlotBtn = document.getElementById('btn-add-slot'); /* v42：级数编辑已移除；守卫防旧 UI 空引用 */
@@ -5545,7 +5675,7 @@ function bindEvents() {
     const text = chordTimeline.map(c => `${c.name}（${c.roman}${c.ext}）`).join(' → ');
     navigator.clipboard.writeText(`${pcName(state.keyRoot)} ${MODES[state.mode].name} ${state.bpm}BPM：${text}`).then(() => {
       $('#btn-copy-prog').textContent = '✓ 已复制';
-      setTimeout(() => $('#btn-copy-prog').textContent = '📋 复制和弦走向', 1200);
+      setTimeout(() => $('#btn-copy-prog').innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg> 复制和弦走向', 1200);
     });
   };
 
@@ -5569,7 +5699,7 @@ function bindEvents() {
     reScheduleIfPlaying();
   };
 
-  window.addEventListener('resize', renderRoll);
+  window.addEventListener('resize', scheduleRollRender);
   /* 移动端音频解锁：首次触摸即简历 AudioContext */
   const unlock = () => ensureAudio();
   window.addEventListener('pointerdown', unlock, { once: true });
@@ -5590,6 +5720,7 @@ function init() {
   populateStatic();
   bindEvents();
   loadPreset(state.presetId);
+  syncVisualState();
   if (/iP(hone|ad|od)/.test(navigator.userAgent)) {
     const h = document.getElementById('ios-hint');
     if (h) h.hidden = false;

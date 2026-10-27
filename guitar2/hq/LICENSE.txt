@@ -1,0 +1,10 @@
+Shinyguitar — Karoryfer Samples
+Original performer/map editor: D. Smolken
+Copyright 2015, 2018 Karoryfer Lecolds.
+Source: https://github.com/sfzinstruments/karoryfer.shinyguitar
+License: CC0 1.0 Universal
+License text: https://github.com/sfzinstruments/karoryfer.shinyguitar/blob/master/LICENSE
+
+MotifLab redistributes selected, unmodified 24-bit WAV recordings from the
+original electric and acoustic sample directories. Filenames were normalized
+for the browser sampler. No original audio was converted from MP3.
