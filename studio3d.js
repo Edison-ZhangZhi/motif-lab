@@ -30,23 +30,18 @@
   var moonPulse = 0;
   var moonEnabled = stage.classList.contains('moon-space-on');
   var guitar;
-  var pad;
-  var padSurface;
-  var padCursor;
   var knobs = [];
   var interactive = [];
   var raycaster = new THREE.Raycaster();
   var pointer = new THREE.Vector2();
   var readout = document.getElementById('studio3d-readout');
   var tooltip = stage.querySelector('.studio3d-tooltip');
-  var padValues = { b: 0.5, s: 0.5 };
   var current = { yaw: 0, pitch: 0.055, distance: 9.6, tx: -0.15, ty: -0.05, tz: -0.25 };
   var target = { yaw: 0, pitch: 0.055, distance: 9.6, tx: -0.15, ty: -0.05, tz: -0.25 };
   var presets = {
     reset: { yaw: 0, pitch: 0.055, distance: 9.6, tx: -0.15, ty: -0.05, tz: -0.25 },
     guitar: { yaw: -0.16, pitch: 0.19, distance: 8.7, tx: -0.35, ty: -0.2, tz: 0.1 },
-    moon: { yaw: 0.24, pitch: 0.12, distance: 6.4, tx: 1.25, ty: 1.1, tz: -1.75 },
-    pad: { yaw: -0.08, pitch: 0.09, distance: 4.8, tx: -2.25, ty: 1.15, tz: -0.85 }
+    moon: { yaw: 0.24, pitch: 0.12, distance: 6.4, tx: 1.55, ty: 1.55, tz: -3.2 }
   };
 
   function suspended() {
@@ -100,26 +95,15 @@
     control.group.rotation.z = -2.35 + control.value * 4.7;
   }
 
-  function updatePad() {
-    if (!padCursor) return;
-    padCursor.position.set((padValues.b - 0.5) * 1.82, (padValues.s - 0.5) * 0.92, 0.18);
-  }
-
   function controlTone(targetName, param, value) {
     value = Math.max(0, Math.min(1, value));
-    if (targetName === 'guitar') {
-      knobs.forEach(function (knob) {
-        if (knob.param === param) {
-          knob.value = value;
-          updateKnob(knob);
-        }
-      });
-      setReadout('吉他' + (param === 'b' ? '亮度 ' : '空间 ') + Math.round(value * 100) + '%');
-    } else {
-      padValues[param] = value;
-      updatePad();
-      setReadout('Pad ' + (param === 'b' ? '亮度 ' : '空间 ') + Math.round(value * 100) + '%');
-    }
+    knobs.forEach(function (knob) {
+      if (knob.param === param) {
+        knob.value = value;
+        updateKnob(knob);
+      }
+    });
+    setReadout('吉他' + (param === 'b' ? '亮度 ' : '空间 ') + Math.round(value * 100) + '%');
     if (typeof window.motif3DControl === 'function') {
       window.motif3DControl({ target: targetName, param: param, value: value });
     }
@@ -277,7 +261,7 @@
 
     group.rotation.z = 0.17;
     group.rotation.x = -0.08;
-    group.position.set(-0.25, -0.42, 0.2);
+    group.position.set(-0.25, -0.68, 0.65);
     return group;
   }
 
@@ -340,89 +324,8 @@
       ring.rotation.z = config[2];
       group.add(ring);
     });
-    group.position.set(1.45, 1.25, -2.35);
-    return group;
-  }
-
-  function makePad() {
-    var group = new THREE.Group();
-    var gold = material(0xa48e60, 0.72, 0.3);
-    var marble = material(0xaaa7a3, 0.12, 0.62);
-    var glass = new THREE.MeshStandardMaterial({
-      color: 0x171820, metalness: 0.32, roughness: 0.24,
-      transparent: true, opacity: 0.88, emissive: 0x161221, emissiveIntensity: 0.3
-    });
-    padSurface = box(group, [2.16, 1.28, 0.1], [0, 0, 0], glass);
-    padSurface.userData.interaction = { type: 'pad', target: 'synth' };
-    interactive.push(padSurface);
-    box(group, [2.32, 0.07, 0.17], [0, 0.69, 0], gold);
-    box(group, [2.32, 0.07, 0.17], [0, -0.69, 0], gold);
-    box(group, [0.07, 1.32, 0.17], [-1.125, 0, 0], gold);
-    box(group, [0.07, 1.32, 0.17], [1.125, 0, 0], gold);
-
-    var gridPoints = [];
-    [-0.33, 0.33].forEach(function (x) {
-      gridPoints.push(new THREE.Vector3(x, -0.55, 0.065), new THREE.Vector3(x, 0.55, 0.065));
-    });
-    [-0.2, 0.2].forEach(function (y) {
-      gridPoints.push(new THREE.Vector3(-0.98, y, 0.065), new THREE.Vector3(0.98, y, 0.065));
-    });
-    group.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(gridPoints), new THREE.LineBasicMaterial({
-      color: 0x9c90b0, transparent: true, opacity: 0.2
-    })));
-
-    var labelCanvas = document.createElement('canvas');
-    labelCanvas.width = 512;
-    labelCanvas.height = 256;
-    var context = labelCanvas.getContext('2d');
-    context.fillStyle = 'rgba(225,218,202,.82)';
-    context.font = '22px Georgia';
-    context.fillText('SYNTH  XY', 24, 34);
-    context.fillStyle = 'rgba(192,174,128,.7)';
-    context.font = '14px sans-serif';
-    context.fillText('BRIGHTNESS  X', 318, 232);
-    context.save();
-    context.translate(28, 210);
-    context.rotate(-Math.PI / 2);
-    context.fillText('SPACE  Y', 0, 0);
-    context.restore();
-    var label = new THREE.Mesh(new THREE.PlaneGeometry(2.08, 1.04), new THREE.MeshBasicMaterial({
-      map: new THREE.CanvasTexture(labelCanvas), transparent: true, depthWrite: false
-    }));
-    label.position.z = 0.075;
-    group.add(label);
-
-    padCursor = new THREE.Group();
-    var cursorMaterial = new THREE.MeshStandardMaterial({
-      color: 0xe2cf98, emissive: 0x8b6f35, emissiveIntensity: 0.8, metalness: 0.5, roughness: 0.24
-    });
-    var ring = new THREE.Mesh(new THREE.TorusGeometry(0.105, 0.016, 10, 36), cursorMaterial);
-    padCursor.add(ring);
-    frontDisc(padCursor, 0.028, 0.025, [0, 0, 0], cursorMaterial, 20);
-    group.add(padCursor);
-
-    [-0.79, 0.79].forEach(function (x) {
-      var geometry = new THREE.CylinderGeometry(0.12, 0.16, 1.25, 48, 1);
-      var positions = geometry.attributes.position;
-      for (var i = 0; i < positions.count; i += 1) {
-        var px = positions.getX(i);
-        var pz = positions.getZ(i);
-        var angle = Math.atan2(pz, px);
-        var flute = 1 - 0.09 * (0.5 + 0.5 * Math.cos(angle * 12));
-        positions.setX(i, px * flute);
-        positions.setZ(i, pz * flute);
-      }
-      geometry.computeVertexNormals();
-      var column = new THREE.Mesh(geometry, marble);
-      column.position.set(x, -1.22, -0.14);
-      group.add(column);
-      box(group, [0.38, 0.09, 0.32], [x, -0.61, -0.14], marble);
-      box(group, [0.34, 0.08, 0.3], [x, -1.86, -0.14], marble);
-    });
-    group.position.set(-2.3, 1.2, -0.85);
-    group.rotation.x = -0.09;
-    group.rotation.z = -0.035;
-    updatePad();
+    group.position.set(1.55, 1.7, -3.9);
+    group.scale.setScalar(0.88);
     return group;
   }
 
@@ -597,17 +500,6 @@
     });
   }
 
-  function updatePadFromEvent(event) {
-    var rect = canvas.getBoundingClientRect();
-    pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
-    raycaster.setFromCamera(pointer, camera);
-    var hits = raycaster.intersectObject(padSurface, false);
-    if (!hits.length) return;
-    var point = padSurface.worldToLocal(hits[0].point.clone());
-    controlTone('synth', 'b', point.x / 1.82 + 0.5);
-    controlTone('synth', 's', point.y / 0.92 + 0.5);
-  }
-
   function bindControls() {
     var moonButton = document.getElementById('studio3d-moon');
     if (moonButton) {
@@ -623,15 +515,6 @@
     });
     stage.addEventListener('keydown', function (event) {
       var key = event.key.toLowerCase();
-      if (activeView === 'pad' && key.indexOf('arrow') === 0) {
-        event.preventDefault();
-        if (key === 'arrowleft') controlTone('synth', 'b', padValues.b - 0.04);
-        else if (key === 'arrowright') controlTone('synth', 'b', padValues.b + 0.04);
-        else if (key === 'arrowup') controlTone('synth', 's', padValues.s + 0.04);
-        else if (key === 'arrowdown') controlTone('synth', 's', padValues.s - 0.04);
-        lastInteraction = performance.now();
-        return;
-      }
       if (['q', 'a', 'w', 's'].indexOf(key) >= 0) {
         event.preventDefault();
         var param = key === 'q' || key === 'a' ? 'b' : 's';
@@ -681,10 +564,10 @@
       if (!dragging) {
         if (event.pointerType !== 'mouse') return;
         var hover = hitControl(event);
-        canvas.style.cursor = hover ? (hover.type === 'knob' ? 'ns-resize' : hover.type === 'pad' ? 'crosshair' : 'pointer') : 'grab';
+        canvas.style.cursor = hover ? (hover.type === 'knob' ? 'ns-resize' : 'pointer') : 'grab';
         if (tooltip) {
           tooltip.classList.toggle('visible', !!hover);
-          tooltip.textContent = hover ? (hover.type === 'moon' ? '点击切换月夜空间' : hover.type === 'knob' ? '上下拖动 · 吉他' + (hover.param === 'b' ? '亮度' : '空间') : '拖动 XY · Synth 亮度 / 空间') : '';
+          tooltip.textContent = hover ? (hover.type === 'moon' ? '点击切换月夜空间' : '上下拖动 · 吉他' + (hover.param === 'b' ? '亮度' : '空间')) : '';
         }
         return;
       }
@@ -698,8 +581,6 @@
       }
       if (dragging.control && dragging.control.type === 'knob') {
         controlTone('guitar', dragging.control.param, dragging.startValue + (dragging.y - event.clientY) / 140);
-      } else if (dragging.control && dragging.control.type === 'pad') {
-        updatePadFromEvent(event);
       } else if (!dragging.control) {
         target.yaw -= (event.clientX - dragging.lastX) * 0.006;
         target.pitch = Math.max(-0.55, Math.min(0.7, target.pitch + (event.clientY - dragging.lastY) * 0.005));
@@ -772,21 +653,14 @@
       scene.add(makeStars());
       moon = makeMoon(new THREE.TextureLoader());
       guitar = makeGuitar();
-      pad = makePad();
       scene.add(moon);
       scene.add(guitar);
-      scene.add(pad);
       var guitarTone = readTone('guitar');
       knobs.forEach(function (knob) {
         if (typeof guitarTone[knob.param] === 'number') knob.value = Math.max(0, Math.min(1, guitarTone[knob.param]));
         updateKnob(knob);
       });
-      var synthTone = readTone('synth');
-      ['b', 's'].forEach(function (param) {
-        if (typeof synthTone[param] === 'number') padValues[param] = Math.max(0, Math.min(1, synthTone[param]));
-      });
-      updatePad();
-      if (typeof window.motif3DMoon !== 'function') setReadout('拖动实体旋钮或 Pad XY 调节音色');
+      if (typeof window.motif3DMoon !== 'function') setReadout('拖动实体旋钮调节吉他音色');
       stage.insertBefore(canvas, stage.querySelector('.stage-caption'));
       stage.classList.add('webgl-ready');
       stage.setAttribute('data-webgl', 'ready');
@@ -834,9 +708,7 @@
             moonRadius: 1.42,
             moonEnabled: moonEnabled,
             moonGlow: moonGlow,
-            guitarTone: { b: knobs[0].value, s: knobs[1].value },
-            padTone: { b: padValues.b, s: padValues.s },
-            padParts: pad.children.length
+            guitarTone: { b: knobs[0].value, s: knobs[1].value }
           };
         }
       });

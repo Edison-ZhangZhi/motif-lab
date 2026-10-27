@@ -3569,6 +3569,7 @@ async function renderArrangementToBuffer(silent) {
     drumBus: DRUM_SAMP.bus, synthBus: SYNTH_BUF.bus, epBus: SYNTH_BUF.epBus,
   };
   _arrRendering = true;
+  syncVisualState();
   try {
     await awaitArrSamples(silent);
     ARR.sampleMs = Math.round(performance.now() - renderStarted);
@@ -3599,9 +3600,15 @@ async function renderArrangementToBuffer(silent) {
     Tone.getTransport().start(0);
     const rendered = await offCtx.render();
     ARR.renderMs = Math.round(performance.now() - renderStarted - ARR.sampleMs);
+    const renderedBuffer = rendered.get ? rendered.get() : rendered;
+    const channel = renderedBuffer.getChannelData(0);
+    let peak = 0;
+    for (let i = 0; i < channel.length; i += 31) peak = Math.max(peak, Math.abs(channel[i]));
+    ARR.bufferPeak = peak;
+    if (peak < 0.00001) throw new Error('离线渲染结果为静音，已阻止假播放');
     sampStatus(`缓冲就绪 · 采样 ${(ARR.sampleMs / 1000).toFixed(1)}s / 混音 ${(ARR.renderMs / 1000).toFixed(1)}s`);
     if (revision === _arrRevision) {
-      ARR.buf = rendered.get ? rendered.get() : rendered;
+      ARR.buf = renderedBuffer;
       ARR.dur = totalSec;
       ARR.revision = revision;
     }
@@ -3623,16 +3630,21 @@ async function renderArrangementToBuffer(silent) {
     if (SYNTH_BUF.keysEP) SYNTH_BUF.keysEP.bus = liveBuses.epBus; /* 与换挂对应恢复 */
     for (const k of Object.keys(GUITAR_FX_CHAINS)) delete GUITAR_FX_CHAINS[k]; /* 离线链作废，live 链下次按需重建 */
     _arrRendering = false;
+    syncVisualState();
   }
 }
 
 function startBufferPlayback() {
   if (!ARR.buf) return false;
-  const raw = Tone.getContext().rawContext;
+  const raw = LIVE_RAW || Tone.getContext().rawContext;
   if (!ARR.out || ARR.out._raw !== raw) {
+    if (ARR.out) try { ARR.out.disconnect(); } catch (e) {}
     ARR.out = raw.createGain();
     ARR.out._raw = raw;
-    ARR.out.connect(raw.destination);
+    ARR.meter = raw.createAnalyser();
+    ARR.meter.fftSize = 2048;
+    ARR.out.connect(ARR.meter);
+    ARR.meter.connect(raw.destination);
   }
   ARR.out.gain.setValueAtTime(state.master * state.master, raw.currentTime);
   const src = raw.createBufferSource();
@@ -3646,6 +3658,7 @@ function startBufferPlayback() {
   ARR.src = src;
   if (previous) try { previous.stop(); } catch (e) {}
   state.playing = true;
+  ARR.silentChecks = 0;
   updatePlayBtn();
   setTimeout(audioHealthCheck, 2500);
   setTimeout(() => {
@@ -3689,6 +3702,28 @@ let _audioRebuilt = false;
 function audioHealthCheck() {
   if (!state.playing || typeof Tone === 'undefined' || !AE.ready) return;
   try {
+    if (ARR.src && ARR.meter) {
+      const samples = new Float32Array(ARR.meter.fftSize);
+      ARR.meter.getFloatTimeDomainData(samples);
+      let energy = 0;
+      for (let i = 0; i < samples.length; i++) energy += samples[i] * samples[i];
+      ARR.outputRms = Math.sqrt(energy / samples.length);
+      if (ARR.outputRms > 0.00001) {
+        ARR.silentChecks = 0;
+        sampStatus('音频输出正常');
+        return;
+      }
+      ARR.silentChecks = (ARR.silentChecks || 0) + 1;
+      if (ARR.silentChecks < 3) {
+        if (LIVE_RAW && LIVE_RAW.state !== 'running') LIVE_RAW.resume().catch(function () {});
+        setTimeout(audioHealthCheck, 600);
+        return;
+      }
+      sampStatus('⚠ 缓冲输出无声，正在切换兼容播放…');
+      stopBufferPlayback();
+      startRealtimePlayback(true);
+      return;
+    }
     const curRaw = Tone.getContext().rawContext;
     const ctxMismatch = !!(AE.master && AE.master.context && AE.master.context.rawContext !== curRaw);
     let silent = false;
@@ -3811,7 +3846,7 @@ function syncVisualState() {
   const root = document.documentElement;
   if (root) {
     root.dataset.playing = state.playing ? 'true' : 'false';
-    root.dataset.perfMode = (state.perf || state.playing) ? 'true' : 'false';
+    root.dataset.perfMode = (state.perf || state.playing || _arrRendering || _arrSwapped) ? 'true' : 'false';
   }
   window.dispatchEvent(new Event('motif-visual-change'));
 }
