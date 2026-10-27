@@ -394,7 +394,7 @@
     if (!renderer) return;
     var width = Math.max(1, stage.clientWidth);
     var height = Math.max(1, stage.clientHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, stage.classList.contains('lite-mode') ? 1 : 1.5));
     renderer.setSize(width, height, false);
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
@@ -427,7 +427,8 @@
     });
     moving = updateVisualEffects(dt, false) || moving;
     if (moving || idle || needsRender) {
-      if (moving || needsRender || now - lastFrame >= 33) {
+      var frameInterval = stage.classList.contains('lite-mode') ? 66 : 33;
+      if (moving || needsRender || now - lastFrame >= frameInterval) {
         render();
         lastFrame = now;
       }
@@ -628,16 +629,13 @@
   }
 
   function init() {
-    if (window.matchMedia('(max-width: 760px), (pointer: coarse)').matches || (navigator.connection && navigator.connection.saveData)) {
-      stage.classList.add('lite-mode');
-      fail();
-      return;
-    }
+    var lite = window.matchMedia('(max-width: 760px), (pointer: coarse)').matches || (navigator.connection && navigator.connection.saveData);
+    if (lite) stage.classList.add('lite-mode');
     try {
       canvas = document.createElement('canvas');
       canvas.className = 'studio3d-canvas';
       canvas.setAttribute('aria-hidden', 'true');
-      renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
+      renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: !lite, alpha: true, powerPreference: lite ? 'low-power' : 'high-performance' });
       renderer.setClearColor(0x000000, 0);
       renderer.outputEncoding = THREE.sRGBEncoding;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;

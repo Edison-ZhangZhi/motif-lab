@@ -4857,10 +4857,9 @@ function renderRoll() {
     const x = xOf(e.beat);
     const w = Math.max(3, e.dur * SPB() * cellW - 1);
     const y = yOf(e.midi);
-    const hue = (((e.midi % 12) + 12) % 12) * 30;
     const grad = ctx.createLinearGradient(0, y, 0, y + 10);
-    grad.addColorStop(0, `hsl(${hue}, ${Math.round(48 + e.vel * 38)}%, ${Math.round(42 + e.vel * 24)}%)`);
-    grad.addColorStop(1, `hsl(${hue}, ${Math.round(45 + e.vel * 38)}%, ${Math.round(28 + e.vel * 20)}%)`);
+    grad.addColorStop(0, `hsl(250, ${Math.round(4 + e.vel * 8)}%, ${Math.round(18 + e.vel * 20)}%)`);
+    grad.addColorStop(1, `hsl(250, ${Math.round(4 + e.vel * 8)}%, ${Math.round(12 + e.vel * 16)}%)`);
     ctx.fillStyle = grad;
     ctx.beginPath();
     rr(x, y, w, 9, 3);
@@ -5100,11 +5099,9 @@ function tedCellCls(c, on, extra) {
   if (extra) cls += ' ' + extra;
   return cls;
 }
-const TED_DRUM_HUES = { kick: 8, snare: 28, clap: 42, hat: 190, ohat: 175, ride: 210, shaker: 155, shekere: 145, congaH: 275, congaL: 255, bell: 320, crash: 35 };
 function tedBlockColor(value, vel, kind) {
   const v = clamp(Number(vel) || 0.5, 0, 1);
-  const hue = kind === 'drums' ? (TED_DRUM_HUES[value] || 220) : kind === 'keys' ? 265 : kind === 'pad' ? 205 : (((Number(value) % 12) + 12) % 12) * 30;
-  return `hsl(${hue}, ${Math.round(42 + v * 48)}%, ${Math.round(27 + v * 25)}%)`;
+  return `hsl(250, ${Math.round(4 + v * 8)}%, ${Math.round(14 + v * 20)}%)`;
 }
 function tedAria(label, gs, on) {
   return `${label}，第 ${Math.floor(gs / SBAR()) + 1} 小节第 ${(Math.round(gs) % SBAR()) + 1} 步，${on ? '已开启，点击编辑' : '点击添加'}`;
@@ -5596,17 +5593,9 @@ function loadPreset(id) {
 /* ---------- 事件绑定 ---------- */
 function bindEvents() {
   const moonStage = document.getElementById('instrument-stage');
-  if (moonStage) {
-    moonStage.classList.toggle('moon-space-on', state.moonSpace);
-    moonStage.classList.toggle('lite-mode', isLiteDevice());
-  }
+  if (moonStage) moonStage.classList.toggle('moon-space-on', state.moonSpace);
   const moonReadout = document.getElementById('studio3d-readout');
-  if (moonReadout) moonReadout.textContent = isLiteDevice() ? '静态轻量模式 · 播放与编辑可用' : (state.moonSpace ? '月夜空间 · 开启' : '声场 · 近场');
-  if (isLiteDevice()) {
-    const moonButton = document.getElementById('studio3d-moon');
-    if (moonButton) moonButton.disabled = true;
-    document.querySelectorAll('[data-studio-view]').forEach(button => { button.disabled = true; });
-  }
+  if (moonReadout) moonReadout.textContent = state.moonSpace ? '月夜空间 · 开启' : '声场 · 近场';
   /* 走带 */
   $('#btn-play').onclick = togglePlay;
   $('#ctl-bpm').oninput = e => {
