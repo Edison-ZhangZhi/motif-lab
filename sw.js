@@ -1,6 +1,6 @@
 /* MotifLab Service Worker — 静态资源预缓存；音频按实际编曲加载并运行时缓存。 */
 'use strict';
-var CACHE = 'motiflab-v56';
+var CACHE = 'motiflab-v57';
 var PRECACHE = [
   './',
   'index.html',

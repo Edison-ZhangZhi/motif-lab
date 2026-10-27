@@ -278,6 +278,9 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   touch-action: pan-y;
 }
 .instrument-stage.is-dragging .studio3d-canvas { cursor: grabbing; }
+.webgl-loading .lunar-system, .webgl-loading .guitar-scene { visibility: hidden; }
+.webgl-loading .stage-caption b { font-size: 0; }
+.webgl-loading .stage-caption b::after { content: "3D 加载中…"; font: 11px var(--mono); color: var(--ink-3); }
 .webgl-ready .lunar-system, .webgl-ready .guitar-scene { display: none; }
 .studio3d-controls {
   position: absolute;

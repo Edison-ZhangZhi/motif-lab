@@ -4,9 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Motif Lab · 电吉他动机旋律生成器</title>
-<link rel="stylesheet" href="style.css?v=56">
+<link rel="stylesheet" href="style.css?v=57">
 <script src="lib/Tone.js"></script>
 <script src="lib/soundfont-player.min.js"></script>
+<script src="lib/three.min.js?v=57" defer></script>
+<script src="studio3d.js?v=57" defer></script>
 </head>
 <body>
   <canvas id="starfield" aria-hidden="true"></canvas>
@@ -45,7 +47,7 @@
         <div class="brand-title">
           <div class="logo" aria-hidden="true">M/</div>
           <div>
-            <h1>Motif Lab <span class="ver-badge" id="ver-badge" title="点击强制更新到最新版" style="font-size:11px;font-weight:400;opacity:.45;vertical-align:middle;cursor:pointer">v56</span></h1>
+            <h1>Motif Lab <span class="ver-badge" id="ver-badge" title="点击强制更新到最新版" style="font-size:11px;font-weight:400;opacity:.45;vertical-align:middle;cursor:pointer">v57</span></h1>
             <p>电吉他动机 · 和弦驱动编曲</p>
           </div>
         </div>
@@ -57,7 +59,7 @@
         <div class="temple-lines" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
       </div>
       <div class="instrument-column">
-      <div class="instrument-stage" id="instrument-stage" role="region" aria-label="交互式三维电吉他与月球音色控制" aria-describedby="studio3d-help" tabindex="0">
+      <div class="instrument-stage webgl-loading" id="instrument-stage" role="region" aria-label="交互式三维电吉他与月球音色控制" aria-describedby="studio3d-help" tabindex="0">
         <div class="stage-meta"><span>LUNAR STUDY / 001</span><span>SOLID BODY · 6 STRING</span></div>
         <div class="lunar-system">
           <div class="eclipse-halo"></div>
@@ -439,26 +441,11 @@
     </footer>
   </main>
 </div>
-<script src="theory.js?v=56"></script>
-<script src="cells.js?v=56"></script>
-<script src="specs.js?v=56"></script>
-<script src="rules.js?v=56"></script>
-<script src="app.js?v=56"></script>
-<script>
-(function () {
-  var lite = window.matchMedia('(max-width: 760px), (pointer: coarse)').matches ||
-    (navigator.connection && navigator.connection.saveData) || (navigator.deviceMemory && navigator.deviceMemory <= 4);
-  function load(src, done) {
-    var script = document.createElement('script');
-    script.src = src;
-    script.onload = done || null;
-    document.body.appendChild(script);
-  }
-  window.addEventListener('load', function () {
-    setTimeout(function () { load('lib/three.min.js?v=56', function () { load('studio3d.js?v=56'); }); }, lite ? 1200 : 0);
-  });
-})();
-</script>
+<script src="theory.js?v=57"></script>
+<script src="cells.js?v=57"></script>
+<script src="specs.js?v=57"></script>
+<script src="rules.js?v=57"></script>
+<script src="app.js?v=57"></script>
 <script>
 /* 静态资源预缓存；音频按需加载并由 Service Worker 运行时缓存 */
 try {
@@ -491,7 +478,7 @@ try {
    绕开旧 SW 的缓存优先），不一致说明本页是旧 SW 端的旧版。
    v46 升级：探测成功=网络已通 → 顺手清全部缓存+注销 SW 再硬刷新（一次到位），90 秒时间窗可重试 */
 (function () {
-  var PAGE_VER = 'v56'; /* 发版三件套：?v=N + 徽章 + 这里 */
+  var PAGE_VER = 'v57'; /* 发版三件套：?v=N + 徽章 + 这里 */
   try {
     fetch('sw.js?bust=' + Date.now()).then(function (r) { return r.text(); }).then(function (t) {
       var m = /motiflab-(v\d+)/.exec(t);

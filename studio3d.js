@@ -2,7 +2,14 @@
   'use strict';
 
   var stage = document.getElementById('instrument-stage');
-  if (!stage || !window.THREE) return;
+  if (!stage) return;
+  if (!window.THREE) {
+    stage.classList.remove('webgl-loading');
+    stage.classList.add('webgl-failed');
+    var fallbackReadout = document.getElementById('studio3d-readout');
+    if (fallbackReadout) fallbackReadout.textContent = '静态模式 · 播放与编辑可用';
+    return;
+  }
 
   var THREE = window.THREE;
   var root = document.documentElement;
@@ -619,7 +626,8 @@
 
   function fail() {
     stop();
-    stage.classList.remove('webgl-ready', 'is-dragging');
+    stage.classList.remove('webgl-ready', 'webgl-loading', 'is-dragging');
+    stage.classList.add('webgl-failed');
     stage.removeAttribute('data-webgl');
     if (canvas) canvas.hidden = true;
     var moonButton = document.getElementById('studio3d-moon');
@@ -666,6 +674,7 @@
       });
       if (typeof window.motif3DMoon !== 'function') setReadout('拖动实体旋钮调节吉他音色');
       stage.insertBefore(canvas, stage.querySelector('.stage-caption'));
+      stage.classList.remove('webgl-loading', 'webgl-failed');
       stage.classList.add('webgl-ready');
       stage.setAttribute('data-webgl', 'ready');
       bindControls();
