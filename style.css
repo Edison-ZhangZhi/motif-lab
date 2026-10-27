@@ -134,9 +134,10 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
     linear-gradient(145deg, #111113, #09090a 72%);
   box-shadow: inset 0 1px rgba(255,255,255,.025), 0 24px 60px rgba(0,0,0,.18);
   perspective: 1000px;
-  pointer-events: none;
+  touch-action: pan-y;
   isolation: isolate;
 }
+.instrument-stage:focus-visible { outline: 2px solid var(--violet); outline-offset: 3px; }
 .instrument-stage::before, .instrument-stage::after { content: ""; position: absolute; z-index: 0; background: #3a383e; opacity: .23; }
 .instrument-stage::before { left: 24px; right: 24px; top: 50%; height: 1px; }
 .instrument-stage::after { top: 24px; bottom: 24px; left: 56%; width: 1px; }
@@ -260,6 +261,63 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .strings i:nth-child(1) { top: 1px; }.strings i:nth-child(2) { top: 5px; }.strings i:nth-child(3) { top: 9px; }
 .strings i:nth-child(4) { top: 13px; }.strings i:nth-child(5) { top: 17px; }.strings i:nth-child(6) { top: 21px; }
 [data-playing="true"] .guitar, [data-perf-mode="true"] .guitar { animation: none; transition: none; }
+
+.studio3d-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: pan-y;
+}
+.instrument-stage.is-dragging .studio3d-canvas { cursor: grabbing; }
+.webgl-ready .lunar-system, .webgl-ready .guitar-scene { display: none; }
+.studio3d-controls {
+  position: absolute;
+  top: 40px;
+  left: 18px;
+  z-index: 9;
+  display: none;
+  gap: 5px;
+  padding: 3px;
+  border: 1px solid rgba(170,160,187,.14);
+  border-radius: 8px;
+  background: rgba(12,12,15,.58);
+  backdrop-filter: blur(8px);
+}
+.webgl-ready .studio3d-controls { display: flex; }
+.studio3d-controls button {
+  min-width: 43px;
+  min-height: 27px;
+  padding: 4px 9px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--ink-3);
+  font-size: 10px;
+  line-height: 1.4;
+  transition: color .16s, border-color .16s, background .16s;
+}
+.studio3d-controls button:hover { color: var(--ink); border-color: #4b4751; }
+.studio3d-controls button.active { border-color: #625b6d; background: rgba(170,160,187,.12); color: var(--acc-2); }
+.studio3d-help {
+  position: absolute;
+  left: 19px;
+  bottom: 12px;
+  z-index: 8;
+  display: none;
+  max-width: calc(100% - 62px);
+  color: #858189;
+  font-size: 8px;
+  line-height: 1.5;
+  letter-spacing: .035em;
+  pointer-events: none;
+}
+.webgl-ready .studio3d-help { display: block; }
+.webgl-ready .stage-caption { left: auto; bottom: 11px; }
+.webgl-ready .stage-caption span { display: none; }
+.webgl-ready .stage-caption b { font-size: 20px; opacity: .65; }
 
 /* Transport */
 .transport {
