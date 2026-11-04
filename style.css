@@ -62,11 +62,13 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 }
 [hidden] { display: none !important; }
 ::selection { background: #57515f; color: #fffdf7; }
-#starfield, .orb { display: none; }
+#starfield { display: block; position: fixed; inset: 0; z-index: 0; width: 100%; height: 100%; opacity: 1; pointer-events: none; }
+#selene-background { position: fixed; top: 7vh; right: -30px; z-index: 0; width: min(34vw, 420px); height: auto; opacity: .16; pointer-events: none; }
+.orb { display: none; }
 .icon-library { position: absolute; width: 0; height: 0; overflow: hidden; }
 .icon { width: 16px; height: 16px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.55; stroke-linecap: round; stroke-linejoin: round; vertical-align: -3px; }
 .icon.flip { transform: rotate(180deg); }
-.app { width: 100%; max-width: 1480px; margin: 0 auto; padding: 24px var(--edge) 52px; }
+.app { position: relative; z-index: 1; width: 100%; max-width: 1480px; margin: 0 auto; padding: 24px var(--edge) 52px; }
 
 /* Lunar hero */
 .topbar { position: relative; }
@@ -121,6 +123,10 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .hero-status span:first-child i { background: var(--gold); box-shadow: 0 0 0 3px rgba(181,160,113,.07); }
 .temple-lines { display: flex; align-items: flex-end; gap: 10px; width: 126px; height: 25px; margin-top: 24px; padding: 5px 8px 0; border-top: 1px solid rgba(181,160,113,.32); border-bottom: 1px solid rgba(181,160,113,.13); }
 .temple-lines i { width: 15px; height: 18px; border: 1px solid rgba(239,237,231,.12); border-top: 2px solid rgba(181,160,113,.28); background: repeating-linear-gradient(90deg, transparent 0 3px, rgba(239,237,231,.1) 3px 4px); }
+.hellenic-inscription { display: flex; align-items: center; justify-content: center; flex-wrap: nowrap; gap: 10px; width: min(100%, 390px); margin-top: 15px; color: rgba(181,160,113,.68); font-family: Georgia, "Times New Roman", serif; font-size: 9px; letter-spacing: .19em; }
+.hellenic-inscription::before, .hellenic-inscription::after { content: ""; flex: 1 1 24px; height: 1px; min-width: 18px; background: linear-gradient(90deg, transparent, rgba(181,160,113,.4)); }
+.hellenic-inscription::after { background: linear-gradient(90deg, rgba(181,160,113,.4), transparent); }
+.hellenic-inscription i { flex: 0 0 auto; width: 3px; height: 3px; background: rgba(181,160,113,.42); transform: rotate(45deg); }
 .instrument-column { min-width: 0; }
 
 /* Layered CSS moon, eclipse and native 3D guitar */
@@ -132,7 +138,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   height: 350px;
   min-width: 0;
   overflow: hidden;
-  border: 1px solid #29282c;
+  border: 1px solid rgba(181,160,113,.22);
   border-radius: 18px;
   background:
     radial-gradient(circle at 58% 45%, rgba(170,160,187,.045), transparent 40%),
@@ -446,9 +452,10 @@ main > section, .sampling-card, .workspace-card, .export-card, main > footer, .g
 .card { min-width: 0; padding: 23px; border: 1px solid var(--line-2); border-radius: 13px; background: rgba(21,21,23,.88); box-shadow: inset 0 1px rgba(255,255,255,.018); }
 .card h2 { display: flex; align-items: baseline; flex-wrap: wrap; gap: 7px 11px; margin-bottom: 18px; color: var(--ink); font-family: var(--serif); font-size: 18px; font-weight: 500; line-height: 1.5; letter-spacing: .06em; }
 .card h2 em, .ted summary em { color: var(--ink-3); font-family: var(--sans); font-size: 10px; font-style: normal; font-weight: 400; letter-spacing: .05em; }
-.step { display: inline-grid; place-items: center; flex: 0 0 auto; width: 24px; height: 23px; border: 1px solid #555159; border-radius: 50%; color: var(--acc); font-family: var(--mono); font-size: 9px; }
+.step { display: inline-grid; place-items: center; flex: 0 0 auto; width: 30px; height: 23px; border: 1px solid rgba(181,160,113,.55); border-radius: 3px; color: var(--gold); font-family: Georgia, "Times New Roman", serif; font-size: 10px; letter-spacing: .04em; }
 .step::after { content: none; }
-.section-heading { display: flex; justify-content: space-between; gap: 12px; margin: -2px 0 18px; padding-bottom: 11px; border-bottom: 1px solid var(--line-2); color: var(--ink-3); font-family: var(--mono); font-size: 9px; letter-spacing: .13em; }
+.section-heading { display: flex; justify-content: space-between; gap: 12px; margin: -2px 0 18px; padding-bottom: 11px; border-bottom: 1px solid rgba(181,160,113,.12); color: var(--ink-3); font-family: var(--mono); font-size: 9px; letter-spacing: .13em; }
+.section-heading::after { content: ""; flex: 0 0 42px; align-self: center; height: 10px; opacity: .26; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='12' viewBox='0 0 24 12'%3E%3Cpath d='M0 11V1H23V9H7V5H17' fill='none' stroke='%23b5a071' stroke-width='.7'/%3E%3C/svg%3E") repeat-x left center / 24px 12px; }
 .section-heading span:first-child { color: var(--violet); }
 .hint { color: var(--ink-2); font-size: 12px; line-height: 1.75; }
 
@@ -714,6 +721,9 @@ footer { padding: 22px 0 2px; color: var(--ink-3); font-size: 10px; line-height:
   .card { padding: 17px; border-radius: 10px; }
   .card h2 { font-size: 17px; margin-bottom: 15px; }
   .section-heading { font-size: 8px; }
+  .section-heading::after { display: none; }
+  .hellenic-inscription { gap: 8px; font-size: 8px; letter-spacing: .14em; }
+  #selene-background { top: 10vh; right: -45px; width: 250px; opacity: .1; }
   .sf-row { grid-template-columns: auto minmax(0,1fr); }
   .sf-note { grid-column: 1 / -1; }
   .layer { grid-template-columns: 30px minmax(0,1fr) 58px 42px; grid-template-areas: "sw name vol tone" "sel sel sel sel"; row-gap: 5px; }

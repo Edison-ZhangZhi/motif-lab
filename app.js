@@ -4839,14 +4839,14 @@ function renderRoll() {
     ctx.fillText(`${b + 1}`, x + 3, 22);
     const sec = sectionAt(b);
     if (sec.name && (b === 0 || sectionAt(b - 1).name !== sec.name)) {
-      ctx.fillStyle = 'rgba(194,69,45,.85)';
+      ctx.fillStyle = 'rgba(181,160,113,.85)';
       ctx.font = '9px -apple-system, "PingFang SC", sans-serif';
       ctx.fillText(sec.name, x + 14, 12);
       ctx.font = '10px -apple-system, "PingFang SC", sans-serif';
       ctx.fillStyle = 'rgba(36,39,42,.38)';
     }
     const chord = chordAtBar(b);
-    ctx.fillStyle = 'rgba(194,69,45,.9)';
+    ctx.fillStyle = 'rgba(181,160,113,.9)';
     ctx.fillText(chord.name, x + 12, 14);
   }
   const rr = ctx.roundRect ? (x, y, w, h, r) => ctx.roundRect(x, y, w, h, r)
@@ -5275,13 +5275,13 @@ function tedTogglePitch(track, midi, gstep) {
   const barNo = Math.floor(gstep / SBAR()) + 1;
   if (exact) {
     arr.splice(arr.indexOf(exact), 1);
-    tedFeedback('🗑 删掉了第 ' + barNo + ' 小节音符 ' + midiName(midi), track, midi, null, false);
+    tedFeedback('已删除第 ' + barNo + ' 小节音符 ' + midiName(midi), track, midi, null, false);
   } else {
     const sameStep = arr.find(e => Math.round(e.beat * SPB()) === gstep && !e.dbl && !e.ghost);
-    if (sameStep) sameStep.midi = midi; /* 同步已有音符 → 改音高 */
+    if (sameStep) sameStep.midi = midi;
     else arr.push({ beat: gstep / SPB(), midi, dur: track === 'melody' ? 0.25 : 0.45, vel: 0.8 });
     arr.sort((a, b) => a.beat - b.beat);
-    tedFeedback((track === 'melody' ? '🎸' : '🎻') + ' 第 ' + barNo + ' 小节加了 ' + midiName(midi) + ' · 再点删掉', track, midi);
+    tedFeedback('第 ' + barNo + ' 小节加入 ' + midiName(midi) + ' · 再次点击删除', track, midi);
   }
   if (track === 'melody') { state.melodyEdited = true; renderRoll(); renderStats(); }
   reScheduleIfPlaying();
@@ -5292,7 +5292,7 @@ function tedToggleKeys(gstep) {
   const barNo = Math.floor(gstep / SBAR()) + 1; /* 显示用，1 起 */
   if (at.length) {
     for (const e of at) keysEvents.splice(keysEvents.indexOf(e), 1);
-    tedFeedback('🗑 取消第 ' + barNo + ' 小节的和弦', 'keys', 60, null, false);
+    tedFeedback('已取消第 ' + barNo + ' 小节的和弦', 'keys', 60, null, false);
   } else {
     const bar = Math.floor(gstep / SBAR());
     const chord = chordAtBar(bar);
@@ -5303,7 +5303,7 @@ function tedToggleKeys(gstep) {
       : chooseVoicing(styleVoicingPcs(chord.pcs, sty), null, melodyEvents.filter(m => Math.floor(m.beat / BPB()) === bar).map(m => m.midi));
     keysEvents.push({ beat: gstep / SPB(), notes, dur: 0.5, vel: 0.5, inst: inBar ? inBar.inst : 'keys' });
     keysEvents.sort((a, b) => a.beat - b.beat);
-    tedFeedback('🎹 第 ' + barNo + ' 小节触发和弦 · 点一下听听', 'keys', 60 + (chord.rootPC % 12));
+    tedFeedback('第 ' + barNo + ' 小节触发和弦 · 点击试听', 'keys', 60 + (chord.rootPC % 12));
   }
   reScheduleIfPlaying();
   editorRefresh();
@@ -5313,7 +5313,7 @@ function tedTogglePad(bar) {
   const barNo = bar + 1;
   if (at.length) {
     for (const e of at) synthEvents.splice(synthEvents.indexOf(e), 1);
-    tedFeedback('🗑 关掉第 ' + barNo + ' 小节的 Pad 长音', 'pad', 60, null, false);
+    tedFeedback('已关闭第 ' + barNo + ' 小节的 Pad 长音', 'pad', 60, null, false);
   } else {
     const chord = chordAtBar(bar);
     if (!chord) return;
@@ -5323,7 +5323,7 @@ function tedTogglePad(bar) {
     if (voicing.length >= 3) voicing = voicing.slice(-3).map(n => Math.min(n + 12, 84)); /* 与 genSynthPad 同规则的色彩声部音区 */
     synthEvents.push({ beat: bar * BPB(), notes: voicing, dur: Math.max(1.2, BPB() - 0.1), vel: 0.3 });
     synthEvents.sort((a, b) => a.beat - b.beat);
-    tedFeedback('🎛 第 ' + barNo + ' 小节打开 Pad 长音 · 再点关掉', 'pad', 60 + (chord.rootPC % 12));
+    tedFeedback('第 ' + barNo + ' 小节打开 Pad 长音 · 再次点击关闭', 'pad', 60 + (chord.rootPC % 12));
   }
   reScheduleIfPlaying();
   editorRefresh();
@@ -5334,10 +5334,10 @@ function tedToggleDrum(inst, gstep) {
   const barNo = Math.floor(gstep / SBAR()) + 1;
   if (!ev) {
     drumEvents.push({ step16: gstep, inst, vel: 0.9, kit: tedKitAt(Math.floor(gstep / SBAR())) });
-    tedFeedback('🥁 第 ' + barNo + ' 小节加了「' + name + '」· 连点变弱→删', 'drums', null, inst);
+    tedFeedback('第 ' + barNo + ' 小节加入「' + name + '」· 连点变弱后删除', 'drums', null, inst);
   }
-  else if (ev.vel > 0.6) { ev.vel = 0.38; tedFeedback('🥁 「' + name + '」变弱音（幽灵音）· 再点删除', 'drums', null, inst); } /* 二次点击 → ghost 力度 */
-  else { drumEvents.splice(drumEvents.indexOf(ev), 1); tedFeedback('🗑 删掉了「' + name + '」', 'drums', null, inst, false); } /* 三次点击 → 删除 */
+  else if (ev.vel > 0.6) { ev.vel = 0.38; tedFeedback('「' + name + '」已调整为弱音 · 再次点击删除', 'drums', null, inst); }
+  else { drumEvents.splice(drumEvents.indexOf(ev), 1); tedFeedback('已删除「' + name + '」', 'drums', null, inst, false); }
   drumEvents.sort((a, b) => a.step16 - b.step16);
   reScheduleIfPlaying();
   editorRefresh();
@@ -5368,14 +5368,14 @@ function bindTrackEditor() {
  * ============================================================ */
 const GAME = { mode: 'drums', step: 0, running: false, timer: null, hits: 0, combo: 0 };
 const GAME_DRUM_PADS = [
-  ['kick', '底鼓', '🥁', '#242428'],
-  ['snare', '军鼓', '🔵', '#28282d'],
-  ['clap', '拍手', '👏', '#2c2c31'],
-  ['hat', '闭镲', '🔔', '#303036'],
-  ['ohat', '开镲', '✨', '#34343a'],
-  ['congaH', '康加', '🪘', '#38383e'],
+  ['kick', '底鼓', '', '#242428'],
+  ['snare', '军鼓', '', '#28282d'],
+  ['clap', '拍手', '', '#2c2c31'],
+  ['hat', '闭镲', '', '#303036'],
+  ['ohat', '开镲', '', '#34343a'],
+  ['congaH', '康加', '', '#38383e'],
 ];
-const GAME_FUN = ['🎯 正中节拍！', '🔥 好耶！', '💥 就是这个 feel！', '⭐ 漂亮！', '🎵 跟上节奏了！', '👏 手速可以！'];
+const GAME_FUN = ['正中节拍', '节奏稳定', '保持这个感觉', '律动准确', '跟上节奏了', '继续演奏'];
 
 function gameRange() {
   const per = editorPerBars();
@@ -5459,8 +5459,8 @@ function renderGamePads() {
   if (!host) return;
   host.innerHTML = '';
   if (GAME.mode === 'drums') {
-    for (const [inst, name, emoji, color] of GAME_DRUM_PADS) {
-      const b = tedEl('button', 'game-pad', emoji + ' ' + name);
+    for (const [inst, name, color] of GAME_DRUM_PADS) {
+      const b = tedEl('button', 'game-pad', name);
       b.style.background = color;
       b.onclick = () => { flashPad(b); gameDrumHit(inst); };
       host.appendChild(b);
@@ -5536,7 +5536,7 @@ function stopGameMetro() {
   if (btn) btn.textContent = '▶ 跟节拍器玩';
   document.querySelectorAll('#game-beat i').forEach(d => d.classList.remove('on'));
   const el = document.getElementById('ted-feedback');
-  if (wasRunning && el) el.textContent = '🎉 录制完成！点 ▶ 播放 听听你刚刚打的节奏';
+  if (wasRunning && el) el.textContent = '录制完成，点击播放即可聆听你的节奏';
   GAME.combo = 0;
 }
 function bindGameMode() {
@@ -5740,34 +5740,6 @@ function bindEvents() {
       const dp = document.querySelector('.layer[data-layer="drums"] .patch'); if (dp) dp.value = state.layers.drums.patch;
       reScheduleDebounced();
     };
-  }
-  /* ===== v44 3D 深空效果：透视粒子星野 + 卡片视差倾斜（零依赖，低 CPU） ===== */
-  const sfCanvas = document.getElementById('starfield');
-  if (sfCanvas && sfCanvas.getContext) {
-    const c = sfCanvas.getContext('2d');
-    let W = innerWidth, H = innerHeight;
-    sfCanvas.width = W; sfCanvas.height = H;
-    const N = Math.min(170, Math.floor(innerWidth * innerHeight / 10000));
-    const stars = Array.from({ length: N }, () => ({ x: Math.random(), y: Math.random(), z: Math.random() * 0.9 + 0.1, r: Math.random() * 1.3 + 0.4, c: Math.random() }));
-    const mx = { x: 0, y: 0 };
-    addEventListener('mousemove', e => { mx.x = e.clientX / innerWidth - 0.5; mx.y = e.clientY / innerHeight - 0.5; }, { passive: true });
-    let last = 0;
-    (function draw(t) {
-      requestAnimationFrame(draw);
-      if (t - last < 50 || document.hidden) return; /* 20fps 足够顺滑且极省 CPU */
-      last = t;
-      if (W !== innerWidth || H !== innerHeight) { W = innerWidth; H = innerHeight; sfCanvas.width = W; sfCanvas.height = H; }
-      c.clearRect(0, 0, W, H);
-      const cx = W / 2 + mx.x * W * 0.05, cy = H / 2 + mx.y * H * 0.05;
-      for (const s of stars) {
-        s.z -= 0.0022; if (s.z <= 0.06) s.z = 0.96;
-        const px = cx + ((s.x - 0.5) * W / s.z) * 0.5;
-        const py = cy + ((s.y - 0.5) * H / s.z) * 0.5;
-        const a = (1 - s.z) * 0.85;
-        c.fillStyle = s.c < 0.55 ? 'rgba(124,108,255,' + a.toFixed(3) + ')' : (s.c < 0.82 ? 'rgba(79,163,255,' + a.toFixed(3) + ')' : 'rgba(232,234,246,' + a.toFixed(3) + ')');
-        c.beginPath(); c.arc(px, py, s.r * (1.25 - s.z), 0, 6.2832); c.fill();
-      }
-    })(0);
   }
   /* v45：卡片 3D 倾斜移除——backdrop-filter + 3D transform 组合在 Chrome 会导致卡片内容消失（UI 组件加载不完全） */
   const addSlotBtn = document.getElementById('btn-add-slot'); /* v42：级数编辑已移除；守卫防旧 UI 空引用 */

@@ -4,14 +4,29 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Motif Lab · 电吉他动机旋律生成器</title>
-<link rel="stylesheet" href="style.css?v=57">
+<link rel="stylesheet" href="style.css?v=59">
 <script src="lib/Tone.js"></script>
 <script src="lib/soundfont-player.min.js"></script>
-<script src="lib/three.min.js?v=57" defer></script>
-<script src="studio3d.js?v=57" defer></script>
+<script src="lib/three.min.js?v=59" defer></script>
+<script src="background3d.js?v=59" defer></script>
+<script src="studio3d.js?v=59" defer></script>
 </head>
 <body>
   <canvas id="starfield" aria-hidden="true"></canvas>
+  <svg id="selene-background" viewBox="0 0 400 600" aria-hidden="true">
+    <g transform="translate(36 28)" fill="none" stroke="#b5a071" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M234 36C178 46 145 99 158 151C169 197 211 220 252 207C209 204 181 167 185 124C189 82 207 52 234 36Z"/>
+      <path d="M218 112C198 129 193 153 183 171C178 180 174 188 166 194C178 195 190 188 196 177C205 159 226 139 218 112Z"/>
+      <path d="M190 174C194 178 200 179 205 176M184 187C190 190 196 189 201 186"/>
+      <path d="M218 112C248 145 257 198 238 244C226 274 208 297 183 318M229 119C267 163 278 221 254 275C242 301 224 324 202 340"/>
+      <path d="M196 177C190 219 171 248 137 271M198 202C207 242 231 269 266 287"/>
+      <path d="M137 271C161 277 180 291 192 315M183 318C201 318 217 325 230 340"/>
+      <path d="M75 96H87M81 90V102M298 148H312M305 141V155M101 244H113M107 238V250"/>
+      <path d="M81 96L107 244L305 148" stroke-dasharray="2 7" opacity=".55"/>
+      <circle cx="81" cy="96" r="2.4"/><circle cx="107" cy="244" r="2.4"/><circle cx="305" cy="148" r="2.4"/>
+      <text x="106" y="402" fill="#b5a071" stroke="none" font-family="Georgia,serif" font-size="14" letter-spacing="7">ΣΕΛΗΝΗ</text>
+    </g>
+  </svg>
   <div class="orb orb-a" aria-hidden="true"></div>
   <div class="orb orb-b" aria-hidden="true"></div>
   <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -47,7 +62,7 @@
         <div class="brand-title">
           <div class="logo" aria-hidden="true">M/</div>
           <div>
-            <h1>Motif Lab <span class="ver-badge" id="ver-badge" title="点击强制更新到最新版" style="font-size:11px;font-weight:400;opacity:.45;vertical-align:middle;cursor:pointer">v57</span></h1>
+            <h1>Motif Lab <span class="ver-badge" id="ver-badge" title="点击强制更新到最新版" style="font-size:11px;font-weight:400;opacity:.45;vertical-align:middle;cursor:pointer">v59</span></h1>
             <p>电吉他动机 · 和弦驱动编曲</p>
           </div>
         </div>
@@ -57,6 +72,7 @@
           <span><i></i>和声参考</span>
         </div>
         <div class="temple-lines" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+        <div class="hellenic-inscription" aria-label="音乐、和谐、宇宙"><span>ΜΟΥΣΙΚΗ</span><i></i><span>ΑΡΜΟΝΙΑ</span><i></i><span>ΚΟΣΜΟΣ</span></div>
       </div>
       <div class="instrument-column">
       <div class="instrument-stage webgl-loading" id="instrument-stage" role="region" aria-label="交互式三维电吉他与月球音色控制" aria-describedby="studio3d-help" tabindex="0">
@@ -142,7 +158,7 @@
     <div class="grid-3">
 
       <section class="card">
-        <h2><span class="step">1</span> 选择风格 <em>可多选</em></h2>
+        <h2><span class="step">I</span> 选择风格 <em>可多选</em></h2>
         <div class="style-chips" id="style-chips">
           <button class="chip active" data-style="rnb">RnB</button>
           <button class="chip" data-style="jazz">Jazz</button>
@@ -169,7 +185,7 @@
       </section>
 
       <section class="card">
-        <h2><span class="step">2</span> 描述你的动机</h2>
+        <h2><span class="step">II</span> 描述你的动机</h2>
         <textarea id="motive-text" rows="3" placeholder="例如：上行级进、明亮开阔，中段大跳后波浪式回落……"></textarea>
         <div class="motive-btns">
           <button id="btn-gen" class="btn btn-primary"><svg class="icon" aria-hidden="true"><use href="#i-spark"/></svg> 生成旋律</button>
@@ -187,7 +203,7 @@
       </section>
 
       <section class="card">
-        <h2><span class="step">3</span> 编曲 · 声部开关 <label class="perf-toggle"><input type="checkbox" id="ctl-perf"> 性能模式</label></h2>
+        <h2><span class="step">III</span> 编曲 · 声部开关 <label class="perf-toggle"><input type="checkbox" id="ctl-perf"> 性能模式</label></h2>
         <div class="layers" id="layers">
           <div class="layer" data-layer="guitar">
             <label class="switch"><input type="checkbox" checked><span></span></label>
@@ -313,7 +329,7 @@
 
     <!-- ===================== 和弦进行 ===================== -->
     <section class="card harmony-card">
-      <h2><span class="step">4</span> 和弦进行 <em>选择走向 · 点和弦试听</em></h2>
+      <h2><span class="step">IV</span> 和弦进行 <em>选择走向 · 点和弦试听</em></h2>
       <div class="prog-toolbar">
         <select id="preset-select"></select>
       </div>
@@ -371,7 +387,7 @@
     <!-- ===================== 旋律工作区 ===================== -->
     <section class="card workspace-card melody-card">
       <div class="section-heading"><span>MELODY / PIANO ROLL</span><span>非破坏性编辑</span></div>
-      <h2><span class="step">5</span> 生成结果 <em>钢琴卷帘 · 点击编辑</em></h2>
+      <h2><span class="step">V</span> 生成结果 <em>钢琴卷帘 · 点击编辑</em></h2>
       <div class="roll-tools">
         <span class="roll-hint">点击添加 · 拖动移动 · 右缘改时值 · 双击删除</span>
         <div class="roll-actions">
@@ -441,11 +457,11 @@
     </footer>
   </main>
 </div>
-<script src="theory.js?v=57"></script>
-<script src="cells.js?v=57"></script>
-<script src="specs.js?v=57"></script>
-<script src="rules.js?v=57"></script>
-<script src="app.js?v=57"></script>
+<script src="theory.js?v=59"></script>
+<script src="cells.js?v=59"></script>
+<script src="specs.js?v=59"></script>
+<script src="rules.js?v=59"></script>
+<script src="app.js?v=59"></script>
 <script>
 /* 静态资源预缓存；音频按需加载并由 Service Worker 运行时缓存 */
 try {
@@ -478,7 +494,7 @@ try {
    绕开旧 SW 的缓存优先），不一致说明本页是旧 SW 端的旧版。
    v46 升级：探测成功=网络已通 → 顺手清全部缓存+注销 SW 再硬刷新（一次到位），90 秒时间窗可重试 */
 (function () {
-  var PAGE_VER = 'v57'; /* 发版三件套：?v=N + 徽章 + 这里 */
+  var PAGE_VER = 'v59'; /* 发版三件套：?v=N + 徽章 + 这里 */
   try {
     fetch('sw.js?bust=' + Date.now()).then(function (r) { return r.text(); }).then(function (t) {
       var m = /motiflab-(v\d+)/.exec(t);
