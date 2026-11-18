@@ -108,34 +108,86 @@ function buildChordTimeline() {
 }
 
 /* ================= 动机文本解析 ================= */
-function parseMotiveText(text) {
-  const t = (text || '').toLowerCase();
-  const p = {
+function defaultMotiveParams() {
+  return {
     dir: 'wave', stepP: 0.62, density: 0.5, regLo: 62, regHi: 84,
-    durBias: 0.5, rep: 0.5, blue: false, synco: 0.5, maxLeap: 7, _set: new Set(),
+    durBias: 0.5, rep: 0.5, blue: false, synco: 0.5, maxLeap: 7,
+    densityRamp: 0, _set: new Set(),
   };
-  const has = (...words) => words.some(w => t.includes(w));
+}
+function applyMotiveWords(text, p) {
+  const t = (text || '').toLowerCase();
   const set = (k, v) => { p[k] = v; p._set.add(k); };
+  const affirmed = word => {
+    const at = t.indexOf(word);
+    if (at < 0) return false;
+    return !/(不要|别|避免|不太|不想|不再|无须|无需|不能|不可|不准)(太|很|这么|那么)?$/.test(t.slice(Math.max(0, at - 8), at).replace(/[，。\s]/g, ''));
+  };
+  const has = (...words) => words.some(affirmed);
+  const negated = (...words) => words.some(w => t.includes(w) && !affirmed(w));
   if (has('上行', '上升', '向上', '攀升', '爬升', 'up', 'ascend', 'climb', 'rise')) set('dir', 'up');
-  if (has('下行', '下降', '向下', '坠落', '下滑', 'down', 'descend', 'fall')) set('dir', 'down');
+  if (has('下行', '下降', '向下', '坠落', '下滑', '回落', 'down', 'descend', 'fall')) set('dir', 'down');
   if (has('波浪', '起伏', '迂回', 'wave', 'arch', 'swell')) set('dir', 'wave');
   if (has('环绕', '盘旋', '绕回', 'hover', 'orbit')) set('dir', 'orbit');
-  if (has('级进', '平稳', '平滑', '连贯', 'step', 'smooth', 'legato', 'flow')) { set('stepP', 0.85); p.maxLeap = 4; p._set.add('maxLeap'); }
+  if (has('级进', '平稳', '平滑', '连贯', 'step', 'smooth', 'legato', 'flow') || negated('大跳', '跳跃', '跳进')) { set('stepP', 0.85); p.maxLeap = 4; p._set.add('maxLeap'); }
   if (has('跳进', '跳跃', '大跳', 'leap', 'jump', 'arpeggio', 'arp')) { set('stepP', 0.3); p.maxLeap = 12; p._set.add('maxLeap'); }
   if (has('密集', '急促', '紧张', 'busy', 'dense', 'fast', 'run', '冲刺')) set('density', 0.85);
-  if (has('稀疏', '舒缓', '松弛', '平静', '呼吸感', 'sparse', 'slow', 'calm', 'airy', 'space')) set('density', 0.25);
+  if (has('稀疏', '舒缓', '松弛', '平静', '呼吸感', 'sparse', 'slow', 'calm', 'airy', 'space') || negated('密集', '太密', '急促')) set('density', 0.25);
   if (has('高音', '高亢', '嘹亮', '尖', 'high', 'bright', 'soar')) { set('regLo', 67); set('regHi', 88); }
   if (has('低音', '低沉', '低吟', '闷', 'low', 'deep', 'dark', 'mellow')) { set('regLo', 55); set('regHi', 76); }
   if (has('长音', '绵延', '拖沓', '拖长', 'long', 'sustain', 'hold', 'pad')) set('durBias', 0.8);
-  if (has('短促', '碎', '断奏', '干脆', 'short', 'staccato', 'choppy', 'stab')) set('durBias', 0.15);
+  if (has('短促', '碎', '断奏', '干脆', 'short', 'staccato', 'choppy', 'stab') || negated('长音', '拖长')) set('durBias', 0.15);
   if (has('忧郁', '悲伤', '蓝调', '苦涩', 'sad', 'blue', 'melancholy', 'cry')) set('blue', true);
-  if (has('明亮', '欢快', '阳光', 'uplift', 'happy', 'shine')) { set('blue', false); p.stepP = Math.min(0.9, p.stepP + 0.1); }
-  if (has('律动', '放克', '摇摆', 'funk', 'groove', 'swing', 'bounce')) set('synco', 0.85);
+  if (has('明亮', '欢快', '阳光', '清晨', 'uplift', 'happy', 'shine')) { set('blue', false); p.stepP = Math.min(0.9, p.stepP + 0.1); }
+  if (has('律动', '放克', '摇摆', '附点', 'funk', 'groove', 'swing', 'bounce')) set('synco', 0.85);
   if (has('重复', '执拗', '顽固', 'loop', 'repeat', 'insist', 'ostinato', 'riff')) set('rep', 0.85);
   if (has('自由', '多变', '漫游', 'varied', 'wander', 'explore')) set('rep', 0.15);
   if (has('宽广', '宽', 'wide', 'broad')) { p.regLo -= 4; p.regHi += 4; p.maxLeap = Math.max(p.maxLeap, 9); }
   if (has('窄', '集中', 'narrow', 'tight')) { p.regLo += 3; p.regHi -= 3; p.maxLeap = Math.min(p.maxLeap, 5); }
+  if (has('慵懒', '懒散', 'laidback', 'laid-back')) { set('density', 0.25); set('durBias', 0.75); }
+  if (has('逐渐加密', '渐密', '越来越多')) set('densityRamp', 1);
+  if (has('逐渐稀疏', '渐稀', '越来越少')) set('densityRamp', -1);
   return p;
+}
+function parseMotiveText(text) {
+  const original = (text || '').trim();
+  const p = applyMotiveWords(original, defaultMotiveParams());
+  const normalized = original.toLowerCase()
+    .replace(/先抑后扬/g, '先下行，后上行').replace(/先扬后抑/g, '先上行，后下行')
+    .replace(/上行后(回落|下行|下降)/g, '上行，后$1').replace(/下行后(回升|上行|上升)/g, '下行，后$1')
+    .replace(/然后|随后|接着|之后|而后|最后/g, '|').replace(/[，。；、,;!?！？\n]/g, '|').replace(/([^不])再/g, '$1|');
+  const clauses = normalized.split('|').map(s => s.trim()).filter(Boolean);
+  const phrases = (clauses.length ? clauses : [original]).map(clause => applyMotiveWords(clause, defaultMotiveParams()));
+  const directional = phrases.filter(x => x._set.has('dir'));
+  if (phrases.length > 1) { p.dir = 'wave'; p._set.delete('dir'); }
+  p.phrases = directional.length > 1 ? directional : phrases;
+  p.intentSummary = describeMotiveIntent(p);
+  return p;
+}
+function motiveIntentAt(params, bar, total) {
+  const phrases = params && params.phrases;
+  if (!phrases || !phrases.length) return params;
+  const index = Math.min(phrases.length - 1, Math.floor(clamp(bar / Math.max(1, total), 0, 0.999999) * phrases.length));
+  const target = phrases[index];
+  const out = Object.assign({}, params, target);
+  out._set = new Set([...params._set, ...target._set]);
+  return out;
+}
+function describeMotiveIntent(p) {
+  if (!p) return '';
+  const dirName = { up: '上行', down: '回落', wave: '波浪', orbit: '环绕' };
+  const parts = [];
+  if (p.phrases && p.phrases.length > 1) parts.push(p.phrases.map(x => dirName[x.dir] || '自由走向').join(' → '));
+  else if (p._set.has('dir')) parts.push(dirName[p.dir] || '自由走向');
+  if (p._set.has('density')) parts.push(p.density < 0.4 ? '稀疏' : p.density > 0.7 ? '密集' : '密度适中');
+  if (p.densityRamp) parts.push(p.densityRamp > 0 ? '逐渐加密' : '逐渐稀疏');
+  if (p._set.has('durBias')) parts.push(p.durBias > 0.65 ? '长音' : p.durBias < 0.3 ? '短促' : '时值适中');
+  if (p._set.has('regLo') || p._set.has('regHi')) parts.push(p.regLo <= 56 ? '低音区' : p.regLo >= 66 ? '高音区' : '中音区');
+  if (p._set.has('stepP')) parts.push(p.stepP < 0.45 ? '跳进' : '级进');
+  if (p._set.has('rep')) parts.push(p.rep > 0.7 ? '重复动机' : '自由多变');
+  if (p._set.has('synco')) parts.push('切分律动');
+  if (p._set.has('blue')) parts.push(p.blue ? '忧郁蓝调' : '明亮');
+  return parts.join(' · ');
 }
 function motiveSeed() {
   const chordHash = state.slots.map(s => s.d + ':' + (s.acc || 0) + ':' + (s.q || 'auto')).join('|');
@@ -203,14 +255,15 @@ function genMelody() {
     if (state.structure === 'groove' && bar0 < 8) continue; /* v5：鼓+贝斯先铺 8 小节律动，旋律后入 */
     const styleKey = state.styles.length > 1 ? state.styles[bar0 % state.styles.length] : state.styles[0];
     const energy = sectionAt(bar0).energy;
-    const params = mergeDna(styleKey, baseParams);
+    const intent = motiveIntentAt(baseParams, bar0, bars);
+    const params = mergeDna(styleKey, intent);
     const isAfro = styleKey === 'afro';
     /* v4 M1/M2 问答句结构：偶数组=问（上扬悬停 2/6 级），奇数组=答（尾反转落解决音） */
     const isQuestion = g % 2 === 0;
-    /* v17 文本方向锁：显式"上行/下行"时各通道（落音/句尾 snap/反停车）都要顺着它 */
-    const dirLock = baseParams._set.has('dir') ? (baseParams.dir === 'up' ? 1 : baseParams.dir === 'down' ? -1 : 0) : 0;
+    /* 每个乐句使用自己的文本方向；多段描述不再被全局上行/下行锁覆盖 */
+    const dirLock = intent._set.has('dir') ? (intent.dir === 'up' ? 1 : intent.dir === 'down' ? -1 : 0) : 0;
     /* M3 副歌加密：副歌/高能量段密度 +0.15 */
-    const effDensity = clamp(params.density + (energy > 0.7 ? 0.15 : 0), 0, 1);
+    const effDensity = clamp(params.density + (energy > 0.7 ? 0.15 : 0) + params.densityRamp * (bar0 / Math.max(1, bars - 1) - 0.5) * 0.35, 0, 1);
 
     /* 选细胞：复用(重复/呼应)或新选 */
     let cell;
@@ -220,20 +273,20 @@ function genMelody() {
       const rv = rng();
       /* v17：用户文本给了显式方向（_set 有 dir）时答句不整体反转——反转直接对抗"上行/下行"指令；
          落到变尾/模进/节奏变奏分支，问答感靠变奏手法而非反向维持 */
-      if (!baseParams._set.has('dir') && (isAfro || (!isQuestion && cellRng() < 0.5)) && g % 2 === 1) cell.iv = cell.iv.map(v => -v); /* 呼应/答句：反向 */
+      if (!intent._set.has('dir') && (isAfro || (!isQuestion && cellRng() < 0.5)) && g % 2 === 1) cell.iv = cell.iv.map(v => -v); /* 呼应/答句：反向 */
       else if (rv < 0.35) cell.iv[cell.iv.length - 1] += (cellRng() < 0.5 ? 2 : -2); /* 变尾 */
       else if (rv < 0.6) { /* 模进：整体平移（v17 方向锁：顺文本方向阶梯模进，重复陈述即推进方向） */
-        const step2 = baseParams._set.has('dir') ? ((baseParams.dir === 'up' ? 1 : baseParams.dir === 'down' ? -1 : 0) * 2 || (cellRng() < 0.5 ? 2 : -2)) : (cellRng() < 0.5 ? 2 : -2);
+        const step2 = intent._set.has('dir') ? ((intent.dir === 'up' ? 1 : intent.dir === 'down' ? -1 : 0) * 2 || (cellRng() < 0.5 ? 2 : -2)) : (cellRng() < 0.5 ? 2 : -2);
         cell.iv = cell.iv.map(v => v + step2);
       }
       else if (rv < 0.75) cell.r = cell.r.map((r2, i) => i === cell.r.length - 1 ? Math.max(0, r2 - 1) : r2); /* 尾音提前一个16分 */
     } else {
       let pool = (CELL_LIB[styleKey] || CELL_LIB.rnb).slice();
       /* 文本偏好过滤：级进/跳进 */
-      if (baseParams._set.has('stepP')) {
+      if (intent._set.has('stepP')) {
         const avg = c => c.iv.reduce((a, b) => a + Math.abs(b), 0) / c.iv.length;
-        const wanted = baseParams.stepP > 0.7 ? pool.filter(c => avg(c) <= 3.5)
-          : baseParams.stepP < 0.45 ? pool.filter(c => avg(c) >= 3) : pool;
+        const wanted = intent.stepP > 0.7 ? pool.filter(c => avg(c) <= 3.5)
+          : intent.stepP < 0.45 ? pool.filter(c => avg(c) >= 3) : pool;
         if (wanted.length) pool = wanted;
       }
       /* 密度限制 onset 数（用组级 effDensity） */
@@ -244,15 +297,15 @@ function genMelody() {
          rock 踏板 riff 库不放行下行细胞时文本"下行"实测只有 ~50%），
          再按细胞整体方向一致性加权（不止尾音）。
          注意 cell.iv 是相对锚点的绝对偏移，方向要看相邻差分的符号 */
-      const dirUp = baseParams.dir === 'up' ? 1 : baseParams.dir === 'down' ? -1 : 0;
-      if (dirUp !== 0 && baseParams._set.has('dir')) {
+      const dirUp = intent.dir === 'up' ? 1 : intent.dir === 'down' ? -1 : 0;
+      if (dirUp !== 0 && intent._set.has('dir')) {
         const netOK = pool.filter(c => { const net = c.iv[c.iv.length - 1] - c.iv[0]; return net === 0 || Math.sign(net) === dirUp; });
         if (netOK.length) pool = netOK;
       }
       let tw = pool.map(c => {
         let w = c.w;
         const s = c.iv[c.iv.length - 1];
-        if (dirUp !== 0 && baseParams._set.has('dir')) {
+        if (dirUp !== 0 && intent._set.has('dir')) {
           let match = 0;
           for (let k = 1; k < c.iv.length; k++) {
             const d = c.iv[k] - c.iv[k - 1];
@@ -265,7 +318,7 @@ function genMelody() {
         }
         /* M1/M2：问句偏上扬尾音、答句偏回落尾音；
            v17 用户给了显式方向文本时让位——文本方向指令优先于问答尾音程式 */
-        if (!baseParams._set.has('dir')) {
+        if (!intent._set.has('dir')) {
           if (isQuestion) w *= s >= 0 ? 1.9 : 0.55;
           else w *= s <= 0 ? 1.9 : 0.55;
         }
@@ -480,7 +533,7 @@ function genMelody() {
       else if (styleKey === 'rnb') vel *= 0.85 + 0.25 * (p.on16 / SBAR());
       if (idx === 0) vel += 0.06; // 动机头重音
       /* v16 融合模式：风格标记按小节取（与 genKeys keyForVoicing 同规则），后处理逐事件查表 */
-      const ev = { beat: p.beat, midi: p.midi, dur: dur16 / 4, vel, _sty: styleAtBar(Math.floor(p.beat / BPB())), _dur: params.durBias, _durT: baseParams._set.has('durBias') };
+      const ev = { beat: p.beat, midi: p.midi, dur: dur16 / 4, vel, _sty: styleAtBar(Math.floor(p.beat / BPB())), _dur: params.durBias, _durT: intent._set.has('durBias') };
       if (p.designSus) ev._designSus = true;
       if (p.octReset) ev._octReset = true; /* v17 方向锁下的八度复位音：末尾 maxLeap 复查放行 */
       events.push(ev);
@@ -493,7 +546,7 @@ function genMelody() {
   for (const e of events) {
     const sty = e._sty || styleAtBar(Math.floor(e.beat / BPB()));
     if (e.ghost || !BLUE_STYLE[sty]) continue;
-    if (!mergeDna(sty, baseParams).blue) continue;
+    if (!mergeDna(sty, motiveIntentAt(baseParams, Math.floor(e.beat / BPB()), bars)).blue) continue;
     const deg = (((e.midi - state.keyRoot) % 12) + 12) % 12;
     if ((deg === 4 || deg === 7) && rng() < 0.4) { e.midi -= 1; e._blue = true; }
   }
@@ -595,14 +648,18 @@ function melodyFlowPass(events, rng) {
      v17 方向锁：停车段改走文本方向的调内阶梯逐级爬升/下行（旧版随机换桩会制造一上一下对冲，
      实测把上行文本的方向一致性从放置期 60% 稀释回 ~50%） */
   const __bp = parseMotiveText(state.motiveText);
-  const dirLockF = __bp._set.has('dir') ? (__bp.dir === 'up' ? 1 : __bp.dir === 'down' ? -1 : 0) : 0;
-  let parkRun = 1, parkBase = null;
+  const directionAt = e => {
+    const intent = motiveIntentAt(__bp, Math.floor(e.beat / BPB()), totalBars());
+    return intent._set.has('dir') ? (intent.dir === 'up' ? 1 : intent.dir === 'down' ? -1 : 0) : 0;
+  };
+  let dirLockF = 0, parkRun = 1, parkBase = null;
   for (let i = 1; i < core.length; i++) {
     const ref = parkBase !== null ? parkBase : core[i - 1].midi;
     if (core[i].midi === ref) {
       parkRun++; parkBase = ref;
       if (parkRun >= 3) {
         const e = core[i];
+        dirLockF = directionAt(e);
         const ch = chordAtBar(Math.floor(e.beat / BPB()));
         let done = false;
         if (dirLockF !== 0) {
@@ -634,6 +691,7 @@ function melodyFlowPass(events, rng) {
      v17 方向锁：snap 目标优先与文本方向同号 */
   for (let gi = 0; gi < core.length; gi++) {
     const e = core[gi];
+    dirLockF = directionAt(e);
     if (e._designSus) continue;
     const nxt = gi + 1 < core.length ? core[gi + 1] : null;
     if (!nxt || nxt.breath || nxt.beat - (e.beat + e.dur) >= 1) {
@@ -772,7 +830,10 @@ function postMelodyCraft(events, rng, params) {
   const syncoPOf = sty => (params._set && params._set.has('synco')) ? Math.min(0.5, params.synco * 0.45)
     : (sty === 'rnb' || sty === 'jazz') ? 0.3 : (sty === 'hiphop' || sty === 'afro') ? 0.15 : 0;
   /* v17 方向锁：装饰音（趋近/邻音/run）方向顺文本，不逆行稀释 */
-  const dirLockM5 = (params._set && params._set.has('dir')) ? (params.dir === 'up' ? 1 : params.dir === 'down' ? -1 : 0) : 0;
+  const directionFor = e => {
+    const intent = motiveIntentAt(params, Math.floor(e.beat / BPB()), totalBars());
+    return intent._set.has('dir') ? (intent.dir === 'up' ? 1 : intent.dir === 'down' ? -1 : 0) : 0;
+  };
   const scalePCs = MODES[state.mode].offsets.map(o => (state.keyRoot + o) % 12);
   const added = [];
   const freeBefore = (e, i, need) => {
@@ -797,6 +858,7 @@ function postMelodyCraft(events, rng, params) {
   };
   for (let i = 0; i < events.length; i++) {
     const e = events[i];
+    const dirLockM5 = directionFor(e);
     const m5 = M5_TABLE[styOf(e)] || M5_TABLE.rnb;
     const syncoP = syncoPOf(styOf(e));
     const on16 = Math.round(e.beat * SPB()) % SBAR();
@@ -3276,6 +3338,10 @@ const MIX_TRIM_BY_STYLE = {
 };
 function applyMix() {
   if (!AE.ready) return;
+  if (AE.lite) {
+    AE.master.volume.value = Tone.gainToDb(state.master * state.master) + 1.5;
+    return;
+  }
   const trim = MIX_TRIM_BY_STYLE[state.styles[0]] || {};
   AE.master.volume.value = Tone.gainToDb(state.master * state.master) + 1.5;
   AE.guitarVol.mute = !state.layers.guitar.on;
@@ -3732,8 +3798,10 @@ async function renderArrangementToBuffer(silent) {
 
 /* 播放 = live context 上单个 BufferSource → AE.master（总音量推子对 buffer 仍然实时生效） */
 function startBufferPlayback() {
+  if (!ARR.buf) throw new Error('手机播放缓冲尚未准备好');
   const raw = Tone.getContext().rawContext;
   const src = raw.createBufferSource();
+  if (AE.master) AE.master.mute = false;
   src.buffer = ARR.buf;
   src.loop = true;
   src.loopStart = 0;
@@ -3747,6 +3815,24 @@ function startBufferPlayback() {
 }
 function stopBufferPlayback() {
   if (ARR.src) { try { ARR.src.stop(); } catch (e) {} ARR.src = null; }
+}
+
+function buildLiteAudioGraph() {
+  if (AE.ready) return;
+  AE.master = new Tone.Volume(-1.5);
+  AE.masterMB = new Tone.Compressor({ threshold: -16, ratio: 3, attack: 0.01, release: 0.16 });
+  AE.limiterRef = new Tone.Limiter(-0.5);
+  AE.master.connect(AE.masterMB);
+  AE.masterMB.connect(AE.limiterRef);
+  AE.limiterRef.toDestination();
+  if (!Tone.getContext().isOffline) {
+    AE.recDest = Tone.getContext().createMediaStreamDestination();
+    AE.limiterRef.connect(AE.recDest);
+  }
+  AE.masterMeter = new Tone.Meter({ normalRange: false, smoothing: 0.85 });
+  AE.limiterRef.connect(AE.masterMeter);
+  AE.ready = true;
+  AE.lite = true;
 }
 
 async function ensureAudio() {
@@ -3764,10 +3850,10 @@ async function ensureAudio() {
     sampStatus('⚠ 后台渲染超时，已强制恢复音频引擎');
   }
   if (!state.audioReady) {
-    buildAudio();
-    state.audioReady = true;
-    ensureBuses();
-    if (!isLiteDevice()) {
+    if (isLiteDevice()) buildLiteAudioGraph();
+    else {
+      buildAudio();
+      ensureBuses();
       const gp = SAMP_GUITAR[state.layers.guitar.patch];
       if (gp) ensureSample(gp);
       loadGuitarSamples();
@@ -3777,6 +3863,7 @@ async function ensureAudio() {
       loadWurliSamples();
       renderMetalBufs();
     }
+    state.audioReady = true;
   }
   try {
     await Tone.start();
@@ -3814,8 +3901,9 @@ function audioHealthCheck() {
   } catch (e) { console.warn('音频健康自检异常', e); }
 }
 
-/* 离线渲染只按需执行；主播放使用实时路径，避免换挂全局 AudioContext。 */
+/* 手机播放使用单个循环 Buffer；编曲未变化时复用缓存，避免重复渲染。 */
 function ensureRendered(verbose) {
+  if (ARR.buf && !state.arrDirty) return Promise.resolve(true);
   if (_arrPromise) return _arrPromise;
   _arrPromise = (async () => {
     try { return await renderArrangementToBuffer(!verbose); }
@@ -3880,6 +3968,15 @@ async function togglePlay() {
   }
   stopGameMetro(); /* v26：主播放与新手模式节拍器互斥 */
   applyMix();
+  if (isLiteDevice()) {
+    const token = ++_playToken;
+    sampStatus('⏳ 手机流畅模式：正在准备编曲…');
+    const rendered = await ensureRendered(false);
+    if (token !== _playToken) return;
+    if (rendered && ARR.buf) { startBufferPlayback(); sampStatus('手机流畅模式 · 循环播放'); }
+    else startRealtimePlayback(true);
+    return;
+  }
   restoreSampleBuses();
   ++_playToken;
   startRealtimePlayback(false);
@@ -3899,10 +3996,19 @@ function updatePlayBtn() {
   document.documentElement.dataset.perfMode = (state.playing || state.perf) ? 'true' : 'false';
 }
 
-/* 播放中修改编曲时立即重排，不启动离线渲染。 */
+/* 播放中修改编曲：桌面立即重排，手机继续播放旧缓冲并在后台换新缓冲。 */
 function reScheduleIfPlaying() {
   state.arrDirty = true;
-  if (state.playing && state.audioReady) scheduleAll();
+  if (!state.playing || !state.audioReady) return;
+  if (!isLiteDevice()) { scheduleAll(); return; }
+  const token = ++_playToken;
+  sampStatus('⏳ 正在更新手机播放缓冲…');
+  ensureRendered(true).then(rendered => {
+    if (!rendered || token !== _playToken || !state.playing || !ARR.buf) return;
+    stopBufferPlayback();
+    startBufferPlayback();
+    sampStatus('手机流畅模式 · 循环播放');
+  }).catch(e => console.warn('手机缓冲更新失败', e));
 }
 let _rsTimer = null;
 function reScheduleDebounced() {
@@ -5035,6 +5141,9 @@ function renderStats() {
   readout.push(`重复=${p.rep > 0.7 ? '高（动机反复）' : p.rep < 0.3 ? '低（多变）' : '中'}`);
   if (p.blue) readout.push('蓝调音✓');
   $('#param-readout').textContent = '解析 → ' + readout.join(' · ');
+  const intentEl = document.getElementById('motive-intent');
+  const intent = parseMotiveText(state.motiveText).intentSummary;
+  if (intentEl) intentEl.textContent = intent ? '当前理解 → ' + intent : '';
 }
 
 /* ============================================================
@@ -5628,6 +5737,11 @@ function bindEvents() {
   });
 
   /* 动机 */
+  $('#motive-text').addEventListener('input', event => {
+    const el = document.getElementById('motive-intent');
+    const intent = parseMotiveText(event.target.value).intentSummary;
+    if (el) el.textContent = intent ? '当前理解 → ' + intent : '';
+  });
   $('#btn-gen').onclick = () => { state.motiveText = $('#motive-text').value.trim(); state.seedSalt = 0; regenerate('motive'); };
   $('#btn-reroll').onclick = () => { state.motiveText = $('#motive-text').value.trim(); state.seedSalt++; regenerate('reroll'); };
   document.querySelectorAll('#examples .ex').forEach(b => {

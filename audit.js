@@ -53,6 +53,8 @@ const STATIC = [
       return vm.runInContext("['soul','rock','rnb','hiphop','afrobeats'].every(k => { const p = STYLE_REFERENCE_RULES[k]; return p && p.bassPattern && p.drumPattern && p.keysPattern && p.pad && p.register; })", ctx);
     } catch (e) { return false; }
   })(), '参考歌曲群的音区和声部策略必须沉淀到普通风格'],
+  ['语义·分段意图解析', SRC.includes('function motiveIntentAt') && SRC.includes('describeMotiveIntent') && SRC.includes('先抑后扬'), '多段自然语言必须拆成有顺序的乐句意图，不能被单一关键词覆盖'],
+  ['手机·缓冲播放', SRC.includes('buildLiteAudioGraph') && SRC.includes('手机流畅模式') && SRC.includes('ARR.buf && !state.arrDirty'), '轻量设备必须播放缓存 Buffer，且编曲未变时复用，不得走完整实时调度'],
 ];
 const staticPass = STATIC.filter(s => s[1]).length;
 
@@ -201,6 +203,30 @@ for (const [key, p] of Object.entries(STYLE_REFERENCE_RULES)) {
   if (Math.abs(sectionAt(0).energy - SPEC_META[key].sectionDensity.verse) > 1e-9) bad.push(key + ':密度未接入');
   if (styleArrangement(key).bassPattern !== p.bassPattern) bad.push(key + ':规则读取失败');
 }
+return bad;
+})()`, ctx);
+
+const SEMANTIC_BAD = vm.runInContext(`(function(){
+const bad = [];
+let p = parseMotiveText('先上行，再慢慢回落');
+if (!p.phrases || p.phrases.length !== 2 || p.phrases[0].dir !== 'up' || p.phrases[1].dir !== 'down') bad.push('先上行再回落:分段');
+p = parseMotiveText('低沉、短促、密集、跳跃、重复');
+if (!(p.regLo <= 55 && p.regHi <= 76 && p.durBias <= 0.2 && p.density >= 0.8 && p.stepP <= 0.35 && p.rep >= 0.8)) bad.push('特征组合:参数');
+p = parseMotiveText('不要大跳，不要太密');
+if (!(p.stepP >= 0.8 && p.maxLeap <= 4 && p.density <= 0.3)) bad.push('否定语义:大跳/太密');
+state.styles = ['rnb']; state.meter = 'm44'; state.structure = 'song'; state.motiveText = '先上行，再慢慢回落'; state.seedSalt = 0;
+state.slots = [{d:1,acc:0,q:'auto'},{d:6,acc:0,q:'auto'},{d:2,acc:0,q:'auto'},{d:5,acc:0,q:'auto'}];
+state.layers.drums.patch = 'auto'; state.bpm = 92;
+buildChordTimeline(); genMelody();
+const sq = melodyEvents.filter(e => !e.ghost && !e.dbl).sort((a, b) => a.beat - b.beat);
+const first = sq.filter(e => e.beat < 2), second = sq.filter(e => e.beat >= 2);
+const ratioOf = (arr, sign) => {
+  let hit = 0, total = 0;
+  for (let i = 1; i < arr.length; i++) { const iv = arr[i].midi - arr[i - 1].midi; if (!iv) continue; total++; if (Math.sign(iv) === sign) hit++; }
+  return total ? hit / total : 0;
+};
+if (!first.length || !second.length || ratioOf(first, 1) < 0.52 || ratioOf(second, -1) < 0.52) bad.push('先上行再回落:事件轮廓 ' + ratioOf(first, 1).toFixed(2) + '/' + ratioOf(second, -1).toFixed(2));
+state.motiveText = ''; state.seedSalt = 0;
 return bad;
 })()`, ctx);
 
@@ -381,12 +407,14 @@ out += ` 静态链审计 ${staticPass}/${STATIC.length} 项通过` + NL;
 out += ` 风格参考动态检查 ${REFERENCE_BAD.length ? '失败' : '5/5 项通过'}` + NL;
 if (STATIC.some(s => !s[1])) for (const [name, ok, why] of STATIC) if (!ok) out += `  ✗ ${name}：${why}` + NL;
 if (REFERENCE_BAD.length) out += `  ✗ ${REFERENCE_BAD.join(' | ')}` + NL;
+out += ` 语义意图检查 ${SEMANTIC_BAD.length ? '失败' : '4/4 项通过'}` + NL;
+if (SEMANTIC_BAD.length) out += `  ✗ ${SEMANTIC_BAD.join(' | ')}` + NL;
 out += ` 总分 ${overall.toFixed(2)} / 10` + NL;
 const PASS_LINE = 8.0, EXCELLENT = 9.0;
 const failed = dims.filter(d => d[1] < PASS_LINE);
 if (DYN.boundsBad.length) out += ` ✗ 事件越界 ${DYN.boundsBad.length} 处：${DYN.boundsBad.slice(0, 5).join(', ')}` + NL;
 if (failed.length) out += ` ✗ 未达合格线(${PASS_LINE})：${failed.map(f => f[0] + ' ' + f[1].toFixed(1)).join('、')}` + NL;
-const auditOK = failed.length === 0 && DYN.boundsBad.length === 0 && REFERENCE_BAD.length === 0 && staticPass === STATIC.length;
+const auditOK = failed.length === 0 && DYN.boundsBad.length === 0 && REFERENCE_BAD.length === 0 && SEMANTIC_BAD.length === 0 && staticPass === STATIC.length;
 out += auditOK
   ? (overall >= EXCELLENT ? ` ✔ 审核通过（优秀线 ${EXCELLENT} 达成，允许上线）` : ` ✔ 审核通过（达合格线 ${PASS_LINE}，未达优秀线）`)
   : ' ✗ 审核不通过，禁止上线' + NL;
