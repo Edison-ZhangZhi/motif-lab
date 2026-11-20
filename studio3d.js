@@ -33,7 +33,7 @@
   var moon;
   var moonSphere;
   var moonHalo;
-  var moonGlow = 0.16;
+  var moonGlow = 0.1;
   var moonPulse = 0;
   var moonEnabled = stage.classList.contains('moon-space-on');
   var guitar;
@@ -47,8 +47,7 @@
   var target = { yaw: 0, pitch: 0.055, distance: 9.6, tx: -0.15, ty: -0.05, tz: -0.25 };
   var presets = {
     reset: { yaw: 0, pitch: 0.055, distance: 9.6, tx: -0.15, ty: -0.05, tz: -0.25 },
-    guitar: { yaw: -0.16, pitch: 0.19, distance: 8.7, tx: -0.35, ty: -0.2, tz: 0.1 },
-    moon: { yaw: 0.24, pitch: 0.12, distance: 6.4, tx: 1.55, ty: 1.55, tz: -3.2 }
+    guitar: { yaw: -0.16, pitch: 0.19, distance: 8.7, tx: -0.35, ty: -0.2, tz: 0.1 }
   };
 
   function suspended() {
@@ -272,55 +271,85 @@
     return group;
   }
 
-  function makeMoon(textureLoader) {
-    var group = new THREE.Group();
-    var moonMaterial = new THREE.MeshStandardMaterial({
-      color: 0xb8b5bd,
-      metalness: 0,
-      roughness: 1,
-      bumpScale: 0.13
-    });
-    textureLoader.load('assets/moon-surface.jpg', function (texture) {
-      texture.encoding = THREE.sRGBEncoding;
-      texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
-      moonMaterial.map = texture;
-      moonMaterial.bumpMap = texture;
-      moonMaterial.needsUpdate = true;
-      invalidate();
-    }, undefined, function () {
-      moonMaterial.color.setHex(0x77747d);
-      invalidate();
-    });
-    var sphere = new THREE.Mesh(new THREE.SphereGeometry(1.42, 64, 48), moonMaterial);
-    sphere.rotation.y = -1.1;
-    sphere.rotation.z = 0.12;
-    sphere.userData.interaction = { type: 'moon' };
-    group.add(sphere);
-    moonSphere = sphere;
-    interactive.push(sphere);
+  function makeMoonTexture() {
+    var textureCanvas = document.createElement('canvas');
+    textureCanvas.width = 512;
+    textureCanvas.height = 256;
+    var ctx = textureCanvas.getContext('2d');
+    var base = ctx.createLinearGradient(0, 0, 512, 256);
+    base.addColorStop(0, '#aaa7b0');
+    base.addColorStop(0.42, '#85818c');
+    base.addColorStop(1, '#57545f');
+    ctx.fillStyle = base;
+    ctx.fillRect(0, 0, 512, 256);
+    var seed = 73;
+    function random() {
+      seed = (seed * 16807) % 2147483647;
+      return (seed - 1) / 2147483646;
+    }
+    for (var mare = 0; mare < 24; mare += 1) {
+      ctx.fillStyle = 'rgba(30,29,36,' + (0.07 + random() * 0.12) + ')';
+      ctx.beginPath();
+      ctx.ellipse(random() * 512, random() * 256, 18 + random() * 56, 7 + random() * 24, random() * Math.PI, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    for (var grain = 0; grain < 2200; grain += 1) {
+      var shade = 82 + Math.floor(random() * 132);
+      ctx.fillStyle = 'rgba(' + shade + ',' + shade + ',' + (shade + 5) + ',' + (0.022 + random() * 0.06) + ')';
+      ctx.beginPath();
+      ctx.arc(random() * 512, random() * 256, 0.25 + random() * 1.9, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    for (var crater = 0; crater < 118; crater += 1) {
+      var x = random() * 512;
+      var y = random() * 256;
+      var radius = 1.8 + random() * 27;
+      var squash = 0.72 + random() * 0.4;
+      var rotation = random() * Math.PI;
+      var shadeDark = 28 + Math.floor(random() * 48);
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(rotation);
+      var craterFill = ctx.createRadialGradient(-radius * 0.16, -radius * 0.2, radius * 0.08, 0, 0, radius);
+      craterFill.addColorStop(0, 'rgba(' + shadeDark + ',' + shadeDark + ',' + (shadeDark + 5) + ',0.34)');
+      craterFill.addColorStop(0.62, 'rgba(24,23,30,0.27)');
+      craterFill.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = craterFill;
+      ctx.beginPath();
+      ctx.arc(0, 0, radius, 0, Math.PI * 2);
+      ctx.scale(1, squash);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(238,236,241,' + (0.11 + random() * 0.22) + ')';
+      ctx.lineWidth = 0.7 + random() * 1.6;
+      ctx.beginPath();
+      ctx.arc(0, 0, radius * (0.76 + random() * 0.16), random() * Math.PI, random() * Math.PI + Math.PI * (0.72 + random() * 0.8));
+      ctx.stroke();
+      ctx.restore();
+    }
+    var terminator = ctx.createLinearGradient(0, 0, 512, 0);
+    terminator.addColorStop(0, 'rgba(255,255,255,0.11)');
+    terminator.addColorStop(0.48, 'rgba(255,255,255,0)');
+    terminator.addColorStop(1, 'rgba(0,0,0,0.3)');
+    ctx.fillStyle = terminator;
+    ctx.fillRect(0, 0, 512, 256);
+    var texture = new THREE.CanvasTexture(textureCanvas);
+    texture.encoding = THREE.sRGBEncoding;
+    texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.needsUpdate = true;
+    return texture;
+  }
 
-    var glowCanvas = document.createElement('canvas');
-    glowCanvas.width = 128;
-    glowCanvas.height = 128;
-    var glowContext = glowCanvas.getContext('2d');
-    var gradient = glowContext.createRadialGradient(64, 64, 30, 64, 64, 64);
-    gradient.addColorStop(0, 'rgba(210,198,232,0)');
-    gradient.addColorStop(0.56, 'rgba(191,174,220,0.24)');
-    gradient.addColorStop(0.76, 'rgba(180,157,211,0.12)');
-    gradient.addColorStop(1, 'rgba(160,140,190,0)');
-    glowContext.fillStyle = gradient;
-    glowContext.fillRect(0, 0, 128, 128);
-    moonHalo = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: new THREE.CanvasTexture(glowCanvas), transparent: true, opacity: moonGlow,
-      depthWrite: false, blending: THREE.AdditiveBlending
-    }));
-    moonHalo.position.z = -0.35;
-    moonHalo.scale.set(4.1, 4.1, 1);
-    group.add(moonHalo);
-
-    var ringMaterial = new THREE.LineBasicMaterial({ color: 0xaaa0bb, transparent: true, opacity: 0.28 });
-    var paleRing = new THREE.LineBasicMaterial({ color: 0xe7e4dc, transparent: true, opacity: 0.12 });
-    [[2.05, 0.65, 0.25, ringMaterial], [1.82, 0.57, -0.35, paleRing]].forEach(function (config) {
+  function makePlanetaryRing() {
+    var ringGroup = new THREE.Group();
+    var outerMaterial = new THREE.LineBasicMaterial({
+      color: 0xaaa0bb, transparent: true, opacity: 0.28
+    });
+    var innerMaterial = new THREE.LineBasicMaterial({
+      color: 0xe7e4dc, transparent: true, opacity: 0.12
+    });
+    [[2.05, 0.65, 0.25, outerMaterial], [1.82, 0.57, -0.35, innerMaterial]].forEach(function (config) {
       var points = [];
       for (var i = 0; i < 160; i += 1) {
         var angle = i / 160 * Math.PI * 2;
@@ -329,8 +358,44 @@
       var ring = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(points), config[3]);
       ring.rotation.x = 0.7;
       ring.rotation.z = config[2];
-      group.add(ring);
+      ringGroup.add(ring);
     });
+    return ringGroup;
+  }
+
+  function makeMoon(lite) {
+    var group = new THREE.Group();
+    var surface = makeMoonTexture();
+    var moonMaterial = new THREE.MeshStandardMaterial({
+      color: 0xb8b5bd,
+      metalness: 0,
+      roughness: 0.96,
+      map: surface,
+      bumpMap: surface,
+      bumpScale: 0.12
+    });
+    new THREE.TextureLoader().load('assets/moon-surface-' + (lite ? 'mobile' : 'desktop') + '.webp', function (texture) {
+      texture.encoding = THREE.sRGBEncoding;
+      texture.generateMipmaps = false;
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      texture.wrapS = THREE.ClampToEdgeWrapping;
+      texture.wrapT = THREE.ClampToEdgeWrapping;
+      texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+      moonMaterial.map = texture;
+      moonMaterial.bumpMap = texture;
+      moonMaterial.needsUpdate = true;
+      invalidate();
+    });
+    var sphere = new THREE.Mesh(new THREE.SphereGeometry(1.42, 80, 60), moonMaterial);
+    sphere.rotation.y = -1.1;
+    sphere.rotation.z = 0.12;
+    sphere.userData.interaction = { type: 'moon' };
+    group.add(sphere);
+    moonSphere = sphere;
+    interactive.push(sphere);
+
+    group.add(makePlanetaryRing());
     group.position.set(1.55, 1.7, -3.9);
     group.scale.setScalar(0.88);
     return group;
@@ -355,7 +420,7 @@
 
   function updateVisualEffects(dt, immediate) {
     if (!moonHalo) return false;
-    var destination = (moonEnabled ? 0.5 : 0.16) + moonPulse * 0.3;
+    var destination = (moonEnabled ? 0.2 : 0.1) + moonPulse * 0.12;
     var difference = destination - moonGlow;
     if (immediate) {
       moonGlow = destination;
@@ -364,9 +429,9 @@
       moonGlow += difference * Math.min(1, dt * 9);
       moonPulse = Math.max(0, moonPulse - dt * 1.5);
     }
-    moonHalo.material.opacity = moonGlow;
-    var scale = 4.1 + moonPulse * 0.22;
-    moonHalo.scale.set(scale, scale, 1);
+    if (moonHalo.material.uniforms) moonHalo.material.uniforms.uOpacity.value = moonGlow;
+    var scale = 1 + moonPulse * 0.05;
+    moonHalo.scale.setScalar(scale);
     return Math.abs(difference) > 0.001 || moonPulse > 0;
   }
 
@@ -401,7 +466,7 @@
     if (!renderer) return;
     var width = Math.max(1, stage.clientWidth);
     var height = Math.max(1, stage.clientHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, stage.classList.contains('lite-mode') ? 1 : 1.5));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, stage.classList.contains('lite-mode') ? 1.25 : 1.5));
     renderer.setSize(width, height, false);
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
@@ -643,7 +708,7 @@
       canvas = document.createElement('canvas');
       canvas.className = 'studio3d-canvas';
       canvas.setAttribute('aria-hidden', 'true');
-      renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: !lite, alpha: true, powerPreference: lite ? 'low-power' : 'high-performance' });
+      renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: true, powerPreference: lite ? 'low-power' : 'high-performance' });
       renderer.setClearColor(0x000000, 0);
       renderer.outputEncoding = THREE.sRGBEncoding;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -663,7 +728,7 @@
       scene.add(lower);
 
       scene.add(makeStars());
-      moon = makeMoon(new THREE.TextureLoader());
+      moon = makeMoon(lite);
       guitar = makeGuitar();
       scene.add(moon);
       scene.add(guitar);

@@ -182,10 +182,15 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 }
 .moon-texture, .moon-terminator { position: absolute; inset: 0; border-radius: inherit; }
 .moon-texture {
-  background-image: url("assets/moon-surface.jpg");
-  background-position: 48% 44%;
-  background-size: 176%;
-  filter: grayscale(1) contrast(1.2) brightness(.83);
+  background-image:
+    radial-gradient(circle at 31% 28%, rgba(255,255,255,.24), rgba(138,136,145,.24) 10%, rgba(48,46,55,.34) 15%, transparent 22%),
+    radial-gradient(circle at 68% 37%, rgba(52,50,59,.3) 0 5%, rgba(148,146,154,.22) 8%, transparent 13%),
+    radial-gradient(circle at 43% 63%, rgba(58,56,65,.32) 0 7%, rgba(174,171,178,.18) 11%, transparent 18%),
+    radial-gradient(circle at 76% 72%, rgba(38,36,45,.36) 0 4%, transparent 9%),
+    radial-gradient(circle at 23% 77%, rgba(42,40,49,.28) 0 6%, rgba(204,202,208,.14) 10%, transparent 15%),
+    radial-gradient(circle at 53% 47%, #b9b6be 0, #98949e 46%, #6d6a74 100%);
+  background-size: cover;
+  filter: grayscale(1) contrast(1.15) brightness(.88);
   box-shadow:
     inset 18px 13px 24px rgba(255,253,247,.22),
     inset -48px -18px 55px rgba(0,0,0,.94),

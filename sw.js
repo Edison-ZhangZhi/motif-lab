@@ -1,6 +1,6 @@
 /* MotifLab Service Worker — 静态资源预缓存；音频按实际编曲加载并运行时缓存。 */
 'use strict';
-var CACHE = 'motiflab-v60';
+var CACHE = 'motiflab-v72';
 var PRECACHE = [
   './',
   'index.html',
@@ -13,8 +13,7 @@ var PRECACHE = [
   'style.css',
   'lib/Tone.js',
   'lib/soundfont-player.min.js',
-  'assets/manrope-latin-wght-normal.woff2',
-  'assets/moon-surface.jpg'
+  'assets/manrope-latin-wght-normal.woff2'
 ];
 
 self.addEventListener('install', function (e) {
